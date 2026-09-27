@@ -18,6 +18,13 @@ use super::name::ChildName;
 use super::pull::{NamedPullConsumer, PullConsumer};
 use super::spec::{ExportSpec, ImportSpec};
 use crate::ast::Value;
+use crate::kernel::Kernel;
+
+/// A name as a scope resolves it in `kernel`, whatever its engine.
+fn lookup(kernel: &dyn Kernel, name: &str) -> Option<Value> {
+    use crate::kernel::interp::Lookup as _;
+    crate::kernel::interp::KernelLookup::new(kernel).lookup(name)
+}
 
 /// Build a parent kernel with a couple of exports for tests to
 /// import against. `dataset` is a final-folded string; `cycle`
@@ -29,7 +36,7 @@ fn parent_kernel() -> Arc<ScopeKernel<RootMarker>> {
          seed := hash(cycle)\n",
     )
     .expect("parent kernel compile");
-    wrap_root_kernel(kernel, "test-root")
+    wrap_root_kernel(Box::new(kernel), "test-root")
 }
 
 #[test]
@@ -60,7 +67,7 @@ fn finalize_compiles_simple_polydat_source_block() {
 #[test]
 fn finalize_charges_the_subscope_compile_to_the_parents_ledger() {
     let parent = parent_kernel();
-    let ledger = parent.lock_inner().program().ledger().clone();
+    let ledger = parent.lock_inner().ledger().clone();
     let before = ledger.programs();
     let mut b = parent.subcontext_builder();
     b.context(SourceContext::new("charged"));
@@ -334,7 +341,7 @@ fn parent_with_shared_u64(name: &str, init: u64) -> Arc<ScopeKernel<RootMarker>>
          shared {name} := {init}\n",
     );
     let kernel = compile_polydat_interpreter(&src).expect("parent kernel compile");
-    wrap_root_kernel(kernel, "test-root-shared")
+    wrap_root_kernel(Box::new(kernel), "test-root-shared")
 }
 
 #[test]
@@ -371,15 +378,15 @@ fn parent_shared_export_collision_rewrites_to_cell_write() {
     assert_eq!(child.write_throughs().len(), 1);
 
     // Pre-commit: parent's cell still carries the literal init.
-    assert_eq!(parent.lock_inner().lookup("X"), Some(Value::U64(0)));
+    assert_eq!(parent.lock_inner().input_value("X"), Some(Value::U64(0)));
 
     child
         .commit_write_throughs()
         .expect("type-stable write-through");
 
-    // Post-commit: the parent's `lookup("X")` reads through the
-    // shared cell (cell-aware) and surfaces `42`.
-    assert_eq!(parent.lock_inner().lookup("X"), Some(Value::U64(42)));
+    // Post-commit: the parent's `X` reads through the shared cell
+    // (cell-aware) and surfaces `42`.
+    assert_eq!(parent.lock_inner().input_value("X"), Some(Value::U64(42)));
 }
 
 #[test]
@@ -427,7 +434,7 @@ fn parent_shared_export_collision_propagates_through_siblings() {
     // `seen` resolves to the cell value.
     let seen = {
         let mut inner = reader.lock_inner();
-        inner.pull_ref("seen").clone()
+        inner.pull("seen")
     };
     assert_eq!(
         seen,
@@ -640,26 +647,24 @@ fn workload_emulation_shared_cell_through_op_template_chain() {
     //    `fb.main_kernel`. Cell handles flow:
     //        workload_canonical → fiber_main → detect_fiber
     let detect_fiber_matter = super::PolydatMatter::builder()
-        .program(detect_canonical.program().clone())
+        .program(detect_canonical.into_program())
         .build()
         .expect("detect fiber matter");
-    let mut detect_fiber = fiber_main
-        .build_subscope(detect_fiber_matter)
+    let mut detect_fiber = detect_fiber_matter
+        .build_under(fiber_main.as_ref())
         .expect("detect-fiber subscope");
 
     // 4. Feed the magic `body` extern with a JSON value whose
     //    leaf string matches the regex. Mirrors what the
     //    activity's ResultDispenser does at end-of-op.
-    let body_idx = detect_fiber
-        .program()
-        .find_input("body")
+    detect_fiber
+        .set_input(
+            "body",
+            Value::Json(std::sync::Arc::new(
+                serde_json::json!([{"col": "hello world"}]),
+            )),
+        )
         .expect("body slot");
-    detect_fiber.state().set_input(
-        body_idx,
-        Value::Json(std::sync::Arc::new(
-            serde_json::json!([{"col": "hello world"}]),
-        )),
-    );
 
     // 5. Run the detect fiber's per-cycle write-through commit.
     //    Pulls `__write_has_match` (regex_match → Bool(true)),
@@ -698,18 +703,18 @@ fn workload_emulation_shared_cell_through_op_template_chain() {
     //    chain as the detect fiber so the cell handle is
     //    shared end-to-end.
     let consumer_fiber_matter = super::PolydatMatter::builder()
-        .program(consumer_canonical.program().clone())
+        .program(consumer_canonical.into_program())
         .build()
         .expect("consumer fiber matter");
-    let mut consumer_fiber = fiber_main
-        .build_subscope(consumer_fiber_matter)
+    let mut consumer_fiber = consumer_fiber_matter
+        .build_under(fiber_main.as_ref())
         .expect("consumer-fiber subscope");
 
     // 8. Consumer fiber pulls `seen` (which reads the
     //    cell-bound input). Must observe the detect fiber's
     //    write — proves the cell handle is shared end-to-end
     //    through the canonical/fiber-instance fork.
-    let seen = consumer_fiber.pull_ref("seen").clone();
+    let seen = consumer_fiber.pull("seen");
     match seen {
         Value::U64(1) | Value::Bool(true) => {} // expected
         other => panic!(
@@ -809,13 +814,14 @@ fn log_info_preserves_bool_type_through_result_binding_cell() {
     // Feed the body magic-extern with a unary JSON value whose
     // leaf string matches the regex. This drives the same data
     // path the live workload's `describe_system_views` op uses.
-    let body_idx = kernel.program().find_input("body").expect("body slot");
-    kernel.state().set_input(
-        body_idx,
-        Value::Json(std::sync::Arc::new(
-            serde_json::json!([{"col": "hello world"}]),
-        )),
-    );
+    kernel
+        .set_input(
+            "body",
+            Value::Json(std::sync::Arc::new(
+                serde_json::json!([{"col": "hello world"}]),
+            )),
+        )
+        .expect("body slot");
     kernel
         .commit_write_throughs()
         .expect("type-stable write-through");
@@ -1119,7 +1125,7 @@ fn parent_shared_cell_cascades_to_grandchild_through_silent_intermediate() {
     );
 
     // Pre-commit: root's cell still carries the literal init.
-    assert_eq!(root.lock_inner().lookup("flag"), Some(Value::U64(0)));
+    assert_eq!(root.lock_inner().input_value("flag"), Some(Value::U64(0)));
 
     leaf.commit_write_throughs()
         .expect("type-stable write-through");
@@ -1127,7 +1133,7 @@ fn parent_shared_cell_cascades_to_grandchild_through_silent_intermediate() {
     // Post-commit: leaf wrote through the cell handle that
     // ultimately lives at root. Root observes the value.
     assert_eq!(
-        root.lock_inner().lookup("flag"),
+        root.lock_inner().input_value("flag"),
         Some(Value::U64(9)),
         "root should observe leaf's write through the transitive shared cell"
     );
@@ -1199,7 +1205,7 @@ fn build_kernel_under_parent_threads_compile_options() {
         .build_subscope(matter)
         .expect("bridge with options");
 
-    let v = kernel.pull_ref("doubled").clone();
+    let v = kernel.pull("doubled");
     assert_eq!(v.as_u64(), 10);
 }
 
@@ -1213,7 +1219,7 @@ fn parent_final_export_collision_still_errors() {
          const fixed := 42\n",
     )
     .expect("parent kernel compile");
-    let parent = wrap_root_kernel(kernel, "test-root-final");
+    let parent = wrap_root_kernel(Box::new(kernel), "test-root-final");
 
     let mut b = parent.clone().subcontext_builder();
     b.context(SourceContext::for_phase("final-shadow"));
@@ -1315,7 +1321,7 @@ fn add_result_bindings_rule2_writethrough_to_parent_shared() {
         shared count_seen := 0\n\
     ";
     let parent_kernel = compile_polydat_interpreter(parent_src).expect("parent compile");
-    let parent = wrap_root_kernel(parent_kernel, "rb-rule2-root");
+    let parent = wrap_root_kernel(Box::new(parent_kernel), "rb-rule2-root");
 
     let mut b = parent.clone().subcontext_builder();
     b.context(SourceContext::new("rb-rule2"));
@@ -1433,7 +1439,7 @@ fn l2f_silent_fall_through_when_strict_off() {
     // see outer's "outer-value" (the inner const folded to None,
     // get_constant filters, lookup falls through to extern slot
     // wired from outer at materialize_wiring_from_outer time).
-    match inner.lookup("X") {
+    match lookup(inner.as_ref(), "X") {
         Some(Value::Str(s)) => assert_eq!(
             &*s, "outer-value",
             "conditional shadow must reveal outer's value when inner const yields None"
@@ -1467,9 +1473,10 @@ fn l2f_strict_rejects_silent_fall_through() {
         .options(opts)
         .build()
         .expect("matter build");
-    let err = outer
-        .build_subscope(inner_matter)
-        .expect_err("strict on: silent fall-through must be rejected");
+    let err = match outer.build_subscope(inner_matter) {
+        Ok(_) => panic!("strict on: silent fall-through must be rejected"),
+        Err(e) => e,
+    };
     match err {
         ContractViolation::StrictNonePropagation { bindings, .. } => {
             assert!(
@@ -1561,14 +1568,14 @@ fn a_child_follows_its_parents_computed_output() {
         .expect("matter");
     let mut child = parent.build_subscope(matter).expect("subscope");
     child.set_inputs(&[1]);
-    assert_eq!(child.pull_ref("v").clone(), first);
+    assert_eq!(child.pull("v"), first);
 
     parent.set_inputs(&[2]);
     let second = parent.pull_ref("seed").clone();
     assert_ne!(first, second, "the parent's seed moved with the cycle");
     child.set_inputs(&[2]);
     assert_eq!(
-        child.pull_ref("v").clone(),
+        child.pull("v"),
         second,
         "the child reads through the parent's broadcast cell, not a copy"
     );
@@ -1939,12 +1946,12 @@ fn a_compiled_child_binds_under_a_parent_of_any_engine() {
 #[test]
 fn a_computed_const_that_shadows_a_param_is_what_the_scope_below_reads() {
     let compile = |src: &str| compile_polydat_interpreter(src).expect("compile");
-    let under = |parent: &crate::kernel::PolydatKernel, src: &str| {
+    let under = |parent: &dyn Kernel, src: &str| {
         let matter = super::PolydatMatter::builder()
             .program(compile(src).program().clone())
             .build()
             .expect("matter");
-        parent.build_subscope(matter).expect("subscope")
+        matter.build_under(parent).expect("subscope")
     };
     let root = compile("const mode := \"default\"\nconst size := \"small\"\n");
     let phase_src = "input cycle: u64\nextern mode: String\nextern size: String\n";
@@ -1955,12 +1962,12 @@ fn a_computed_const_that_shadows_a_param_is_what_the_scope_below_reads() {
         "extern size: String\nconst mode := \"mode_for_{size}\"\n",
     );
     assert_eq!(
-        set.lookup("mode"),
+        lookup(set.as_ref(), "mode"),
         Some(Value::Str("mode_for_small".into()))
     );
-    let phase = under(&set, phase_src);
+    let phase = under(set.as_ref(), phase_src);
     assert_eq!(
-        phase.lookup("mode"),
+        lookup(phase.as_ref(), "mode"),
         Some(Value::Str("mode_for_small".into())),
         "the scope below read the shadowed slot's value from the root"
     );
@@ -1969,12 +1976,15 @@ fn a_computed_const_that_shadows_a_param_is_what_the_scope_below_reads() {
     // nothing, each reached the scope below before the fix too.
     let literal = under(&root, "const mode := \"lit\"\n");
     assert_eq!(
-        under(&literal, phase_src).lookup("mode"),
+        lookup(under(literal.as_ref(), phase_src).as_ref(), "mode"),
         Some(Value::Str("lit".into()))
     );
     let fresh = under(&root, "extern size: String\nconst other := \"o_{size}\"\n");
     assert_eq!(
-        under(&fresh, "input cycle: u64\nextern other: String\n").lookup("other"),
+        lookup(
+            under(fresh.as_ref(), "input cycle: u64\nextern other: String\n").as_ref(),
+            "other"
+        ),
         Some(Value::Str("o_small".into()))
     );
 }

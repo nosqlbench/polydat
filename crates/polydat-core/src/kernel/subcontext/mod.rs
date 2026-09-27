@@ -64,7 +64,7 @@
 //! cross-binding primitives are sealed: `PolydatKernel::from_program` is
 //! `pub(crate)` and `materialize_wiring_from_outer` is private to the kernel.
 //! External consumers must go through the typed surface:
-//! [`SubcontextBuilder`] / [`ScopeKernel::spawn`] or `PolydatKernel::build_subscope`
+//! [`SubcontextBuilder`] / [`ScopeKernel::spawn`] or [`PolydatMatter::build_under`]
 //! for child construction, and `Construction::root` / `KernelProgram::create_kernel`
 //! for parentless re-instancing of a compiled program.
 //!

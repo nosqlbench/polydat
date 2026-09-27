@@ -77,8 +77,9 @@ impl SourceContext {
 ///
 /// The set is the design doc's §7 error contract:
 /// [`Self::UnboundImport`], [`Self::FinalShadow`],
-/// [`Self::DuplicateChild`], [`Self::Compile`], and
-/// [`Self::StrictNonePropagation`]. An import's type and modifier are
+/// [`Self::DuplicateChild`], [`Self::Compile`],
+/// [`Self::StrictNonePropagation`], and [`Self::Bind`] for a child the
+/// binder could not build under its parent. An import's type and modifier are
 /// checked by the compiler and the kernel's slot types, not here
 /// (design doc §2.2).
 #[derive(Debug, Clone)]
@@ -137,6 +138,11 @@ pub enum ContractViolation {
         /// Where the bindings are declared.
         site: SourceContext,
     },
+    /// Binding the compiled child under its parent failed: a value
+    /// copied from the parent was refused, a const failed when the child
+    /// was initialized, or the parent's engine refused the child's
+    /// program.
+    Bind(std::sync::Arc<crate::KernelError>),
 }
 
 impl std::fmt::Display for ContractViolation {
@@ -177,7 +183,14 @@ impl std::fmt::Display for ContractViolation {
                     site.display()
                 )
             }
+            Self::Bind(e) => write!(f, "binding the child under its parent failed: {e}"),
         }
+    }
+}
+
+impl From<crate::KernelError> for ContractViolation {
+    fn from(e: crate::KernelError) -> Self {
+        Self::Bind(std::sync::Arc::new(e))
     }
 }
 

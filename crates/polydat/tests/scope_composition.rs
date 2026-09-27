@@ -51,6 +51,9 @@ fn materialize_wiring_from_outer_wires_constants() {
                 .unwrap(),
         )
         .unwrap();
+    let inner = inner
+        .as_interpreter_mut()
+        .expect("the interpreter's kernel");
 
     let dim_idx = inner.program().find_input("dim").unwrap();
     let count_idx = inner.program().find_input("count").unwrap();
@@ -86,6 +89,9 @@ fn materialize_wiring_from_outer_only_matches_by_name() {
                 .unwrap(),
         )
         .unwrap();
+    let inner = inner
+        .as_interpreter_mut()
+        .expect("the interpreter's kernel");
 
     // 'offset' should still be at its default (None for extern)
     let idx = inner.program().find_input("offset").unwrap();
@@ -123,9 +129,9 @@ fn materialize_wiring_from_outer_does_not_affect_coordinates() {
 
     // Coordinate input should still work normally
     inner.set_inputs(&[42]);
-    let v1 = inner.pull_ref("h").as_u64();
+    let v1 = inner.pull("h").as_u64();
     inner.set_inputs(&[43]);
-    let v2 = inner.pull_ref("h").as_u64();
+    let v2 = inner.pull("h").as_u64();
     assert_ne!(v1, v2, "different cycles should produce different hashes");
 }
 
@@ -163,7 +169,10 @@ fn scope_values_extracts_bound_inputs() {
         )
         .unwrap();
 
-    let values = inner.scope_values();
+    let values = inner
+        .as_interpreter()
+        .expect("the interpreter's kernel")
+        .scope_values();
     // Should have entries for dim and count (and possibly cycle default)
     let dim_val = values.iter().find(|(name, _)| name == "dim");
     assert!(dim_val.is_some(), "scope_values should include dim");
@@ -199,7 +208,10 @@ fn scope_values_empty_when_no_externs() {
         .unwrap();
 
     // Inner has no externs, so scope_values only has coordinate defaults
-    let values = inner.scope_values();
+    let values = inner
+        .as_interpreter()
+        .expect("the interpreter's kernel")
+        .scope_values();
     // All values should be the coordinate default (U64(0))
     for (_, val) in &values {
         assert!(
@@ -254,6 +266,7 @@ fn inner_scope_shadows_outer_binding() {
         )
         .unwrap();
     // dim is still 256 (inner definition), not 128 (outer)
+    let inner2 = inner2.as_interpreter().expect("the interpreter's kernel");
     assert_eq!(inner2.get_constant("dim").unwrap().as_u64(), 256);
 }
 
@@ -465,11 +478,11 @@ fn full_scope_pipeline_outer_to_inner() {
 
     // Verify both externs were bound correctly
     inner.set_inputs(&[0]);
-    let dim_val = inner.pull_ref("dim").as_u64();
+    let dim_val = inner.pull("dim").as_u64();
     assert_eq!(dim_val, 128);
 
     inner.set_inputs(&[42]);
-    let id = inner.pull_ref("id").as_u64();
+    let id = inner.pull("id").as_u64();
     // id = hash(42) + 10000, should be > 10000
     assert!(id >= 10000, "id should include base_count offset, got {id}");
 }
@@ -513,6 +526,9 @@ fn scope_pipeline_with_shared_and_final() {
                 .unwrap(),
         )
         .unwrap();
+    let inner = inner
+        .as_interpreter_mut()
+        .expect("the interpreter's kernel");
 
     let eb_idx = inner.program().find_input("error_budget").unwrap();
     let md_idx = inner.program().find_input("max_dim").unwrap();
@@ -570,6 +586,9 @@ fn inner_reads_uniform_across_shared_and_nonshared() {
                 .unwrap(),
         )
         .unwrap();
+    let inner = inner
+        .as_interpreter_mut()
+        .expect("the interpreter's kernel");
 
     // Both names must resolve through the same input-lookup
     // path. If `shared` were affecting read access, find_input
@@ -649,7 +668,7 @@ fn sequential_inner_scopes_are_independent() {
         )
         .unwrap();
     inner1.set_inputs(&[0]);
-    let v1 = inner1.pull_ref("h").as_u64();
+    let v1 = inner1.pull("h").as_u64();
 
     // Second inner scope — should produce identical result
     let inner2_program = compile_polydat_interpreter(
@@ -671,7 +690,7 @@ fn sequential_inner_scopes_are_independent() {
         )
         .unwrap();
     inner2.set_inputs(&[0]);
-    let v2 = inner2.pull_ref("h").as_u64();
+    let v2 = inner2.pull("h").as_u64();
 
     assert_eq!(
         v1, v2,
@@ -1007,6 +1026,9 @@ fn shared_inner_write_propagates_to_outer_via_cell() {
                 .unwrap(),
         )
         .unwrap();
+    let inner = inner
+        .as_interpreter_mut()
+        .expect("the interpreter's kernel");
 
     // Inner's lookup goes through the cell — sees initial 5.
     assert_eq!(inner.lookup("counter").unwrap().as_u64(), 5);
@@ -1055,9 +1077,11 @@ fn shared_two_inners_see_each_others_writes_via_cell() {
     let mut a = outer
         .subscope(PolydatMatter::builder().program(a_program).build().unwrap())
         .unwrap();
+    let a = a.as_interpreter_mut().expect("the interpreter's kernel");
     let b = outer
         .subscope(PolydatMatter::builder().program(b_program).build().unwrap())
         .unwrap();
+    let b = b.as_interpreter().expect("the interpreter's kernel");
 
     // Both start at 100 — `lookup` reads the cell.
     assert_eq!(a.lookup("budget").unwrap().as_u64(), 100);
@@ -1117,9 +1141,11 @@ fn shared_last_write_wins_under_concurrent_writers() {
     let mut a = outer
         .subscope(PolydatMatter::builder().program(a_program).build().unwrap())
         .unwrap();
+    let a = a.as_interpreter_mut().expect("the interpreter's kernel");
     let mut b = outer
         .subscope(PolydatMatter::builder().program(b_program).build().unwrap())
         .unwrap();
+    let b = b.as_interpreter_mut().expect("the interpreter's kernel");
 
     let a_idx = a.program().find_input("status").unwrap();
     let b_idx = b.program().find_input("status").unwrap();
@@ -1227,6 +1253,7 @@ fn const_with_unbound_interpolation_falls_through_to_outer() {
                 .unwrap(),
         )
         .unwrap();
+    let inner = inner.as_interpreter().expect("the interpreter's kernel");
 
     // No literal "None" text. No empty string. The conditional
     // shadow falls through transparently to the outer DEFAULT.
@@ -1285,6 +1312,7 @@ fn three_scope_chain_transitive_fall_through() {
                 .unwrap(),
         )
         .unwrap();
+    let middle = middle.as_interpreter().expect("the interpreter's kernel");
 
     // Middle's own lookup demonstrates the inner-to-middle
     // fall-through:
@@ -1311,6 +1339,7 @@ fn three_scope_chain_transitive_fall_through() {
                 .unwrap(),
         )
         .unwrap();
+    let inner = inner.as_interpreter().expect("the interpreter's kernel");
 
     // Inner's lookup demonstrates the transitive fall-through:
     // the None in middle's const buffer DOES NOT propagate to
@@ -1380,6 +1409,7 @@ fn const_with_bound_interpolation_shadows_outer() {
                 .unwrap(),
         )
         .unwrap();
+    let inner = inner.as_interpreter().expect("the interpreter's kernel");
 
     // Y is bound by outer ("OVERRIDE"), so the interpolation
     // produces Str("OVERRIDE"), get_constant returns it, and
@@ -1429,6 +1459,9 @@ fn cross_kernel_cell_write_invalidates_full_memoized_chain() {
                 .unwrap(),
         )
         .unwrap();
+    let reader = reader
+        .as_interpreter_mut()
+        .expect("the interpreter's kernel");
 
     let writer_program = compile_polydat_interpreter(
         r#"

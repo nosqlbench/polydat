@@ -30,7 +30,6 @@ use crate::ast::{PortType, Value};
 use crate::derive_support::Wire;
 use crate::dsl::ast::{Binding, BindingModifier, Expr, ExternPort, Statement, WireModifier};
 use crate::dsl::lexer::Span;
-use crate::kernel::{Metadata, PolydatKernel};
 
 /// A caller-native expression stub: a named binding over a polydat
 /// expression, optionally type-coerced (via the SRD-84 Part 1b `as`
@@ -155,17 +154,17 @@ impl GraphMatter {
 /// truthiness (`is_true`). A general-purpose, scope-bound, callable
 /// expression holder.
 pub struct ScopedExpr {
-    kernel: PolydatKernel,
+    kernel: Box<dyn crate::kernel::Kernel>,
     output: String,
 }
 
 impl ScopedExpr {
     /// Bind `matter` — which must define the named `output` (plus any
-    /// extern wires it reads) — into a sub-context of `parent`. The
-    /// expression is compiled once; call it repeatedly via `eval` /
-    /// `is_true` after `set`-ing its inputs.
+    /// extern wires it reads) — into a sub-context of `parent`, on
+    /// `parent`'s engine. The expression is compiled once; call it
+    /// repeatedly via `eval` / `is_true` after `set`-ing its inputs.
     pub fn bind(
-        parent: &PolydatKernel,
+        parent: &dyn crate::kernel::Kernel,
         output: impl Into<String>,
         matter: GraphMatter,
     ) -> Result<Self, String> {
@@ -173,8 +172,8 @@ impl ScopedExpr {
             .statements(matter.into_statements())
             .build()
             .map_err(|e| format!("scoped-expr matter: {e:?}"))?;
-        let kernel = parent
-            .build_subscope(pm)
+        let kernel = pm
+            .build_under(parent)
             .map_err(|e| format!("scoped-expr subscope: {e:?}"))?;
         Ok(Self {
             kernel,
@@ -185,30 +184,30 @@ impl ScopedExpr {
     /// Set a runtime input wire by name before evaluating, converted to
     /// the wire's type by the one conversion rule
     /// ([`crate::convert::to_port`]). No-op for a name the expression
-    /// doesn't read, or for a value that does not convert.
+    /// doesn't read, for a coordinate, or for a value that does not
+    /// convert.
     pub fn set(&mut self, name: &str, value: Value) -> &mut Self {
-        if let Some(idx) = self.kernel.find_input(name) {
-            let converted = match self.kernel.program().input_port_type_by_idx(idx) {
+        if let Some(idx) = self.kernel.input_index(name) {
+            let converted = match self.kernel.input_port_type(name) {
                 Some(ty) => crate::convert::to_port(value, ty).ok(),
                 None => Some(value),
             };
             if let Some(value) = converted {
-                self.kernel.state().set_input(idx, value);
+                let _ = self.kernel.set_input_at(idx, value);
             }
         }
         self
     }
 
-    /// The bound sub-context as a [`Dataflow`](crate::kernel::Dataflow), for callers that inject
-    /// a batch of inputs through a `Dataflow`-based injector (e.g. a
-    /// runtime-state snapshot) before evaluating.
-    pub fn dataflow(&mut self) -> &mut PolydatKernel {
-        &mut self.kernel
+    /// The bound sub-context, for callers that write a batch of inputs
+    /// into it (e.g. a runtime-state snapshot) before evaluating.
+    pub fn kernel(&mut self) -> &mut dyn crate::kernel::Kernel {
+        self.kernel.as_mut()
     }
 
     /// Evaluate (pull) the bound expression's output.
     pub fn eval(&mut self) -> Value {
-        self.kernel.pull_ref(&self.output).clone()
+        self.kernel.pull(&self.output)
     }
 
     /// Evaluate as a boolean — the default truthiness sense. Polydat

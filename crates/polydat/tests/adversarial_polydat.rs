@@ -552,13 +552,13 @@ fn materialize_wiring_from_outer_copies_constants() {
         .unwrap();
 
     // Verify the extern input was populated from outer scope
-    let idx = inner.program().find_input("dim").unwrap();
-    let val = inner.state().get_input(idx);
+    let idx = inner.input_index("dim").unwrap();
+    let val = inner.input_value_at(idx).unwrap();
     assert_eq!(val.as_u64(), 128);
 
     // The passthrough output also reflects the bound value
     inner.set_inputs(&[0]);
-    let pulled = inner.pull_ref("dim").as_u64();
+    let pulled = inner.pull("dim").as_u64();
     assert_eq!(pulled, 128);
 }
 

@@ -317,8 +317,13 @@ pub trait Construction: Sized {
     /// Path 2: build a subscope context against `self` from
     /// Polydat matter. The parent supervises: cell cascade, Rule 2
     /// rewrites, scope-coordinate threading, init-binding
-    /// contract checks all flow from `self` into the child.
-    fn subscope(&self, matter: super::subcontext::PolydatMatter<'_>) -> Result<Self, Self::Error>;
+    /// contract checks all flow from `self` into the child, which
+    /// runs on `self`'s engine
+    /// ([`super::subcontext::PolydatMatter::build_under`]).
+    fn subscope(
+        &self,
+        matter: super::subcontext::PolydatMatter<'_>,
+    ) -> Result<Box<dyn Kernel>, Self::Error>;
 }
 
 // ── One kernel API for every engine (engines.md §3.5) ──────
@@ -703,6 +708,19 @@ pub trait Kernel: Send + Sync + internals::KernelInternals {
     /// the same program compiled twice included. What a host seals a
     /// plan of pre-resolved indices against.
     fn program_id(&self) -> ProgramId;
+
+    /// The interpreter's kernel, when this is one: what a caller that
+    /// needs the interpreter's own extras ([`Metadata`], [`Dataflow`],
+    /// its program and state) reaches them through. `None` on a
+    /// compiled engine.
+    fn as_interpreter(&self) -> Option<&crate::kernel::PolydatKernel> {
+        None
+    }
+
+    /// [`Self::as_interpreter`], mutably.
+    fn as_interpreter_mut(&mut self) -> Option<&mut crate::kernel::PolydatKernel> {
+        None
+    }
 }
 
 /// Whether the `shared` register the `index`th init seeds has been

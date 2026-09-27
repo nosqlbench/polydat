@@ -1,13 +1,14 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! [`ScopeKernel<M>`] — typed wrapper around [`crate::kernel::PolydatKernel`].
+//! [`ScopeKernel<M>`] — typed wrapper around a kernel of any engine.
 //!
 //! Per SRD-67 §"Walled-off invariant", `ScopeKernel<M>` is the
-//! typed surface; the underlying `PolydatKernel` stays public, and its
+//! typed surface; the interpreter's `PolydatKernel` stays public, and its
 //! construction primitives are sealed (`from_program` is crate-private,
 //! `materialize_wiring_from_outer` private), so a child is built only
-//! through the typed surface.
+//! through the typed surface or the binder. A child is built on its
+//! parent's engine.
 //!
 //! The kernel exposes:
 //! - [`Self::subcontext_builder`] — yields a typed
@@ -28,7 +29,7 @@ use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
 use crate::ast::{PortType, Value};
-use crate::kernel::{PolydatKernel, SharedCell};
+use crate::kernel::{Kernel, PolydatKernel, SharedCell};
 
 use super::builder::{ParentView, SubcontextBuilder};
 use super::error::{ContractViolation, SourceContext};
@@ -56,15 +57,15 @@ struct ChildEntry {
     site: SourceContext,
 }
 
-/// Typed wrapper around an `Arc<PolydatKernel>`.
+/// Typed wrapper around a kernel of any engine.
 ///
 /// Construction via this type goes through the SRD-67 protocol
-/// (`subcontext_builder` → `finalize` → `spawn`); direct
-/// construction from a `PolydatKernel` is `pub(crate)` for the
-/// Phase 1 internal bridge.
+/// (`subcontext_builder` → `finalize` → `spawn`), which builds each
+/// child on its parent's engine; a root is wrapped with
+/// [`wrap_root_kernel`].
 pub struct ScopeKernel<M> {
     name: ChildName,
-    inner: Arc<Mutex<PolydatKernel>>,
+    inner: Arc<Mutex<Box<dyn Kernel>>>,
     site: SourceContext,
     children: Mutex<HashMap<ChildName, ChildEntry>>,
     consumers: Mutex<Vec<RegisteredPullConsumer>>,
@@ -129,17 +130,13 @@ impl std::fmt::Debug for SharedCellInScope {
 }
 
 impl<M> ScopeKernel<M> {
-    /// Enumerate every shared cell visible at this scope.
-    /// Delegates to [`PolydatKernel::shared_cells_in_scope`] —
-    /// the carrier lives at the kernel layer so it survives
-    /// any wrap/unwrap dance the activity layer does. The
-    /// `SharedCellInScope` re-export is kept for callers in
-    /// the SRD-67 builder; it's a thin alias over the kernel
-    /// layer's `SharedCellEntry`.
+    /// Enumerate every shared cell visible at this scope: the
+    /// kernel's [`Kernel::cells_in_scope`], its own and those it
+    /// carries for its descendants.
     pub fn shared_cells_in_scope(&self) -> Vec<SharedCellInScope> {
         let inner = self.lock_inner();
         inner
-            .shared_cells_in_scope()
+            .cells_in_scope()
             .into_iter()
             .map(|e| SharedCellInScope {
                 name: e.name,
@@ -154,7 +151,7 @@ impl<M> ScopeKernel<M> {
     /// callers go through the protocol.
     pub(crate) fn new_internal(
         name: ChildName,
-        kernel: PolydatKernel,
+        kernel: Box<dyn Kernel>,
         site: SourceContext,
         consumers: Vec<RegisteredPullConsumer>,
     ) -> Self {
@@ -163,7 +160,7 @@ impl<M> ScopeKernel<M> {
 
     pub(crate) fn new_with_write_throughs(
         name: ChildName,
-        kernel: PolydatKernel,
+        kernel: Box<dyn Kernel>,
         site: SourceContext,
         consumers: Vec<RegisteredPullConsumer>,
         write_throughs: Vec<WriteThroughBinding>,
@@ -190,11 +187,10 @@ impl<M> ScopeKernel<M> {
         &self.site
     }
 
-    /// Borrow the underlying `PolydatKernel` for read-only
-    /// operations. The lock is released when the returned guard
-    /// is dropped. Exposed for callers that drive the kernel directly
-    /// (the builder's `finalize` does, as do tests).
-    pub fn lock_inner(&self) -> std::sync::MutexGuard<'_, PolydatKernel> {
+    /// Borrow the underlying kernel. The lock is released when the
+    /// returned guard is dropped. Exposed for callers that drive the
+    /// kernel directly.
+    pub fn lock_inner(&self) -> std::sync::MutexGuard<'_, Box<dyn Kernel>> {
         self.inner
             .lock()
             .expect("ScopeKernel inner kernel poisoned")
@@ -236,10 +232,10 @@ impl<M> ScopeKernel<M> {
     /// which is everything finalize reads of a parent — accumulates
     /// module matter, and produces a closed [`ScopeModule`] artifact
     /// at finalize. It holds no reference to the parent kernel, so a
-    /// caller that only has a [`PolydatKernel`] needs no `ScopeKernel`
-    /// to stand up a child.
+    /// caller that only has a kernel needs no `ScopeKernel` to stand up
+    /// a child.
     pub fn subcontext_builder(&self) -> SubcontextBuilder<M> {
-        SubcontextBuilder::new(ParentView::of(&self.lock_inner()))
+        SubcontextBuilder::new(ParentView::of_kernel(self.lock_inner().as_ref()))
     }
 
     /// Spawn a child kernel from a closed [`ScopeModule`]
@@ -249,18 +245,17 @@ impl<M> ScopeKernel<M> {
     ///
     /// The artifact arrives with Rule 1 (name closure) and Rule 2
     /// (the shared write-through rewrite) already applied by
-    /// [`SubcontextBuilder::finalize`]. Spawn materializes the
-    /// closed program under this parent via
-    /// `PolydatKernel::materialize_subscope`, whose
-    /// `materialize_wiring_from_outer` (kernel/state.rs) does the
+    /// [`SubcontextBuilder::finalize`]. Spawn instantiates the
+    /// closed program on this parent's engine
+    /// ([`ScopeModule::instantiate_under`]), whose binder does the
     /// live binding: attaches every parent-visible `SharedCell` to
     /// a matching child slot and forwards the rest as transit
     /// (Rule 2's cell attach, SC8), value-copies or cell-attaches
-    /// parent outputs into child externs (Rules 4 and 5), pulls
-    /// every `const` output once after wiring so scope-init values
-    /// see post-bind inputs (Rule 3), and freezes the scope
-    /// coordinates. Per-cycle publication to the cells is
-    /// [`Self::commit_write_throughs`].
+    /// parent outputs into child externs (Rules 4 and 5),
+    /// initializes the child so its consts see post-bind inputs
+    /// (Rule 3), and freezes the scope coordinates. A refused copy or
+    /// a failing const is [`ContractViolation::Bind`]. Per-cycle
+    /// publication to the cells is [`Self::commit_write_throughs`].
     pub fn spawn(
         self: &Arc<Self>,
         name: ChildName,
@@ -305,9 +300,18 @@ impl<M> ScopeKernel<M> {
         // input-kind), Rule 5 (closure-binding economy —
         // unreferenced names skip cell attachment but still
         // ride the transit channel for grand-children).
-        let parent_inner = self.lock_inner();
-        let child_kernel = parent_inner.materialize_subscope(artifact.program.clone(), &[]);
-        drop(parent_inner);
+        let built = {
+            let parent_inner = self.lock_inner();
+            artifact.instantiate_under(parent_inner.as_ref(), parent_inner.engine(), &[])
+        };
+        let child_kernel = match built {
+            Ok(kernel) => kernel,
+            Err(e) => {
+                // A child that was never built leaves its name free.
+                self.release_child(&name);
+                return Err(e.into());
+            }
+        };
 
         let child_site = artifact.context.clone();
         let child_consumers = artifact.consumers.clone();
@@ -341,56 +345,24 @@ impl<M> ScopeKernel<M> {
     /// No-op for kernels with no write-throughs.
     ///
     /// TYPE-STABLE (scope_model.md §"Type stability"): each pending
-    /// value passes the same boundary as
-    /// [`crate::kernel::PolydatKernel::commit_write_throughs`] —
+    /// value passes the boundary of [`Kernel::commit_write_throughs`]:
     /// matching types pass, catalog adapters heal (widening), and an
     /// unhealable mismatch is an `Err` at the write site.
     pub fn commit_write_throughs(&self) -> Result<(), String> {
         if self.write_throughs.is_empty() {
             return Ok(());
         }
-        let mut inner = self.lock_inner();
-        // Two-pass to avoid holding two mutable borrows of the
-        // kernel at once: pull each value first (the pull mutates
-        // state), collect (idx, value) pairs, then write through
-        // in a second pass.
-        let mut pending: Vec<(usize, Value)> = Vec::with_capacity(self.write_throughs.len());
-        for wt in &self.write_throughs {
-            let Some(idx) = inner.program().find_input(&wt.export_name) else {
-                continue;
-            };
-            let value = inner.pull_ref(&wt.source_output).clone();
-            let slot_type = inner
-                .program()
-                .input_port_type_by_idx(idx)
-                .expect("write-through idx resolved from find_input");
-            let value = crate::kernel::state::check_write_through_type(
-                &wt.export_name,
-                &wt.source_output,
-                slot_type,
-                value,
-            )?;
-            pending.push((idx, value));
-        }
-        for (idx, value) in pending {
-            inner.state().set_input(idx, value);
-        }
-        Ok(())
+        self.lock_inner().commit_write_throughs()
     }
 }
 
 /// Construct a workload-root [`ScopeKernel<RootMarker>`] from a
-/// pre-compiled [`PolydatKernel`]: the door into the typed scope
-/// path, where a host spawns children it keeps and releases by name
-/// rather than dropping a kernel on the floor.
-///
-/// `PolydatKernel::build_subscope` no longer calls this. It used to,
-/// to stand up a transient typed parent for the builder to validate
-/// against, which is what kept the only constructor of a root scope
-/// crate-private; the builder takes a [`ParentView`] now, so this is
-/// the host's constructor and nothing else's.
+/// compiled kernel of any engine: the door into the typed scope path,
+/// where a host spawns children it keeps and releases by name rather
+/// than dropping a kernel on the floor. Every child spawned under it
+/// runs on its engine.
 pub fn wrap_root_kernel(
-    kernel: PolydatKernel,
+    kernel: Box<dyn Kernel>,
     label: impl Into<String>,
 ) -> Arc<ScopeKernel<RootMarker>> {
     let label = label.into();
@@ -434,7 +406,7 @@ pub(crate) struct StatementsMatter {
 }
 
 pub(crate) struct ProgramMatter<'a> {
-    pub(crate) program: Arc<crate::kernel::PolydatProgram>,
+    pub(crate) program: Arc<dyn crate::kernel::KernelProgram>,
     pub(crate) iter_bindings: &'a [(String, Value)],
 }
 
@@ -456,7 +428,7 @@ pub struct PolydatMatterBuilder<'a> {
     label: Option<String>,
     body: Option<String>,
     statements: Option<Vec<crate::dsl::ast::Statement>>,
-    program: Option<Arc<crate::kernel::PolydatProgram>>,
+    program: Option<Arc<dyn crate::kernel::KernelProgram>>,
     iter_bindings: &'a [(String, Value)],
     result_bindings: Option<String>,
     inherited_outputs: Vec<String>,
@@ -493,11 +465,13 @@ impl<'a> PolydatMatterBuilder<'a> {
         self
     }
 
-    /// Provide a pre-compiled program. Mutually exclusive with
+    /// Provide a pre-compiled program on any engine
+    /// ([`crate::Kernel::into_program`], or an interpreter
+    /// `Arc<PolydatProgram>`). Mutually exclusive with
     /// [`Self::source`] and [`Self::statements`]. Used for per-
     /// fiber state forks, comprehension iteration, and other
     /// call sites that hold a compiled program directly.
-    pub fn program(mut self, program: Arc<crate::kernel::PolydatProgram>) -> Self {
+    pub fn program(mut self, program: Arc<dyn crate::kernel::KernelProgram>) -> Self {
         self.program = Some(program);
         self
     }
@@ -580,65 +554,71 @@ impl<'a> PolydatMatterBuilder<'a> {
     }
 }
 
-impl PolydatKernel {
+impl PolydatMatter<'_> {
     /// THE subscope-construction path. Per the kernel-construction
-    /// invariant, this is the ONE method through which a parent
-    /// kernel produces a child. `compile_polydat` produces root
-    /// kernels; everything else is a subscope and routes here.
+    /// invariant, this is how a parent kernel of any engine produces a
+    /// child. `compile_polydat` produces root kernels; everything else
+    /// is a subscope and routes here.
     ///
-    /// Cell propagation, scope-coordinate plumbing, and Rule 2
-    /// write-throughs flow from `self` (the parent) into the
-    /// returned child. Returns the child kernel plus any
-    /// write-through bindings finalize produced (empty for the
-    /// program-matter form, populated for the source-matter
-    /// form when a result-LHS collides with a parent `shared`
-    /// cell).
+    /// A child from source or statements is compiled once and bound on
+    /// `parent`'s engine through the binder every engine shares
+    /// ([`super::ScopeModule::instantiate_under`]). A child from a
+    /// compiled program is bound on that program's engine
+    /// ([`crate::kernel::bind_under`]). Cell propagation,
+    /// scope-coordinate plumbing, and Rule 2 write-throughs flow from
+    /// `parent` into the returned child.
+    pub fn build_under(self, parent: &dyn Kernel) -> Result<Box<dyn Kernel>, ContractViolation> {
+        use super::module::BodyFragment;
+        let (label, strict, inherited, options, body, result_bindings) = match self.inner {
+            PolydatMatterInner::Program(p) => {
+                return Ok(crate::kernel::bind_under(
+                    parent,
+                    p.program,
+                    p.iter_bindings,
+                )?);
+            }
+            PolydatMatterInner::Source(s) => (
+                s.label,
+                s.options.strict,
+                s.inherited_outputs,
+                s.options,
+                BodyFragment::PolydatSource(s.body),
+                s.result_bindings,
+            ),
+            PolydatMatterInner::Statements(s) => (
+                s.label,
+                s.options.strict,
+                s.inherited_outputs,
+                s.options,
+                BodyFragment::Statements(s.statements),
+                s.result_bindings,
+            ),
+        };
+        let mut builder: SubcontextBuilder<RootMarker> =
+            SubcontextBuilder::new(ParentView::of_kernel(parent));
+        builder
+            .context(SourceContext::new(label.clone()))
+            .mark_inherited_outputs(inherited)
+            .with_compile_options(options)
+            .body(body);
+        if let Some(src) = result_bindings {
+            builder.add_result_bindings(&src)?;
+        }
+        let module = builder.finalize()?;
+        let mut child = module.instantiate_under(parent, parent.engine(), &[])?;
+        enforce_l2f_strict(child.as_mut(), strict, &label)?;
+        Ok(child)
+    }
+}
+
+impl PolydatKernel {
+    /// [`PolydatMatter::build_under`] this kernel: the child runs on
+    /// the interpreter, this kernel's engine.
     pub fn build_subscope(
         &self,
         matter: PolydatMatter<'_>,
-    ) -> Result<PolydatKernel, ContractViolation> {
-        use super::module::BodyFragment;
-        match matter.inner {
-            PolydatMatterInner::Program(p) => {
-                Ok(self.materialize_subscope(p.program, p.iter_bindings))
-            }
-            PolydatMatterInner::Source(s) => {
-                let strict = s.options.strict;
-                let label = s.label.clone();
-                let mut builder: SubcontextBuilder<RootMarker> =
-                    SubcontextBuilder::new(ParentView::of(self));
-                builder
-                    .context(SourceContext::new(s.label.clone()))
-                    .mark_inherited_outputs(s.inherited_outputs)
-                    .with_compile_options(s.options)
-                    .body(BodyFragment::PolydatSource(s.body));
-                if let Some(src) = s.result_bindings {
-                    builder.add_result_bindings(&src)?;
-                }
-                let module = builder.finalize()?;
-                let child = self.materialize_subscope(module.program.clone(), &[]);
-                enforce_l2f_strict(&child, strict, &label)?;
-                Ok(child)
-            }
-            PolydatMatterInner::Statements(s) => {
-                let strict = s.options.strict;
-                let label = s.label.clone();
-                let mut builder: SubcontextBuilder<RootMarker> =
-                    SubcontextBuilder::new(ParentView::of(self));
-                builder
-                    .context(SourceContext::new(s.label.clone()))
-                    .mark_inherited_outputs(s.inherited_outputs)
-                    .with_compile_options(s.options)
-                    .body(BodyFragment::Statements(s.statements));
-                if let Some(src) = s.result_bindings {
-                    builder.add_result_bindings(&src)?;
-                }
-                let module = builder.finalize()?;
-                let child = self.materialize_subscope(module.program.clone(), &[]);
-                enforce_l2f_strict(&child, strict, &label)?;
-                Ok(child)
-            }
-        }
+    ) -> Result<Box<dyn Kernel>, ContractViolation> {
+        matter.build_under(self)
     }
 }
 
@@ -653,15 +633,34 @@ impl PolydatKernel {
 /// to either ensure the const yields a defined value or
 /// remove the binding and declare `extern X` explicitly if
 /// fall-through to outer was intended.
+///
+/// A const's own value is its expression's: `__init_<name>` for a
+/// const captured at initialization, the output itself for one
+/// folded at build.
 fn enforce_l2f_strict(
-    child: &PolydatKernel,
+    child: &mut dyn Kernel,
     strict: bool,
     label: &str,
 ) -> Result<(), ContractViolation> {
     if !strict {
         return Ok(());
     }
-    let bindings = child.find_l2f_violations();
+    let consts: Vec<String> = child
+        .output_names()
+        .into_iter()
+        .filter(|n| child.output_modifier(n).is_const() && !n.starts_with("__init_"))
+        .collect();
+    let bindings: Vec<String> = consts
+        .into_iter()
+        .filter(|name| {
+            let own = child
+                .const_inits()
+                .iter()
+                .find(|c| &c.name == name && !c.register)
+                .map_or_else(|| name.clone(), |c| c.source.clone());
+            matches!(child.pull(&own), Value::None)
+        })
+        .collect();
     if bindings.is_empty() {
         return Ok(());
     }
@@ -671,26 +670,10 @@ fn enforce_l2f_strict(
     })
 }
 
-// `bind_program_under_parent` and the `build_kernel_under_parent_*`
-// family of free-function bridges are removed. Per the kernel-
-// construction invariant, only two paths exist:
+// Per the kernel-construction invariant, two paths exist:
 //
 //   1. Root kernel built from source via `compile_polydat` (and family).
-//   2. Subscope kernel materialized by a parent kernel via
-//      [`PolydatKernel::materialize_subscope`] or
-//      [`PolydatKernel::build_subscope`] — all methods on
-//      `PolydatKernel` itself, parent-supervised, typed.
-//
-// External callers go through these PolydatKernel-controlled paths
-// directly; no free-function bridges remain.
-
-// `instance_program` is removed. The two sanctioned construction
-// paths are:
-//
-//   1. Root kernel built from source via `compile_polydat` family.
-//   2. Subscope kernel materialized by an existing parent
-//      kernel via `PolydatKernel::materialize_subscope` or
-//      `PolydatKernel::build_subscope`.
-//
-// Tests that need a kernel from pre-compiled program matter use
-// `PolydatAssembler::compile()` (which returns a root kernel) directly.
+//   2. Subscope kernel bound under a parent kernel of any engine via
+//      `PolydatMatter::build_under`, `ScopeKernel::spawn`,
+//      `ScopeModule::instantiate_under`, or `bind_under`, each
+//      parent-supervised through the one binder.

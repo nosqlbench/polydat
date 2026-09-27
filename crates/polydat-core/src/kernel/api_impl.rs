@@ -115,7 +115,14 @@ impl Construction for PolydatKernel {
                     })
             }
             PolydatMatterInner::Program(p) => {
-                let mut k = PolydatKernel::from_program(p.program);
+                let engine = p.program.engine();
+                let program = p.program.as_interpreter().ok_or_else(|| {
+                    crate::kernel::subcontext::ContractViolation::Compile(format!(
+                        "a root interpreter kernel needs an interpreter program; this one is \
+                         on the {engine} engine, whose `create_kernel` makes its root"
+                    ))
+                })?;
+                let mut k = PolydatKernel::from_program(program);
                 for (var, value) in p.iter_bindings {
                     if let Some(idx) = k.program().find_input(var) {
                         k.state().set_input(idx, value.clone());
@@ -129,9 +136,8 @@ impl Construction for PolydatKernel {
     fn subscope(
         &self,
         matter: crate::kernel::subcontext::PolydatMatter<'_>,
-    ) -> Result<Self, Self::Error> {
-        // Delegate to PolydatKernel's existing typed subscope path.
-        PolydatKernel::build_subscope(self, matter)
+    ) -> Result<Box<dyn crate::kernel::Kernel>, Self::Error> {
+        matter.build_under(self)
     }
 }
 
@@ -316,6 +322,12 @@ impl crate::kernel::Kernel for PolydatKernel {
     }
     fn input_type_origin(&self, name: &str) -> Option<crate::kernel::TypeOrigin> {
         self.program().input_type_origin(name)
+    }
+    fn as_interpreter(&self) -> Option<&PolydatKernel> {
+        Some(self)
+    }
+    fn as_interpreter_mut(&mut self) -> Option<&mut PolydatKernel> {
+        Some(self)
     }
 }
 

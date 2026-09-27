@@ -173,7 +173,7 @@ impl ParentView {
 
 /// Module-matter accumulator. Construction is gated by a parent —
 /// [`ScopeKernel::subcontext_builder`](super::ScopeKernel::subcontext_builder)
-/// on the typed path, `PolydatKernel::build_subscope` on the untyped
+/// on the typed path, [`PolydatMatter::build_under`](super::PolydatMatter::build_under) on the untyped
 /// one — and both hand it the same [`ParentView`].
 pub struct SubcontextBuilder<P> {
     parent: ParentView,
@@ -184,7 +184,7 @@ pub struct SubcontextBuilder<P> {
     context: SourceContext,
     /// Names to apply via `mark_inherited_outputs` on the
     /// compiled kernel before its program Arc is shared. Set by
-    /// `PolydatKernel::build_subscope` from `PolydatMatter`'s `inherited_outputs`
+    /// `PolydatMatter::build_under` from the matter's `inherited_outputs`
     /// to preserve the pre-SRD-67 ordering of cascade-extern
     /// names; explicit synthesisers that don't need cascade
     /// pass-through leave this empty.
@@ -248,7 +248,7 @@ impl<P> SubcontextBuilder<P> {
     /// program Arc is shared.
     ///
     /// Set from `PolydatMatter`'s `inherited_outputs` by
-    /// `PolydatKernel::build_subscope`; explicit-import callers leave this
+    /// `PolydatMatter::build_under`; explicit-import callers leave this
     /// empty.
     pub fn mark_inherited_outputs(&mut self, names: Vec<String>) -> &mut Self {
         self.inherited_outputs = names;

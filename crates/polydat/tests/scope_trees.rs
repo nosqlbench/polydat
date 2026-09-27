@@ -379,3 +379,39 @@ fn many_threads_bind_and_fork_under_one_shared_parent() {
         }
     }
 }
+
+/// A child built from source under a parent, through
+/// `PolydatMatter::build_under` or a scope's `spawn`, runs on the
+/// parent's engine and reads the parent's values.
+#[test]
+fn a_subscope_and_a_spawned_child_run_on_the_parent_s_engine() {
+    use polydat::kernel::subcontext::{ChildName, PolydatMatter, wrap_root_kernel};
+    let child_src = "input cycle: u64\nextern base: u64\nout := base + 1\n";
+    for engine in engines() {
+        let parent = compile("input cycle: u64\nconst base := 41\n", engine);
+        let matter = PolydatMatter::builder()
+            .label("child")
+            .source(child_src)
+            .build()
+            .unwrap();
+        let mut child = matter
+            .build_under(parent.as_ref())
+            .unwrap_or_else(|e| panic!("{engine}: {e}"));
+        assert_eq!(child.engine(), engine, "build_under");
+        child.set_inputs(&[0]);
+        assert_eq!(child.pull("out"), Value::U64(42), "{engine}");
+
+        let root = wrap_root_kernel(parent, "root");
+        let mut b = root.subcontext_builder();
+        b.context(SourceContext::new("spawned"));
+        b.body(BodyFragment::PolydatSource(child_src.to_string()));
+        let module = b.finalize().unwrap_or_else(|e| panic!("{engine}: {e}"));
+        let spawned = root
+            .spawn(ChildName::phase("spawned"), module)
+            .unwrap_or_else(|e| panic!("{engine}: {e}"));
+        let mut inner = spawned.lock_inner();
+        assert_eq!(inner.engine(), engine, "spawn");
+        inner.set_inputs(&[0]);
+        assert_eq!(inner.pull("out"), Value::U64(42), "{engine}");
+    }
+}

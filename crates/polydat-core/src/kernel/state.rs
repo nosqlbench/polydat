@@ -1025,11 +1025,11 @@ impl PolydatKernel {
     /// trait, so the parent no longer has to be the interpreter's
     /// kernel type.
     ///
-    /// The child is still an interpreter kernel. That is the half of
-    /// this that remains: `Construction` is implemented for
-    /// `PolydatKernel` alone, so a host on `Engine::default()` (P3) can
-    /// now compose *under* its kernel but the subscope tree it gets is
-    /// interpreted.
+    /// The child is an interpreter kernel, for the crate's
+    /// interpreter-only paths (`for_iteration`, comprehension
+    /// evaluation). A host builds a child on its parent's engine with
+    /// [`crate::kernel::subcontext::PolydatMatter::build_under`] or
+    /// [`crate::kernel::bind_under`].
     pub(crate) fn materialize_subscope_under(
         outer: &dyn crate::kernel::Kernel,
         program: Arc<PolydatProgram>,
