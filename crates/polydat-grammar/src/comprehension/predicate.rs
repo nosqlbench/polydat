@@ -10,7 +10,10 @@
 //! than every binary operator, arithmetic binds tighter than
 //! comparison, comparison tighter than `&&`, and `&&` tighter than
 //! `||`, so `!{done} || {retry}` is `(!{done}) || {retry}`. Membership,
-//! `{name} in [v1, v2, …]`, binds as a relational comparison.
+//! `{name} in [v1, v2, …]`, binds as a relational comparison. A string
+//! is quoted, as everywhere in the language (`{region} == "us-east"`);
+//! a bare word is a name, which a predicate has none of beside its
+//! `{name}` elements.
 //!
 //! The tree holds the structure the runtime evaluates directly and the
 //! predicate analyzer factorizes: `||`, `&&`, `!`, the six comparisons,
@@ -54,7 +57,7 @@ pub enum PredicateKind {
     /// `{name}`: the value the tuple, or the scope it was drawn in,
     /// binds to `name`.
     Element(String),
-    /// A literal value. A bare word is its own text.
+    /// A literal value.
     Literal(PredicateLiteral),
     /// `a OP b` for one of the arithmetic operators `+ - * / % **`,
     /// evaluated as a Polydat expression from its text.
@@ -112,7 +115,7 @@ pub enum PredicateLiteral {
     Int(i128),
     /// A float.
     Float(f64),
-    /// A quoted string, or a bare word such as `load`.
+    /// A quoted string, `"load"` or `'load'`.
     Str(String),
     /// `true` or `false`.
     Bool(bool),
@@ -479,7 +482,9 @@ impl Parser {
             Tok::Ident(word) => match word.as_str() {
                 "true" => PredicateKind::Literal(PredicateLiteral::Bool(true)),
                 "false" => PredicateKind::Literal(PredicateLiteral::Bool(false)),
-                _ => PredicateKind::Literal(PredicateLiteral::Str(word)),
+                // A bare word is a name, evaluated as the language
+                // evaluates one; it is never a string.
+                _ => PredicateKind::Expr,
             },
             _ => return Err("expected a value in predicate".to_string()),
         };
@@ -684,7 +689,7 @@ mod tests {
             ("{a} << 1 >= 4 && true", "((<{a} << 1> >= 4) && true)"),
             (
                 "{a} in [1, 2] && {b} == x",
-                "(({a} in [1, 2]) && ({b} == 'x'))",
+                "(({a} in [1, 2]) && ({b} == <x>))",
             ),
             ("{a} in [1] || !{b}", "(({a} in [1]) || (!{b}))"),
             ("u64_add({a}, {b}) > 7", "(<u64_add({a}, {b})> > 7)"),
@@ -692,6 +697,10 @@ mod tests {
             ("{a} as f64 > 1.5", "(<{a} as f64> > 1.5)"),
             ("-{a} < 0", "(<-{a}> < 0)"),
             ("\"s0\" != 2", "('s0' != 2)"),
+            ("{b} == 'us-east'", "({b} == 'us-east')"),
+            // A bare word is a name, never a string.
+            ("{b} == us-east", "({b} == <us-east>)"),
+            ("{b} in [s0, \"s1\"]", "({b} in [<s0>, 's1'])"),
         ];
         for (text, expected) in cases {
             assert_eq!(shape(text), expected, "{text}");

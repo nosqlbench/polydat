@@ -559,9 +559,11 @@ fn every_shape_indexes_as_it_materializes() {
         // ordering the two fails on every path.
         Comprehension::filter(
             Comprehension::cartesian(vec![words("w", &["s0", "s1", "s2"]), ints("n", &[1, 2])]),
-            "{w} != 2 && {n} != s1",
+            "{w} != 2 && {n} != \"s1\"",
         ),
-        Comprehension::filter(words("w", &["s0", "s1"]), "{w} in [s1, 2, 3.5]"),
+        Comprehension::filter(words("w", &["s0", "s1"]), "{w} in [\"s1\", 2, 3.5]"),
+        // A bare word is a name, which fails to resolve on every path.
+        Comprehension::filter(words("w", &["s0", "s1"]), "{w} == s1"),
         Comprehension::filter(words("w", &["s0", "s1"]), "{w} > 2"),
         // Negation binds to its operand.
         Comprehension::filter(product(), "!({a} == 1) || {b} == 5"),
@@ -1092,10 +1094,12 @@ impl Shapes {
                         self.called += 1;
                         format!("u64_mod(u64_add({{{n}}}, 1), 3) != 0")
                     }
-                    (Some(n), 4) => format!("!({{{n}}} == {}) || {{{n}}} == s0", self.rng.below(3)),
-                    (Some(n), 5) => format!("{{{n}}} in [0, 2, s1]"),
+                    (Some(n), 4) => {
+                        format!("!({{{n}}} == {}) || {{{n}}} == \"s0\"", self.rng.below(3))
+                    }
+                    (Some(n), 5) => format!("{{{n}}} in [0, 2, \"s1\"]"),
                     (Some(n), 6) if names.len() > 1 => {
-                        format!("{{{n}}} != s1 && {{{}}} != 2", names[1])
+                        format!("{{{n}}} != \"s1\" && {{{}}} != 2", names[1])
                     }
                     _ => if self.rng.coin(50) { "true" } else { "false" }.to_string(),
                 };

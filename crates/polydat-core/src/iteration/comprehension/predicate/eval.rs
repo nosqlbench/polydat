@@ -19,9 +19,11 @@
 //! with each other, strings and booleans with their own kind, and a
 //! value of one kind is never equal to a value of another, so
 //! `"s0" != 2` holds. Ordering values of different kinds is an error.
-//! A predicate that does not parse is evaluated whole as a Polydat
-//! expression. The value a predicate yields is true when it is `true`
-//! or a non-zero number.
+//! A string is quoted; a bare word is a name, and since a predicate has
+//! no names beside its elements, it fails to resolve, with an error
+//! that shows the word quoted. A predicate that does not parse is
+//! evaluated whole as a Polydat expression. The value a predicate
+//! yields is true when it is `true` or a non-zero number.
 
 use crate::ast::Value;
 use crate::dsl::compile::eval_const_expr_for;
@@ -148,12 +150,32 @@ impl CompiledPredicate {
                 };
                 let interpolated =
                     interpolate_via_kernel(text, &layered).map_err(|e| e.to_string())?;
-                let value = eval_const_expr_for(&interpolated, scope.ledger())
-                    .map_err(|e| e.to_string())?;
+                let value = eval_const_expr_for(&interpolated, scope.ledger()).map_err(|e| {
+                    if looks_like_a_bare_word(text) {
+                        format!(
+                            "{e}; `{text}` is a name, not a string: a string in a \
+                                 predicate is quoted, as in `\"{text}\"`"
+                        )
+                    } else {
+                        e.to_string()
+                    }
+                })?;
                 scalar(&value).ok_or_else(|| format!("`{text}` is {value:?}, not a scalar"))?
             }
         })
     }
+}
+
+/// Whether `text` reads as words joined by hyphens (`us-east`, `s0`):
+/// a string written without its quotes, which the language reads as a
+/// name, or as a subtraction of names.
+fn looks_like_a_bare_word(text: &str) -> bool {
+    text.split('-').all(|word| {
+        word.chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && word.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    })
 }
 
 /// The kind every value of an element has, as its source declares it.
@@ -514,6 +536,38 @@ mod tests {
         }
     }
 
+    /// A string is quoted. A bare word is a name, which a predicate
+    /// cannot resolve, and the error shows the word quoted; a hyphenated
+    /// one reads as a subtraction of names and fails the same way.
+    #[test]
+    fn a_bare_word_is_a_name_and_the_error_quotes_it() {
+        let t = tuple(&[("region", Value::Str(Arc::from("us-east")))]);
+        assert!(keeps("{region} == \"us-east\"", &t));
+        for (predicate, word) in [
+            ("{region} == us-east", "us-east"),
+            ("{region} in [us-west, \"us-east\"]", "us-west"),
+            ("{region} != eu", "eu"),
+        ] {
+            let error = CompiledPredicate::new(predicate)
+                .keeps(&t, &NoScope::new())
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains(&format!(
+                    "`{word}` is a name, not a string: a string in a predicate is quoted, \
+                     as in `\"{word}\"`"
+                )),
+                "{predicate}: {error}"
+            );
+        }
+        // An expression that is not a bare word fails without the hint.
+        let error = CompiledPredicate::new("nosuch({region}) > 1")
+            .keeps(&t, &NoScope::new())
+            .unwrap_err()
+            .to_string();
+        assert!(!error.contains("is a name, not a string"), "{error}");
+    }
+
     /// Values of different kinds are unequal, and ordering them is an
     /// error naming both.
     #[test]
@@ -521,7 +575,8 @@ mod tests {
         let t = tuple(&[("c", Value::Str(Arc::from("s0")))]);
         assert!(keeps("{c} != 2", &t));
         assert!(!keeps("{c} == 2", &t));
-        assert!(keeps("{c} == s0", &t));
+        assert!(keeps("{c} == \"s0\"", &t));
+        assert!(keeps("{c} == 's0'", &t));
         // An operand after the one that decides is not evaluated.
         assert!(!keeps("{c} == 2 && {c} > 2", &t));
         assert!(keeps("{c} != 2 || {c} > 2", &t));
