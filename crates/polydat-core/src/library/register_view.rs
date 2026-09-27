@@ -9,8 +9,6 @@
 //! lane typing changes. Each view is an ordinary registered node, like
 //! every other entry of the conversion table, so a program can call it
 //! and the conversion fuzzer can reach it by the name the table gives.
-//! It used to be one hand-written node parameterized by its target
-//! type, which the assembler could insert but no program could name.
 //!
 //! Each takes the raw word: any register view satisfies a register
 //! slot (the free-bitcast rule in `Value::satisfies_slot`).

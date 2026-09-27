@@ -7,8 +7,7 @@
 //! panics, by design, because the hot path stays branch-free. The
 //! "guarded" version of a node that would otherwise panic is built
 //! as an *assembly* of two functions — the original node, and an
-//! assertion node spliced in front of one of its inputs (SRD 15
-//! §"Type and Value Assertion Nodes"). The assertion runs the
+//! assertion node spliced in front of one of its inputs. The assertion runs the
 //! check; the downstream node still trusts its inputs.
 //!
 //! Two families:
@@ -23,10 +22,9 @@
 //!   a [`ConstConstraint`]. Pass the value through if the
 //!   constraint holds, otherwise panic with a structured message.
 //!   The same vocabulary the const-constraint metadata uses on
-//!   `ParamSpec` is reused on `Port` (SRD 15 §"Strict Wire Mode")
-//!   and on these nodes.
+//!   `ParamSpec` is reused on `Port` and on these nodes.
 //!
-//! Auto-insertion is the compiler's job (M2 §"Strict Wire Mode")
+//! Auto-insertion is the compiler's job (graph_compiler.md §2)
 //! — these nodes are also user-callable from Polydat source for ad-hoc
 //! guards.
 
@@ -163,9 +161,9 @@ fn value_matches(v: &Value, typ: PortType) -> bool {
         // node outputs); host-written F64 also satisfies F16.
         (Value::U64(_), PortType::F16) => true,
         (Value::F64(_), PortType::F16) => true,
-        // Honest signed carrier serves all signed widths; legacy
-        // stuffed-U64 forms for the narrow signed projections
-        // remain accepted during the alignment migration.
+        // Honest signed carrier serves all signed widths; the
+        // bit-stuffed U64 forms of the narrow signed projections are
+        // accepted too.
         (Value::I64(_), PortType::I64 | PortType::I32 | PortType::I8 | PortType::I16) => true,
         (Value::U64(_), PortType::I8 | PortType::I16) => true,
         (Value::U128(_), PortType::U128) => true,

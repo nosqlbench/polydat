@@ -4,11 +4,9 @@
 //! The Galois LFSR permutation: one body for the `shuffle` node and for
 //! `jit_shuffle`, the helper native code calls.
 //!
-//! The two carried a copy each until 2026-09-22, and the copies drifted
-//! the way copies do — a zero `size` divided by zero in both, and a
-//! guard written into one would have made the engines disagree about
-//! the same program. They are one function now, which is what this
-//! module is for.
+//! They share one function so they cannot drift: a guard written into
+//! one copy and not the other would make the engines disagree about
+//! the same program.
 //!
 //! The feedback polynomials come with it. A shuffle whose polynomial
 //! does not match its register width is not a permutation, so the table

@@ -186,7 +186,7 @@ impl PolydatNode for ConstHandle {
     }
 }
 
-/// SRD 71 — leaf const for [`Value::Ext`]-typed values
+/// Leaf const for [`Value::Ext`]-typed values
 /// (Partition, PartitionSpec, PartitionList, …).
 ///
 /// Mirrors [`ConstHandle`]'s shape for `Handle`-typed values:

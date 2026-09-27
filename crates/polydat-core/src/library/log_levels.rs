@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! `log_debug` / `log_info` / `log_warn` / `log_error` — pass-through
-//! logging node functions (SRD-66 §"Surface 5").
+//! logging node functions (composition_substrate.md §8.5).
 //!
 //! Each takes one wire input, emits a single diag line at the named
 //! level containing the value's display form, and returns the input

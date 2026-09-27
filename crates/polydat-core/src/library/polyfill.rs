@@ -29,7 +29,7 @@
 //! via the `boundary_adapter` superset relation.
 //!
 //! Every cell is authored as an individual `#[polydat_node]`
-//! free function per SRD-80b §S14 — the macro emits the
+//! free function (library_catalog.md, "Registration") — the macro emits the
 //! matching PascalCase struct (e.g. `__u64_to_i32` → `U64ToI32`),
 //! the `impl PolydatNode`, and the inventory registration. The
 //! `__` prefix on the function identifier carries through to

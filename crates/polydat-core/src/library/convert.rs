@@ -19,8 +19,7 @@
 ///
 /// Lowered natively: the digits are written straight into the step's
 /// entry (`JitOp::U64ToStr`).
-// SRD-80 PR B.14 — edge adapter family migrated to
-// `#[polydat_node]`. Underscore-prefixed names denote
+// The edge adapter family. Underscore-prefixed names denote
 // assembly-phase auto-inserted bridges, not workload-callable
 // functions; the macro preserves the leading underscore via
 // the function's identifier.
@@ -316,13 +315,12 @@ fn ceil_to_u64(input: f64) -> u64 {
 /// JIT level: P3 (compiled_u64 with jit_constants for range and buckets).
 ///
 /// The range is positive and finite and there is at least one bucket,
-/// declared so the build refuses anything else on every engine. The
-/// body used to clamp to `range - f64::EPSILON`, an absolute epsilon,
-/// which made any range below it a "min > max" panic. The final `min`
-/// already sends an input at or past the range to the last bucket, so
-/// clamping to the range itself gives the same bucket everywhere. The
-/// native form read `buckets - 1` from the constant and underflowed
-/// while compiling a zero-bucket program.
+/// declared so the build refuses anything else on every engine, and
+/// the native form's `buckets - 1` never underflows. The body clamps to
+/// the range itself rather than to `range - f64::EPSILON`, an absolute
+/// epsilon that would make any range below it a "min > max" panic; the
+/// final `min` already sends an input at or past the range to the last
+/// bucket, so the bucket is the same everywhere.
 #[crate::polydat_node(category = Conversions)]
 fn discretize(
     input: f64,
@@ -387,15 +385,10 @@ impl FormatU64 {
     }
 }
 
-// SRD-80 PR B.5 — `format_f64` and `zero_pad_u64` migrated to
-// the `#[polydat_node]` derive with `Const<u64>` const args.
-// Tests below construct via `FormatF64::new(2)` and
-// `ZeroPadU64::new(8)` — both work since the macro generates
-// `new(precision: u64)` / `new(width: u64)` and integer
-// literals coerce to u64. The historic `usize` parameter type
-// is now `u64` end-to-end (operator-visible API change in the
-// struct's `new()` signature, but the only call sites are this
-// module's own tests).
+// `format_f64` and `zero_pad_u64` take `Const<u64>` const args, so
+// the macro generates `new(precision: u64)` / `new(width: u64)`, and
+// the tests below construct via `FormatF64::new(2)` and
+// `ZeroPadU64::new(8)`.
 
 /// Format an f64 with controlled decimal precision.
 ///
@@ -419,7 +412,7 @@ fn zero_pad_u64(
     format!("{:0>width$}", input, width = *width as usize)
 }
 
-/// Convert u64 integer value to f64. SRD-80 PR B.14 migration.
+/// Convert u64 integer value to f64.
 #[crate::polydat_node(category = Conversions)]
 fn to_f64(input: u64) -> f64 {
     input as f64
@@ -580,12 +573,11 @@ mod tests {
     fn i32_to_i64_sign_extends() {
         let node = I32ToI64::new();
         let mut out = [Value::None];
-        // Positive value (legacy bit-stuffed input form — the
-        // lenient Wire<i32> extract must keep accepting it during
-        // the honest-I64 migration).
+        // Positive value in the bit-stuffed input form, which the
+        // lenient Wire<i32> extract accepts.
         node.eval(&[Value::U64(42)], &mut out);
         assert_eq!(out[0], Value::I64(42));
-        // Negative i32, legacy stuffed (-1 as u32 = 0xFFFFFFFF):
+        // Negative i32, bit-stuffed (-1 as u32 = 0xFFFFFFFF):
         // sign-extension must survive the lenient extract.
         node.eval(&[Value::U64(0xFFFF_FFFF)], &mut out);
         assert_eq!(out[0], Value::I64(-1));

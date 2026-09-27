@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! `exactly_one_value` — explicit unwrap of a unary structural body
-//! (SRD-66 §"Surface 4").
+//! (library_catalog.md, "`exactly_one_value` — motivation and semantics").
 //!
 //! The motivating use case has a CQL `describe keyspace` op whose
 //! body is a single row × single text column. To regex-match the
@@ -13,8 +13,7 @@
 //!
 //! Scalars pass through; typed vectors must have exactly one element;
 //! a `Json` body is walked as rows × columns × leaf and rejected with
-//! the diagnostic below when not unary (SRD-66 §"Surface 4
-//! §Semantics"):
+//! the diagnostic below when not unary:
 //!
 //! ```text
 //! exactly_one_value: expected unary structure (1 row × 1 column),
@@ -36,7 +35,7 @@ use crate::ast::Value;
 /// A polymorphic-output variant that preserves leaf types
 /// (Bool/U64/F64/…) would require a port-type declaration that
 /// reflects the runtime unwrap result rather than the input port,
-/// which the macro can't express today without generic-over-Wire
+/// which the macro can't express without generic-over-Wire
 /// instantiation. When such a variant is needed it becomes its own
 /// node.
 #[crate::polydat_node(category = Diagnostic)]
@@ -317,7 +316,7 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
-    // SRD-66 §"Surface 4 §Semantics" — structural Json walk
+    // Structural Json walk
     // ---------------------------------------------------------------
 
     #[test]

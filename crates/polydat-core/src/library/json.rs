@@ -62,8 +62,8 @@ fn json_object(parts: &[Value]) -> std::sync::Arc<serde_json::Value> {
     std::sync::Arc::new(json_object_of(parts))
 }
 
-/// The merge `json_object` performs, over borrowed views (SRD 115
-/// §6.1): the body the node calls on its `Value` inputs.
+/// The merge `json_object` performs, over borrowed views
+/// (compiled_handles.md §6): the body the node calls on its `Value` inputs.
 pub(crate) fn json_object_of_refs<'a>(
     parts: impl IntoIterator<Item = ValueRef<'a>>,
 ) -> serde_json::Value {
@@ -203,7 +203,7 @@ pub(crate) fn value_to_json(v: &Value) -> serde_json::Value {
     json_of_ref(ValueRef::from(v))
 }
 
-/// The JSON coercion over a borrowed view (SRD 115 §6.1), so a caller
+/// The JSON coercion over a borrowed view (compiled_handles.md §6), so a caller
 /// need not own a `Value`.
 pub(crate) fn json_of_ref(v: ValueRef<'_>) -> serde_json::Value {
     match v {

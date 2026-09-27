@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! The tile nodes (SRD 114 §6, §7.1).
+//! The tile nodes (polytile.md §6, §7.1).
 //!
 //! The compiler lowers a `tile` statement to one `tile_render` binding
 //! over the hole wires: the render node carries each hole's encoding
@@ -191,7 +191,7 @@ impl TileSpec {
     }
 }
 
-/// One skeleton instruction in its runtime form (SRD 114 §6): static
+/// One skeleton instruction in its runtime form (polytile.md §6): static
 /// runs are interned once at build and copied from the interner, the
 /// comprehension of a projection is parsed once, and separators are
 /// interned too.
@@ -279,11 +279,8 @@ pub struct TileProgram {
     ops: Vec<RtOp>,
     /// Each projection body, as the one carrier a `for` body uses:
     /// its statements, the settings it compiles under, and its
-    /// program per engine, built on first use.
-    ///
-    /// This used to be two eager compiles per body — one interpreter
-    /// program and one on `Engine::default()` — made at node
-    /// construction whether or not either engine ever rendered it.
+    /// program per engine, built on first use, so construction compiles
+    /// no body for an engine that never renders it.
     pub bodies: Vec<Arc<crate::dsl::traversal::BodySource>>,
     /// The body programs for the interpreter, which construction
     /// needs: the canonical kernels are built over them, and
@@ -310,7 +307,7 @@ impl std::fmt::Debug for TileProgram {
 
 /// Give every body hole an ordinal within its body, so a body kernel's
 /// entry can resolve the hole's output index once and keep it by
-/// position (SRD 117 step 3).
+/// position (polytile.md §7.1).
 fn number_child_holes(ops: &mut [RtOp]) {
     fn walk(ops: &mut [RtOp], next: &mut usize) {
         for op in ops.iter_mut() {
@@ -490,13 +487,9 @@ impl TileProgram {
 
     /// The body program of projection `child` for a render on
     /// `engine` — the engine the kernel doing the rendering runs on,
-    /// which is the rule a `for` body already followed.
-    ///
-    /// A tile's body used to render on `Engine::default()` whatever
-    /// engine the kernel was, because both of its programs were built
-    /// at construction and the default one was the only compiled
-    /// program there was. An engine that refuses the body falls back
-    /// to the interpreter's, as before, and says so once.
+    /// which is the rule a `for` body follows (polytile.md §7.2). An
+    /// engine that refuses the body falls back to the interpreter's
+    /// program and says so once.
     fn body_program_on(&self, child: usize, engine: crate::Engine) -> Arc<dyn KernelProgram> {
         if matches!(engine, crate::Engine::Interpreter(_)) {
             return self.children[child].clone();
@@ -566,8 +559,8 @@ impl TileProgram {
     ) {
         for op in ops {
             match op {
-                // `Copy`: a memcpy from the static interner (SRD 114 §6,
-                // SRD 115 step 3). The bytes were interned at build.
+                // `Copy`: a memcpy from the static interner (polytile.md §6,
+                // compiled_handles.md §3). The bytes were interned at build.
                 RtOp::Copy(s) => out.put(s),
                 RtOp::Hole(source, enc) => match source {
                     RtSource::Wire(i) => {
@@ -896,7 +889,7 @@ fn retype(v: &Value, ty: &str) -> Value {
 }
 
 /// A cached body kernel: the program it was created from, the kernel,
-/// and the body's names resolved to indices once (SRD 117 step 3), so
+/// and the body's names resolved to indices once (polytile.md §7.1), so
 /// a tuple is bound and its holes read with no lookup per tuple.
 struct BodyEntry {
     program: Arc<dyn KernelProgram>,
@@ -1060,7 +1053,7 @@ pub fn encode<W: std::fmt::Write>(value: &Value, enc: &HoleEncoding, out: &mut W
     encode_ref(ValueRef::from(value), enc, out)
 }
 
-/// Encode a borrowed view of a value (SRD 115 §6.1): the compiled
+/// Encode a borrowed view of a value (compiled_handles.md §6): the compiled
 /// closure calls this on its slot without owning a `Value`, and a
 /// string hole is encoded from its producer's scratch in place.
 pub fn encode_ref<W: std::fmt::Write>(value: ValueRef<'_>, enc: &HoleEncoding, out: &mut W) {
@@ -1070,7 +1063,7 @@ pub fn encode_ref<W: std::fmt::Write>(value: ValueRef<'_>, enc: &HoleEncoding, o
     }
     let ty = enc.ty.as_deref();
     // A number with no format, or a float under a `.N` precision,
-    // writes its digits straight into the sink (SRD 117 step 3):
+    // writes its digits straight into the sink (polytile.md §7.1):
     // digits, a sign, and a point need no escaping in any encoding or
     // position, and a numeric type is written bare in a JSON value
     // position, so the text is the same as the general path's, without
@@ -1308,7 +1301,7 @@ fn tile_encode(
     out
 }
 
-/// The closure-tier form of `tile_render` (SRD 117 step 1): every hole
+/// The closure-tier form of `tile_render` (polytile.md §7.2): every hole
 /// value is read from its slot as a borrowed view, by the wire type the
 /// kernel fixed, and the document is rendered straight into the step's
 /// own string scratch through a `BytesSink`; nothing is decoded into
@@ -1322,9 +1315,9 @@ fn tile_render_compiled(
 ) -> crate::ast::CompiledSlotKit {
     // Native code bakes this address, so it must outlive every kernel
     // compiled from the program: one reference count of the node's own
-    // `Arc` is given up here and never taken back. This used to be a
-    // process-wide table keyed by the whole JSON payload, which made
-    // "the same tile" mean "the same bytes of JSON".
+    // `Arc` is given up here and never taken back. Tile programs are
+    // not shared through a process-wide table keyed by their bytes
+    // (polytile.md §7.1, "Lifetime").
     let program: &'static TileProgram = unsafe { &*std::sync::Arc::into_raw(node.program.clone()) };
     // Per wire: its first slot and its type; a one-slot carrier or a
     // `Ref2` kind is viewed in place, a two-slot immediate is decoded.
@@ -1402,13 +1395,11 @@ impl std::fmt::Write for BytesSink<'_> {
 /// Render a compiled tile skeleton over its encoded hole texts.
 ///
 /// The compiler emits this for a `tile` statement and hands it the
-/// skeleton it built, projection bodies and all. The skeleton used to
-/// travel as JSON in a string constant, which this node parsed back
-/// and compiled at construction: a malformed payload was a panic here
-/// rather than a compile error, the body's source lived in three
-/// places, and what the compiler knew about the body that JSON cannot
-/// carry — its source directory, library paths, strict flag, pragmas,
-/// and the modules the program had resolved — was lost on the way.
+/// skeleton it built, projection bodies and all, as a value rather than
+/// as text, so construction has no payload to parse and the bodies keep
+/// what the compiler knew about them: their source directory, library
+/// paths, strict flag, pragmas, and the modules the program had
+/// resolved.
 #[crate::polydat_node(
     category = Formatting,
     variadic_min = 0,

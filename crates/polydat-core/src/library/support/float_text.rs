@@ -4,8 +4,8 @@
 //! Float text, byte-identical to Rust's formatting and faster.
 //!
 //! A tile encodes an `f64` hole as `format!("{f:?}")` when the hole has
-//! no format and as `format!("{f:.N}")` under a `.N` precision (SRD 114
-//! §7.2). Those bytes are the tile's contract on every engine, so a
+//! no format and as `format!("{f:.N}")` under a `.N` precision
+//! (polytile.md §7.1). Those bytes are the tile's contract on every engine, so a
 //! faster writer is only admissible if it produces the same bytes for
 //! every value. This module is that writer, and
 //! `tests/float_text.rs` is the proof: a differential over edge values,

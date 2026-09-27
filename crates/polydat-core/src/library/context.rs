@@ -7,8 +7,7 @@
 //! than the coordinate space. They break the deterministic model
 //! and should be used deliberately.
 //!
-//! SRD-80b Phase E migration. All authoring goes through
-//! `#[polydat_node]`. Three shapes appear here:
+//! All authoring goes through `#[polydat_node]`. Three shapes appear here:
 //!
 //! * Pure clock / OS reads (`current_epoch_millis`, `thread_id`) —
 //!   plain body, marked `Nondeterministic`.
@@ -67,7 +66,7 @@ fn thread_id() -> u64 {
 /// returned on every eval. Errors at construction when the
 /// variable is unset — use `env_or` for a defaulted form.
 ///
-/// SRD-80b Phase E: fallible construction. The body returns
+/// Fallible construction: the body returns
 /// `Result<String, String>`; the macro runs it once inside
 /// `try_new`, caches the Ok value, and propagates Err as a
 /// build-time error.
@@ -124,7 +123,7 @@ fn capture_tmp_dir() -> String {
         .unwrap_or_else(|| "/tmp".to_string())
 }
 
-/// Monotonic counter (non-deterministic). SRD-80 PR B.11 migration.
+/// Monotonic counter (non-deterministic).
 ///
 /// Returns 0, 1, 2, ... across all calls. Thread-safe via AtomicU64.
 #[crate::polydat_node(

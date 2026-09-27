@@ -76,10 +76,10 @@ impl PolydatSetup for ParsedFormat {}
 /// dispatches on `Value` variants). The format specifier determines how
 /// each value renders.
 ///
-/// SRD-73 follow-up: None propagation through string interpolation.
-/// If any REFERENCED input is `Value::None`, the whole result is
-/// `Value::None`. The body itself doesn't materialise this —
-/// the Polydat kernel's SRD-74 Rule 1 guard (engines.rs) emits
+/// None propagation through string interpolation (none_semantics.md,
+/// Rule 1): if any REFERENCED input is `Value::None`, the whole result
+/// is `Value::None`. The body itself doesn't materialise this —
+/// the Polydat kernel's Rule 1 guard (engines.rs) emits
 /// `Value::None` on every output for any node whose inputs
 /// include `Value::None` and which doesn't opt into
 /// `accepts_none_inputs`. Printf doesn't opt in, so the kernel
@@ -88,9 +88,8 @@ impl PolydatSetup for ParsedFormat {}
 /// Rationale: `Value::None` is the canonical "absent" sentinel.
 /// The Polydat Kernel's `lookup` / `get_constant` already treat
 /// None-valued outputs as "not present in this scope" and fall
-/// through to the parent scope. String interpolation is the
-/// surface where that discipline was being silently broken — an
-/// unresolved `{X}` in a source-level string literal compiles
+/// through to the parent scope. String interpolation keeps that
+/// discipline: an unresolved `{X}` in a source-level string literal compiles
 /// to a `printf` call with the unresolved name's slot, and when
 /// that slot evaluates to None the printf result should likewise
 /// be None so the binding doesn't shadow upstream defaults. The
@@ -430,11 +429,11 @@ mod tests {
     }
 
     // ────────────────────────────────────────────────────────
-    // None propagation (SRD-73 follow-up)
+    // None propagation (none_semantics.md, Rule 1)
     //
     // String interpolation evaluates to Value::None when any
     // referenced input is Value::None. The canonical
-    // None-propagation surface is the Polydat kernel's SRD-74
+    // None-propagation surface is the Polydat kernel's
     // Rule 1 guard (engines.rs): any
     // node whose inputs include Value::None and which doesn't
     // override `accepts_none_inputs` emits None on every output
