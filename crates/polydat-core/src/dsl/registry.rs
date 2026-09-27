@@ -19,6 +19,7 @@
 
 pub use crate::ast::CompileLevel;
 use crate::compile::assembly::WireRef;
+use crate::dsl::factories::NodeFactory;
 
 /// Builder for a node module: `(build context, name, wires, resolved
 /// wire port types, const args) -> Some(Ok(node)) / Some(Err(msg))`,
@@ -38,13 +39,20 @@ pub type NodeBuildFn = fn(
 /// Each node module submits one of these at link time via `inventory::submit!`.
 /// The runtime collects all submissions to build the function registry and
 /// dispatch table without any explicit module list.
+///
+/// A registration is a [`NodeFactory`]: its `build` is the factory's
+/// body, and the registry builds its nodes through that factory as it
+/// builds every other node ([`crate::dsl::factory::build_node`]).
 pub struct NodeRegistration {
     /// Returns the static slice of `FuncSig` entries for this module.
     pub signatures: fn() -> &'static [FuncSig],
-    /// Attempts to build a node for the given function name.
+    /// Builds a node for the given function name: the body of this
+    /// registration's [`NodeFactory::build`].
     ///
-    /// Returns `None` if the name is not handled by this module,
-    /// or `Some(Ok(node))` / `Some(Err(msg))` if it is.
+    /// Returns `Some(Ok(node))` / `Some(Err(msg))` for a name it
+    /// builds, and `None` for one it leaves to its signature: a
+    /// variadic function then gets its signature's identity element or
+    /// variadic constructor, and any other name is an unknown function.
     ///
     /// `wire_types[i]` is the resolved [`crate::ast::PortType`] of
     /// `wires[i]` — the output type of the upstream node feeding
@@ -67,6 +75,75 @@ pub struct NodeRegistration {
 }
 
 inventory::collect!(NodeRegistration);
+
+impl NodeFactory for NodeRegistration {
+    fn signatures(&self) -> &[FuncSig] {
+        (self.signatures)()
+    }
+
+    fn validate(&self, name: &str, consts: &[crate::dsl::factory::ConstArg]) -> Result<(), String> {
+        match self.validate {
+            Some(validator) => validator(name, consts),
+            None => Ok(()),
+        }
+    }
+
+    /// The registered builder's node. A builder that declines a name its
+    /// signatures list leaves a variadic function to its signature: the
+    /// identity element for no wires, the variadic constructor otherwise.
+    fn build(
+        &self,
+        ctx: &crate::dsl::factory::BuildContext,
+        name: &str,
+        wires: &[WireRef],
+        wire_types: &[crate::ast::PortType],
+        consts: &[crate::dsl::factory::ConstArg],
+    ) -> Result<Box<dyn crate::ast::PolydatNode>, String> {
+        if let Some(result) = (self.build)(ctx, name, wires, wire_types, consts) {
+            return result;
+        }
+        let sig = (self.signatures)().iter().find(|s| s.name == name);
+        match sig {
+            Some(sig) => crate::dsl::factory::variadic_node(sig, wires.len()),
+            None => Err(format!("unknown function: '{name}'")),
+        }
+    }
+}
+
+/// A host's own [`NodeFactory`], linked into the registry.
+///
+/// A host submits one at link time, as a node module submits its
+/// [`NodeRegistration`]:
+///
+/// ```ignore
+/// static FACTORY: MyFactory = MyFactory;
+/// polydat::inventory::submit! {
+///     polydat::dsl::registry::FactoryRegistration { factory: &FACTORY }
+/// }
+/// ```
+///
+/// The registry lists the factory's signatures and builds every call to
+/// one of them through its `build`, on every engine.
+pub struct FactoryRegistration {
+    /// The factory.
+    pub factory: &'static dyn NodeFactory,
+}
+
+inventory::collect!(FactoryRegistration);
+
+/// Every factory linked into the registry: each node module's
+/// [`NodeRegistration`], then each host [`FactoryRegistration`]. A
+/// function name belongs to the first factory whose signatures list it.
+pub fn factories() -> impl Iterator<Item = &'static dyn NodeFactory> {
+    inventory::iter::<NodeRegistration>
+        .into_iter()
+        .map(|reg| reg as &'static dyn NodeFactory)
+        .chain(
+            inventory::iter::<FactoryRegistration>
+                .into_iter()
+                .map(|reg| reg.factory),
+        )
+}
 
 /// Register a node module's signatures and builder with the Polydat runtime.
 ///
@@ -469,15 +546,12 @@ impl Clone for FuncSig {
     }
 }
 
-/// Return the full registry of known functions.
-///
-/// Iterates all `NodeRegistration` entries submitted via `inventory::submit!`
-/// at link time. No explicit module list is required here — each node module
-/// registers itself by calling `register_nodes!` at module scope.
+/// Return the full registry of known functions: the signatures of every
+/// linked factory ([`factories`]).
 pub fn registry() -> Vec<FuncSig> {
     let mut funcs = Vec::new();
-    for reg in inventory::iter::<NodeRegistration> {
-        funcs.extend_from_slice((reg.signatures)());
+    for factory in factories() {
+        funcs.extend_from_slice(factory.signatures());
     }
     funcs
 }
@@ -509,22 +583,11 @@ pub fn suggest_function(name: &str) -> Option<&'static str> {
     best.map(|(name, _)| name)
 }
 
-/// Find a registered function by name.
-///
-/// Iterates the link-time inventory directly and returns the
-/// actual `&'static FuncSig` — the registration slices are
-/// already `'static` (see [`NodeRegistration::signatures`]), so
-/// no allocation is needed, and no clone is leaked to fabricate a
-/// `'static` lifetime.
+/// Find a registered function by name: the signature of the factory
+/// that builds it. Every factory is `'static`, so its signatures are
+/// too, and no allocation is needed.
 pub fn lookup(name: &str) -> Option<&'static FuncSig> {
-    for reg in inventory::iter::<NodeRegistration> {
-        for sig in (reg.signatures)() {
-            if sig.name == name {
-                return Some(sig);
-            }
-        }
-    }
-    None
+    factories().find_map(|factory| factory.signatures().iter().find(|sig| sig.name == name))
 }
 
 fn edit_distance(a: &str, b: &str) -> usize {

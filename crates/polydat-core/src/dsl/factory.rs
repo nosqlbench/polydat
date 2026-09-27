@@ -3,13 +3,11 @@
 
 //! Node factory: maps Polydat function names to runtime node instances.
 //!
-//! `build_node` is the single dispatch point used by the compiler's
-//! `compile_binding` to turn a parsed call expression into a `Box<dyn PolydatNode>`.
-//! `ConstArg` captures assembly-time constant arguments extracted from the AST.
-//!
-//! Dispatch is decentralized: each node module exposes its own `build_node`
-//! function returning `Option<Result<...>>`.  The top-level `build_node` here
-//! tries each module in turn and falls back to the registry for variadic nodes.
+//! `build_node` is the single construction point: the compiler turns
+//! every call expression into a `Box<dyn PolydatNode>` through it, and it
+//! builds through the [`NodeFactory`](crate::dsl::factories::NodeFactory)
+//! that owns the function name. `ConstArg` captures assembly-time
+//! constant arguments extracted from the AST.
 
 use crate::ast::PolydatNode;
 use crate::compile::assembly::WireRef;
@@ -160,12 +158,14 @@ impl BuildContext {
 
 /// Build the node `func` takes for the given wires, their types, and
 /// constant arguments, through the registry; an unknown function or a
-/// mismatched signature is an error naming it. `ctx` reaches every
+/// mismatched signature is an error naming it. `ctx` reaches the
 /// factory unchanged.
 ///
-/// Dispatch order: inventory registrations (constraint checks, then
-/// the module validator, then `build`), then the registry's variadic
-/// fallback.
+/// Every node is built here, and built by the factory whose signatures
+/// list `func` ([`registry::factories`]): the parameters' declared
+/// constraints are checked, then the factory's
+/// [`validate`](crate::dsl::factories::NodeFactory::validate), then its
+/// [`build`](crate::dsl::factories::NodeFactory::build).
 pub fn build_node(
     ctx: &BuildContext,
     func: &str,
@@ -173,60 +173,24 @@ pub fn build_node(
     wire_types: &[crate::ast::PortType],
     consts: &[ConstArg],
 ) -> Result<Box<dyn PolydatNode>, String> {
-    // --- Per-module dispatch via inventory ---
-
-    use crate::dsl::registry::NodeRegistration;
-    for reg in inventory::iter::<NodeRegistration> {
-        // Only run this module's validator if it owns `func`.
-        // Signatures are the authoritative "does this module
-        // handle this name" list — probing `build` first would
-        // invert the ordering (construction before validation)
-        // and give an opt-in validator no chance to reject bad
-        // constants before the constructor panics.
-        let sigs = (reg.signatures)();
-        let owning_sig = sigs.iter().find(|s| s.name == func);
-        if owning_sig.is_none() {
+    for factory in registry::factories() {
+        // The signatures say which factory owns `func`; validation runs
+        // before construction, so a constructor never sees a constant
+        // its validator would refuse.
+        let Some(sig) = factory.signatures().iter().find(|s| s.name == func) else {
             continue;
-        }
-        let sig = owning_sig.unwrap();
-
-        // Pass 1: walk declared `ParamSpec.constraint`s and run
-        // each per-param check. Constraints declared on individual
-        // params cover the bulk of "must be in [0,1]" /
-        // "must be one of {2,8,10,16}" / "spec must parse" cases.
+        };
+        // Per-parameter constraints ("must be in [0,1]", "must be one
+        // of {2,8,10,16}", "spec must parse").
         if let Err(msg) = check_param_constraints(sig, consts) {
             return Err(format!("bad constant {func}: {msg}"));
         }
-
-        // Pass 2: per-module imperative validator for relational
-        // and cross-param rules (e.g. `n_of`'s n ≤ m). Each module
-        // declares its relational constraint here.
-        if let Some(validator) = reg.validate
-            && let Err(reason) = validator(func, consts)
-        {
+        // The factory's own relational and cross-parameter rules
+        // (`n_of`'s n ≤ m).
+        if let Err(reason) = factory.validate(func, consts) {
             return Err(format!("bad constant {func}: {reason}"));
         }
-
-        if let Some(result) = (reg.build)(ctx, func, wires, wire_types, consts) {
-            return result;
-        }
-    }
-
-    // --- Registry variadic fallback ---
-    if let Some(sig) = registry::lookup(func)
-        && sig.is_variadic()
-    {
-        if wires.is_empty() {
-            if let Some(id) = sig.identity {
-                return Ok(Box::new(ConstU64::new(id)));
-            }
-            return Err(format!(
-                "variadic function '{func}' requires at least one input"
-            ));
-        }
-        if let Some(ctor) = sig.variadic_ctor {
-            return Ok(ctor(wires.len()));
-        }
+        return factory.build(ctx, func, wires, wire_types, consts);
     }
 
     let mut msg = format!("unknown function: '{func}'\n");
@@ -236,6 +200,36 @@ pub fn build_node(
     msg.push_str("\n\n  This function is not registered in the wiring function library.");
     msg.push_str("\n  See the registered wiring functions for the available names.");
     Err(msg)
+}
+
+/// The node a variadic signature builds for `wire_count` wires: its
+/// identity element for none, its variadic constructor otherwise. A
+/// signature that is not variadic, or has neither, builds nothing and
+/// is an error naming the function.
+pub(crate) fn variadic_node(
+    sig: &registry::FuncSig,
+    wire_count: usize,
+) -> Result<Box<dyn PolydatNode>, String> {
+    let func = sig.name;
+    if !sig.is_variadic() {
+        return Err(format!(
+            "'{func}' is registered, but its registration builds no node for it"
+        ));
+    }
+    if wire_count == 0 {
+        return match sig.identity {
+            Some(id) => Ok(Box::new(ConstU64::new(id))),
+            None => Err(format!(
+                "variadic function '{func}' requires at least one input"
+            )),
+        };
+    }
+    match sig.variadic_ctor {
+        Some(ctor) => Ok(ctor(wire_count)),
+        None => Err(format!(
+            "variadic function '{func}' is registered without a variadic constructor"
+        )),
+    }
 }
 
 /// Walk `sig.params`, applying every declared `ConstConstraint`

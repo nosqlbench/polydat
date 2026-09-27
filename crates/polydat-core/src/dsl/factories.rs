@@ -1,18 +1,19 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Host-side registry view and extern resolvers.
+//! Node factories, the host-side registry view, and extern resolvers.
 //!
-//! `PolydatRuntime` unions the link-time registry with host factories
-//! for listing, and carries module search paths; node construction
-//! goes through `factory::build_node` and the inventory, not through
-//! this type. The extern-resolver registry is what the kernel consults
-//! at runtime.
+//! A [`NodeFactory`] is what the registry builds every node through
+//! (`factory::build_node`). `PolydatRuntime` lists the registry and
+//! carries module search paths. The extern-resolver registry is what
+//! the kernel consults at runtime.
 
 use std::path::PathBuf;
 use std::sync::Mutex;
 
 use crate::ast::{PolydatNode, PortType, Value};
+use crate::compile::assembly::WireRef;
+use crate::dsl::factory::{BuildContext, ConstArg};
 use crate::dsl::registry::{FuncCategory, FuncSig};
 
 // ───── Virtual-wire resolver registry (γ-8) ─────
@@ -83,76 +84,69 @@ pub(crate) fn resolve_extern(slot_name: &str, slot_type: PortType) -> Option<Val
 
 // ───── End virtual-wire resolver registry ─────
 
-/// Constant argument passed to a node factory at build time.
-#[derive(Debug, Clone)]
-pub enum FactoryArg {
-    /// An integer literal.
-    Int(u64),
-    /// A float literal.
-    Float(f64),
-    /// A string literal.
-    Str(String),
-}
-
-/// Trait for external node providers.
+/// What the registry builds a node through: a set of function
+/// signatures and the constructor for each.
 ///
-/// External crates implement this to contribute Polydat node functions.
-/// Once registered on a `PolydatRuntime`, the factory's nodes are
-/// indistinguishable from built-in nodes: same registry, same
-/// describe output, same category grouping, same type checking.
+/// Every node the compiler builds comes from a factory's [`Self::build`]
+/// ([`crate::dsl::factory::build_node`]). A node module's
+/// [`NodeRegistration`](crate::dsl::registry::NodeRegistration), the
+/// form `#[polydat_node]` and `register_nodes!` emit, is a factory whose
+/// `build` is its registered [`NodeBuildFn`](crate::dsl::registry::NodeBuildFn).
+/// A host that wants a constructor of its own implements this trait and
+/// links the factory into the registry with a
+/// [`FactoryRegistration`](crate::dsl::registry::FactoryRegistration):
+///
+/// ```ignore
+/// static COUNTERS: MyFactory = MyFactory::new();
+/// polydat::inventory::submit! {
+///     polydat::dsl::registry::FactoryRegistration { factory: &COUNTERS }
+/// }
+/// ```
+///
+/// Its nodes are then indistinguishable from built-in ones: same
+/// registry, same listings, same type checking, on every engine.
 pub trait NodeFactory: Send + Sync {
-    /// Return signatures for all functions this factory provides.
-    ///
-    /// Called once at registration time. The returned signatures are
-    /// merged into the runtime's unified registry.
-    fn signatures(&self) -> Vec<FuncSig>;
+    /// The functions this factory builds. The registry lists them, and
+    /// a call to one of them is built by this factory.
+    fn signatures(&self) -> &[FuncSig];
 
-    /// Build a node by name with the given constant arguments.
-    ///
-    /// Called by the compiler when assembling a kernel that references
-    /// one of this factory's functions. `wire_count` is the number of
-    /// wire inputs at the call site.
+    /// Check a call's constant arguments before [`Self::build`]; an
+    /// `Err` fails the compile as a bad constant, so `build` never sees
+    /// a malformed literal. The registry has already applied each
+    /// parameter's declared `ConstConstraint`. Accepts everything
+    /// unless overridden.
+    fn validate(&self, _name: &str, _consts: &[ConstArg]) -> Result<(), String> {
+        Ok(())
+    }
+
+    /// Build the node `name`, one of [`Self::signatures`], for the given
+    /// wires, their resolved port types, and its constant arguments.
+    /// `ctx` says which bindings are under construction and which
+    /// resource scope the program tree has
+    /// ([`BuildContext`](crate::dsl::factory::BuildContext)).
     fn build(
         &self,
+        ctx: &BuildContext,
         name: &str,
-        wire_count: usize,
-        consts: &[FactoryArg],
+        wires: &[WireRef],
+        wire_types: &[PortType],
+        consts: &[ConstArg],
     ) -> Result<Box<dyn PolydatNode>, String>;
 }
 
-/// A host-side registry view.
-///
-/// Unions the link-time registry with host factories for listing, and
-/// carries module search paths and stdlib sources. Node construction
-/// goes through `factory::build_node` and the inventory, not through
-/// this type.
-///
-/// Multiple runtimes can coexist with different factory sets.
+/// A host-side registry view: the linked registry for listing, and the
+/// module search paths.
 pub struct PolydatRuntime {
-    /// Registered factories. Built-in nodes register through
-    /// `register_nodes!`/`#[polydat_node]` into the link-time
-    /// inventory; their signatures are included in the unified
-    /// registry.
-    factories: Vec<Box<dyn NodeFactory>>,
     /// Additional module search paths (the `--lib` search paths).
     polydat_lib_paths: Vec<PathBuf>,
 }
 
 impl PolydatRuntime {
-    /// Create a new runtime with only built-in nodes.
+    /// A runtime with no module search paths.
     pub fn new() -> Self {
         Self {
-            factories: Vec::new(),
             polydat_lib_paths: Vec::new(),
         }
-    }
-
-    /// Register an external node factory.
-    ///
-    /// The factory's signatures are merged into the unified registry.
-    /// Its nodes become available for compilation immediately.
-    pub fn register_factory(&mut self, factory: Box<dyn NodeFactory>) {
-        self.factories.push(factory);
     }
 
     /// Add a module search path (one of the `--lib` search paths).
@@ -160,56 +154,16 @@ impl PolydatRuntime {
         self.polydat_lib_paths.push(path);
     }
 
-    /// Return the unified function registry: built-in + all factories.
-    ///
-    /// `#[polydat_node]`-generated nodes route through
-    /// the same `crate::dsl::registry::registry()` channel
-    /// (they submit `NodeRegistration` entries link-time, same
-    /// as `register_nodes!`-using modules), so no separate
-    /// merge step is needed here.
+    /// Every function the linked registry builds: the built-in library,
+    /// `#[polydat_node]` and `register_nodes!` registrations, and every
+    /// registered [`NodeFactory`].
     pub fn registry(&self) -> Vec<FuncSig> {
-        let mut sigs = crate::dsl::registry::registry();
-        for factory in &self.factories {
-            sigs.extend(factory.signatures());
-        }
-        sigs
+        crate::dsl::registry::registry()
     }
 
-    /// Return functions grouped by category from the unified registry.
+    /// [`Self::registry`] grouped by category, in display order.
     pub fn by_category(&self) -> Vec<(FuncCategory, Vec<FuncSig>)> {
-        let sigs = self.registry();
-        let mut groups: std::collections::HashMap<FuncCategory, Vec<FuncSig>> =
-            std::collections::HashMap::new();
-        for sig in sigs {
-            groups.entry(sig.category).or_default().push(sig);
-        }
-        FuncCategory::display_order()
-            .iter()
-            .filter_map(|cat| groups.remove(cat).map(|funcs| (*cat, funcs)))
-            .collect()
-    }
-
-    /// Try to build a node through registered factories.
-    ///
-    /// Called by the compiler when the built-in build_node doesn't
-    /// match. Returns None if no factory handles this function name.
-    pub fn build_from_factory(
-        &self,
-        name: &str,
-        wire_count: usize,
-        consts: &[FactoryArg],
-    ) -> Option<Result<Box<dyn PolydatNode>, String>> {
-        for factory in &self.factories {
-            if factory.signatures().iter().any(|s| s.name == name) {
-                return Some(factory.build(name, wire_count, consts));
-            }
-        }
-        None
-    }
-
-    /// Number of registered factories.
-    pub fn factory_count(&self) -> usize {
-        self.factories.len()
+        crate::dsl::registry::by_category()
     }
 
     /// The `--lib` search paths.
@@ -227,8 +181,6 @@ impl Default for PolydatRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::SlotType;
-    use crate::dsl::registry::{Arity, ParamSpec};
 
     /// Test helper: serialise resolver-registry tests via a
     /// process-wide mutex so two tests don't race the static
@@ -291,113 +243,5 @@ mod tests {
         let rt = PolydatRuntime::new();
         let reg = rt.registry();
         assert!(reg.len() >= 50);
-    }
-
-    #[test]
-    fn factory_signatures_merged() {
-        struct TestFactory;
-        impl NodeFactory for TestFactory {
-            fn signatures(&self) -> Vec<FuncSig> {
-                vec![FuncSig {
-                    name: "test_node",
-                    category: FuncCategory::Diagnostic,
-                    outputs: 1,
-                    description: "a test node from a factory",
-                    help: "",
-                    identity: None,
-                    variadic_ctor: None,
-                    params: &[ParamSpec {
-                        name: "input",
-                        slot_type: SlotType::Wire,
-                        required: true,
-                        example: "cycle",
-                        constraint: None,
-                    }],
-                    arity: Arity::Fixed,
-                    commutativity: crate::ast::Commutativity::Positional,
-                    default_resolver: None,
-                    output_type: crate::dsl::registry::OutputType::Fixed,
-                    // Hand registration: no static return-port declaration;
-                    // type inference falls back to the name heuristic.
-                    output_port: None,
-                }]
-            }
-            fn build(
-                &self,
-                _name: &str,
-                _wc: usize,
-                _consts: &[FactoryArg],
-            ) -> Result<Box<dyn PolydatNode>, String> {
-                Ok(Box::new(crate::library::identity::Identity::new(
-                    crate::ast::PortType::U64,
-                )))
-            }
-        }
-
-        let mut rt = PolydatRuntime::new();
-        let before = rt.registry().len();
-        rt.register_factory(Box::new(TestFactory));
-        let after = rt.registry().len();
-        assert_eq!(after, before + 1);
-
-        // The test_node should appear in the unified registry
-        assert!(rt.registry().iter().any(|s| s.name == "test_node"));
-    }
-
-    #[test]
-    fn factory_build_dispatch() {
-        struct TestFactory;
-        impl NodeFactory for TestFactory {
-            fn signatures(&self) -> Vec<FuncSig> {
-                vec![FuncSig {
-                    name: "custom_identity",
-                    category: FuncCategory::Diagnostic,
-                    outputs: 1,
-                    description: "custom identity from factory",
-                    help: "",
-                    identity: None,
-                    variadic_ctor: None,
-                    params: &[ParamSpec {
-                        name: "input",
-                        slot_type: SlotType::Wire,
-                        required: true,
-                        example: "cycle",
-                        constraint: None,
-                    }],
-                    arity: Arity::Fixed,
-                    commutativity: crate::ast::Commutativity::Positional,
-                    default_resolver: None,
-                    output_type: crate::dsl::registry::OutputType::Fixed,
-                    // Hand registration: no static return-port declaration;
-                    // type inference falls back to the name heuristic.
-                    output_port: None,
-                }]
-            }
-            fn build(
-                &self,
-                name: &str,
-                _wc: usize,
-                _consts: &[FactoryArg],
-            ) -> Result<Box<dyn PolydatNode>, String> {
-                match name {
-                    "custom_identity" => Ok(Box::new(crate::library::identity::Identity::new(
-                        crate::ast::PortType::U64,
-                    ))),
-                    _ => Err(format!("unknown: {name}")),
-                }
-            }
-        }
-
-        let mut rt = PolydatRuntime::new();
-        rt.register_factory(Box::new(TestFactory));
-
-        // Should find and build via factory
-        let result = rt.build_from_factory("custom_identity", 1, &[]);
-        assert!(result.is_some());
-        assert!(result.unwrap().is_ok());
-
-        // Should not find built-in nodes via factory
-        let result = rt.build_from_factory("hash", 1, &[]);
-        assert!(result.is_none());
     }
 }

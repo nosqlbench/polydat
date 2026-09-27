@@ -559,12 +559,10 @@ catalog — hash, arithmetic, string, math, distributions,
 datetime, noise, vector ops — without declaring
 per-expression node availability.**
 
-Enforcement: the compiler reads the link-time
-`NodeRegistration` inventory at compile time (§5.5). A node
-registration linked by any host crate is available to every
-embedded evaluation in the process. `PolydatRuntime`'s
-object-local factories are a separate mechanism that the standard
-surfaces do not consult.
+Enforcement: the compiler reads the link-time node registry at
+compile time (§5.5). A node registration or node factory linked by
+any host crate is available to every embedded evaluation in the
+process.
 
 ### Axiom E5 — Lifecycle transparency
 
@@ -915,26 +913,24 @@ The rules are the same at all three sites:
 ### 5.5 Virtual nodes — linked registry contributions
 
 A **virtual node** is a node a host crate contributes to the
-registry. Such nodes use the same link-time `NodeRegistration`
-inventory as Polydat's built-in library. Host crates contribute
-registrations with `register_nodes!` or the `#[polydat_node]`
-attribute macro. Each registration supplies static `FuncSig`
-metadata, a builder, and an optional constant validator. The
-standard compiler's `registry()` and `build_node()` paths read that
-inventory directly.
+registry. Such nodes use the same link-time registry as Polydat's
+built-in library. Host crates contribute a `NodeRegistration`, with
+`register_nodes!` or the `#[polydat_node]` attribute macro, or a
+`FactoryRegistration` naming a `NodeFactory` of their own. Each
+supplies static `FuncSig` metadata, a constructor, and an optional
+constant validator. Every registration is a `NodeFactory`, and the
+compiler's `registry()` and `build_node()` paths build every node,
+built-in or contributed, through the factory that lists its name
+([library_catalog.md](library_catalog.md), "Host-registered nodes").
 
 Once linked, contributed nodes are indistinguishable from built-ins:
 they declare typed ports, compile levels, purity, commutativity, and
 optional compiled or SIMD hooks through the ordinary node contract,
 and the slot, lifecycle, and runtime axioms apply to them unchanged.
 
-`PolydatRuntime::register_factory` is a separate, object-local
-factory catalog. Its `registry()` and `build_from_factory()` methods
-support explicit host orchestration, but the standard
-`eval_const_expr` and `compile_polydat` entry points do not accept a
-`PolydatRuntime` and therefore do not consult object-local factories.
-A node that must be visible to those standard embedding surfaces
-must be registered through the linked inventory.
+`PolydatRuntime` lists the same registry (`registry()`,
+`by_category()`) and carries module search paths; it holds no
+factories of its own.
 
 Virtual nodes are how a host extends the set of callable nodes.
 Virtual wires (§5.6) extend instead the set of names a scope can

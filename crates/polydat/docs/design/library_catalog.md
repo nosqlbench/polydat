@@ -253,10 +253,26 @@ nodes nondeterministic so the constant-folder leaves them in place (their value 
 pull by definition). A read-side projection is a context node; a writable value is a
 control — neither is a template / env-var / global.
 
-A host that needs more than `#[polydat_node]` offers registers a builder of its own:
-a `NodeRegistration` whose `build` function
-(`polydat::dsl::registry::NodeBuildFn`) receives the node's name, wires, wire types,
-and constant arguments, and first of all its **build context**.
+The registry builds every node through a **node factory**
+(`polydat::dsl::factories::NodeFactory`): its `signatures` name the functions it
+builds, its `validate` checks a call's constant arguments, and its `build` constructs
+the node. `polydat::dsl::factory::build_node` finds the factory whose signatures list
+the called name, applies each parameter's declared constraint, then the factory's
+`validate`, then its `build`; the compiler calls nothing else to construct a node, on
+any engine.
+
+A host that needs more than `#[polydat_node]` offers registers a factory of its own,
+in one of two forms, both linked at build time through `inventory`:
+
+- a `NodeRegistration`, whose `build` function (`polydat::dsl::registry::NodeBuildFn`)
+  is the body of the factory the registration is. This is the form `#[polydat_node]`
+  emits. A builder that returns `None` for a variadic function it lists leaves the node
+  to the signature's identity element or variadic constructor.
+- a `FactoryRegistration { factory: &FACTORY }` naming a `'static` value of the host's
+  own type that implements `NodeFactory`.
+
+Either way the factory's `build` receives the node's name, wires, wire types, and
+constant arguments, and first of all its **build context**.
 
 #### Build context
 
