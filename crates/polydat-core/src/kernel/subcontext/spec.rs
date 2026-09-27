@@ -1,9 +1,9 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Typed import / export contracts (per SRD-13e §1.2).
+//! Typed import / export contracts (subcontext_construction.md §2.2).
 //!
-//! The specs carry the SRD-13e taxonomy (lifecycle
+//! The specs carry the lifecycle taxonomy (lifecycle
 //! classifications, port types, binding modifiers) as data.
 //! What [`crate::kernel::subcontext::SubcontextBuilder::finalize`]
 //! enforces from them is fixed by
@@ -20,9 +20,9 @@
 use crate::ast::PortType;
 use crate::dsl::ast::BindingModifier;
 
-/// Lifecycle classification for an import — taxonomically what
-/// SRD-13e §1.2 specifies. Drives the spawn-time validation
-/// decisions per SRD-67 Rule 1.
+/// Lifecycle classification for an import (scope_model.md §3).
+/// Carried into the module's contract; finalize does not compare it
+/// against the parent (subcontext_construction.md §2.2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImportClassification {
     /// `final X: T` — fold the parent's value into the child at
@@ -35,8 +35,7 @@ pub enum ImportClassification {
     /// `shared`-modifier export.
     Shared,
     /// Iteration extern: parent's coordinate / iteration variable
-    /// (SRD-67 Rule 4 routes through the parent's coordinate
-    /// buffer).
+    /// (Rule 4 routes through the parent's coordinate buffer).
     IterationExtern,
 }
 
@@ -64,8 +63,9 @@ pub enum ExportClassification {
 pub struct ImportSpec {
     /// Name as referenced inside the child body.
     pub name: String,
-    /// Expected port type. Spawn validates against the parent's
-    /// matching export (Rule 1).
+    /// Expected port type. Carried into the contract but not
+    /// compared against the parent; the child's slot type checks
+    /// protect the actual input (subcontext_construction.md §2.2).
     pub port_type: PortType,
     /// Lifecycle classification.
     pub classification: ImportClassification,
@@ -118,7 +118,7 @@ pub struct ExportSpec {
     /// Port type the child binds.
     pub port_type: PortType,
     /// Modifier (`final` / `shared` / none) — the standard GK
-    /// modifier set; spawn uses it to apply Rule 2.
+    /// modifier set; finalize uses the export to apply Rule 2.
     pub modifier: BindingModifier,
     /// Lifecycle classification.
     pub classification: ExportClassification,

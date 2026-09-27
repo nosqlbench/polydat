@@ -3,13 +3,12 @@
 
 //! [`SubcontextBuilder<P>`] — accumulator for module matter.
 //!
-//! Per SRD-67 §"Step 2 — Builder accumulates module matter": the
-//! builder holds a [`ParentView`] of the scope it builds under,
+//! The builder holds a [`ParentView`] of the scope it builds under,
 //! records imports / exports / body fragments / pull consumers, and
 //! at `finalize` validates the import contract against the parent's
-//! exports + compiles the body via the existing `compile_polydat` /
-//! `compile_ast` pipeline. The result is a closed
-//! [`ScopeModule<Child<P>>`] artifact.
+//! exports + compiles the body via the ordinary `compile_polydat` /
+//! `compile_ast` pipeline (subcontext_construction.md §2, §3). The
+//! result is a closed [`ScopeModule<Child<P>>`] artifact.
 
 use std::marker::PhantomData;
 use std::path::PathBuf;
@@ -36,15 +35,8 @@ const WRITE_THROUGH_PREFIX: &str = "__write_";
 
 /// Optional compile-time configuration passed through to
 /// [`compile_ast_interpreter_with_options`](crate::dsl::compile::compile_ast_interpreter_with_options) when finalize compiles the body. When
-/// every field is at its default, finalize falls back to the
-/// minimal [`compile_ast_interpreter_with_options`] path used by the do-loop bridge — no
-/// behaviour change for the simplest synthesisers.
-///
-/// SRD-67 Phase 3 bridge hook: the for_each / op-template
-/// synthesisers used to call `compile_polydat_with_libs` directly with
-/// `polydat_lib_paths`, `workload_dir`, `strict`, and a context label.
-/// Routing those concerns through the builder preserves byte-
-/// identical compile output during migration.
+/// every field is at its default, finalize compiles the statements
+/// under the default DSL options (subcontext_construction.md §2.3).
 #[derive(Clone, Debug, Default)]
 pub struct CompileOptions {
     /// The directory relative data-file paths resolve against.
@@ -60,11 +52,11 @@ pub struct CompileOptions {
     /// A limit on every cursor's extent, if any.
     pub cursor_limit: Option<u64>,
     /// Session-wide optimization level for op-template synthesis.
-    /// `Release` (the default) lets the closure-binding economy
-    /// DCE unreferenced slots; `Diagnostic` force-allocates every
-    /// magic-extern and result-binding-LHS slot so step-debug /
-    /// cycle-replay sees writes that the runtime would otherwise
-    /// drop on the floor. See [`KernelOptLevel`](crate::kernel::KernelOptLevel).
+    /// `Release` (the default) injects a magic extern (`body` /
+    /// `count` / `ok`) only when the result source references it;
+    /// `Diagnostic` allocates all three so step-debug / cycle-replay
+    /// sees every write (subcontext_construction.md §3.2). See
+    /// [`KernelOptLevel`](crate::kernel::KernelOptLevel).
     pub kernel_opt: crate::kernel::KernelOptLevel,
     /// What the compiler does with an input whose type it inferred
     /// (input_variance.md §4); the same setting as
@@ -90,11 +82,10 @@ impl CompileOptions {
 /// child's compile is charged to, and the cells in scope there — each
 /// a live handle rather than a copy.
 ///
-/// That is the whole parent surface `finalize` touches. It was an
-/// `Arc<ScopeKernel<P>>` first, so a caller holding a plain kernel had
-/// to clone one into existence to ask; then an `Arc<PolydatProgram>`,
-/// which a compiled kernel does not keep. It is the answers now, so a
-/// parent of any engine can give them.
+/// That is the whole parent surface `finalize` touches. The view holds
+/// the answers rather than a kernel or a `PolydatProgram`, which a
+/// compiled kernel does not keep, so a parent of any engine can give
+/// them.
 #[derive(Clone)]
 pub struct ParentView {
     output_names: Vec<String>,
@@ -184,10 +175,9 @@ pub struct SubcontextBuilder<P> {
     context: SourceContext,
     /// Names to apply via `mark_inherited_outputs` on the
     /// compiled kernel before its program Arc is shared. Set by
-    /// `PolydatMatter::build_under` from the matter's `inherited_outputs`
-    /// to preserve the pre-SRD-67 ordering of cascade-extern
-    /// names; explicit synthesisers that don't need cascade
-    /// pass-through leave this empty.
+    /// `PolydatMatter::build_under` from the matter's `inherited_outputs`;
+    /// explicit synthesisers that don't need cascade pass-through
+    /// leave this empty.
     inherited_outputs: Vec<String>,
     /// Compile-time options forwarded into the AST compile. Empty
     /// for callers that don't need libs / strict / required-output
@@ -227,20 +217,17 @@ impl<P> SubcontextBuilder<P> {
         }
     }
 
-    /// SRD-67 Phase 3 bridge hook: route the legacy
+    /// Set the compile options finalize maps into the
     /// [`compile_ast_interpreter_with_options`](crate::dsl::compile::compile_ast_interpreter_with_options) knobs (lib paths, strict mode,
     /// required-output filter, workload dir, context label)
-    /// through the builder. Synthesisers that previously called
-    /// `compile_polydat_with_libs` directly fold those calls into a
-    /// single `with_compile_options(...)` invocation; the do-loop
-    /// bridge leaves this at its default and finalize uses
-    /// [`compile_ast_interpreter_with_options`].
+    /// (subcontext_construction.md §2.3). A builder left at the
+    /// default compiles under the default DSL options.
     pub fn with_compile_options(&mut self, options: CompileOptions) -> &mut Self {
         self.compile_options = options;
         self
     }
 
-    /// SRD-67 Phase 2 bridge hook: declare names whose outputs
+    /// Declare names whose outputs
     /// the body emits purely to cascade values from an outer
     /// scope to descendants (so they don't double up the parent's
     /// iter-coord, etc.). The compiled kernel will have these
@@ -286,20 +273,20 @@ impl<P> SubcontextBuilder<P> {
         self
     }
 
-    /// Register a [`PullConsumer`]. Per SRD-67 §"Decision 7"
-    /// this is the single init-time accumulator surface;
-    /// the surface a host's fixture adapter registers through.
+    /// Register a [`PullConsumer`]: the single init-time accumulator
+    /// surface, the one a host's fixture adapter registers through
+    /// (subcontext_construction.md §2.4).
     pub fn register_pull(&mut self, consumer: Arc<dyn PullConsumer>) -> &mut Self {
         self.consumers.push(RegisteredPullConsumer::new(consumer));
         self
     }
 
-    /// SRD-67 Phase 5 — fold a SRD-66 `result:` source block
-    /// into this child's module matter. Single entry point for
-    /// result-bindings kernel-driven path; applies the closure-
-    /// binding economy (Rule 5) to magic externs and lets the
-    /// existing finalize Rule 2 rewrite fire when result-LHS
-    /// names collide with parent `shared` exports.
+    /// Fold a `result:` source block into this child's module
+    /// matter (subcontext_construction.md §3.2). Single entry point
+    /// for the result-bindings kernel-driven path; applies the
+    /// closure-binding economy (Rule 5) to magic externs and lets
+    /// finalize's Rule 2 rewrite fire when result-LHS names collide
+    /// with parent `shared` exports.
     ///
     /// `source` is Polydat source — the same `<name> := <expr>` form
     /// `bindings:` accepts. Both string-shape (`ResultSpec::String`)
@@ -324,8 +311,7 @@ impl<P> SubcontextBuilder<P> {
     /// Path expressions (map-shape entries with no `:=` in the
     /// source) are NOT supported here — the caller flattens them
     /// to `<name> := <source>` and the Polydat compiler rejects them
-    /// as unbound-identifier failures, surfacing the SRD-66
-    /// "deferred until structural body wire lands" diagnostic.
+    /// as unbound-identifier failures.
     pub fn add_result_bindings(&mut self, source: &str) -> Result<&mut Self, ContractViolation> {
         let trimmed = source.trim();
         if trimmed.is_empty() {
@@ -363,15 +349,14 @@ impl<P> SubcontextBuilder<P> {
         // Walk free identifiers across the body. Used for both
         // (a) magic-extern injection (Rule 5 closure-binding
         // economy — only what's referenced gets a slot) and
-        // (b) hard-error detection for the SRD-66 "user-written
-        // body :=" case.
+        // (b) rejecting a user-written `body :=`.
         let mut free_idents: std::collections::HashSet<String> = std::collections::HashSet::new();
         for stmt in &file.statements {
             collect_free_idents(stmt, &mut free_idents);
         }
 
-        // SRD-66 §"Strict-mode interactions" / §"Schema":
-        // assigning to a pre-bound wire is a hard error. Catch
+        // Assigning to a pre-bound wire is a hard error
+        // (subcontext_construction.md §3.2). Catch
         // it before the magic-extern injector — otherwise the
         // injection would fight the LHS rename.
         for forbidden in ["body", "count", "ok"] {
@@ -387,8 +372,7 @@ impl<P> SubcontextBuilder<P> {
         // actually references AND that aren't already declared
         // locally (the body might re-declare via `extern body`
         // explicitly — let that win).
-        // SRD-66 §"Surface 4 §Open: body type" resolved to
-        // `Value::Json` — body is a structural value the
+        // `body` is a `Value::Json` — a structural value the
         // workload assertively unwraps via `exactly_one_value`.
         // The Json shape preserves row × column structure so
         // shape-mismatch diagnostics can name actual
@@ -434,13 +418,11 @@ impl<P> SubcontextBuilder<P> {
         // regular cycle-binding compile path, so wrappers /
         // metrics readers can still see it via wires.get.
         //
-        // Conditioning registration on actual collision avoids
-        // the U64-default port-type leak that used to surface
-        // when a non-colliding LHS expression produced a non-u64
-        // value (e.g. an f64 metric expression): the export
-        // pre-allocated a u64 output port for the LHS and the
-        // compiler hit a type mismatch wiring the f64 RHS
-        // through it.
+        // Registration is conditioned on an actual collision
+        // because an export pre-allocates a U64 output port for
+        // its LHS, and a non-colliding LHS whose expression is
+        // not u64 (e.g. an f64 metric expression) would fail to
+        // wire through it.
         {
             let in_scope_cells = self.parent.shared_cells();
             let parent_shared_by_name: std::collections::HashMap<&str, PortType> = in_scope_cells
@@ -470,7 +452,8 @@ impl<P> SubcontextBuilder<P> {
     /// the parent's exports, compiles the body, and seals the
     /// pull consumers into the artifact.
     ///
-    /// SRD-67 Phase 2 — Rule 2 (write-through rewrite): when a
+    /// Rule 2 (write-through rewrite, subcontext_construction.md
+    /// §3.1): when a
     /// child export name collides with a parent `shared` export,
     /// the body's `X := <expr>` is rewritten before compile to:
     ///
@@ -480,9 +463,9 @@ impl<P> SubcontextBuilder<P> {
     ///    that produces the value to write through.
     ///
     /// At spawn time, the spawned child carries a write-through
-    /// binding `(X, __write_X)`; per-cycle eval pulls
+    /// binding `(X, __write_X)`; `commit_write_throughs` pulls
     /// `__write_X` and stores its value through the child's
-    /// input slot for `X`, which propagates to the cell.
+    /// input slot for `X`, which propagates to the cell (§5).
     pub fn finalize(self) -> Result<ScopeModule<Child<P>>, ContractViolation> {
         let SubcontextBuilder {
             parent,
@@ -501,7 +484,8 @@ impl<P> SubcontextBuilder<P> {
         let mut diagnostics: Vec<String> = Vec::new();
 
         // ----- Rule 1 — import resolution against parent
-        // exports: a name-closure check (design doc §2.2 / SC4).
+        // exports: a name-closure check (subcontext_construction.md
+        // §2.2, SC4).
         // `ImportSpec::port_type` and `classification` are carried
         // into the contract but not compared against the parent
         // here; the compiler's slot type checks and
@@ -564,9 +548,8 @@ impl<P> SubcontextBuilder<P> {
             if let Some(in_scope) = in_scope_cells_by_name.get(exp.name.as_str()) {
                 // Port type comes from the typed in-scope record
                 // (sourced from the cell-bound input slot at the
-                // owning ancestor). Authoritative; falls back to
-                // the export spec's declared port type only if
-                // the lookup somehow misses — never observed.
+                // owning ancestor), which is authoritative over the
+                // export spec's declared port type.
                 write_through_specs.push((exp.name.clone(), in_scope.port_type));
             }
         }
@@ -630,8 +613,7 @@ impl<P> SubcontextBuilder<P> {
             // write-through (a tuple has no single value to
             // store in the cell); leave them alone — they'll
             // surface as a duplicate-port compile error if the
-            // collision is real. The single-target shape is the
-            // SRD-66 motivating case.
+            // collision is real (subcontext_construction.md §3.1).
             for stmt in statements.iter_mut() {
                 if let Statement::Binding(b) = stmt
                     && b.targets.len() == 1
@@ -657,18 +639,13 @@ impl<P> SubcontextBuilder<P> {
 
         // ----- Compile the rewritten AST. -----
         //
-        // When `compile_options` carries non-default knobs (lib
-        // paths, strict mode, required-output filter, source dir,
-        // context label) we route through `compile_polydat_with_libs`
-        // so the same code path the for_each / op-template
-        // synthesisers have always used handles them.
-        // `compile_polydat_with_libs` takes a source string; when the
-        // caller supplies a single `PolydatSource` fragment that's the
-        // raw input. If the body was AST-only (or fragments are
-        // mixed) the source is re-emitted by concatenating
-        // PolydatSource fragments — the existing synthesisers all
-        // produce a single `PolydatSource(String)` body so this path
-        // is the byte-identical replacement.
+        // Default options compile the statements under the default
+        // DSL options. Non-default knobs (lib paths, strict mode,
+        // required-output filter, source dir, context label) are
+        // mapped into the DSL options, and a body made only of
+        // `PolydatSource` fragments compiles from their concatenated
+        // source text, so the compiler keeps `source_text` for
+        // diagnostics (subcontext_construction.md §2.3).
         //
         // A rewritten AST (a Rule 2 write-through fired) or a
         // `Statements` body compiles through `compile_ast_interpreter_with_options`
@@ -706,13 +683,12 @@ impl<P> SubcontextBuilder<P> {
                 .iter()
                 .any(|f| matches!(f, BodyFragment::Statements(_)))
         {
-            // SRD-67 Phase 5 — when the AST has been rewritten in
-            // place (Rule 2 write-through) OR the body was
-            // submitted as `Statements` (no source-string
-            // round-trip), feed the rewritten AST through the
-            // libs-aware compile path directly. Avoids the prior
-            // restriction that combined Rule 2 with non-default
-            // compile options.
+            // When the AST has been rewritten in place (Rule 2
+            // write-through) OR the body was submitted as
+            // `Statements` (no source-string round-trip), feed the
+            // rewritten AST through the libs-aware compile path
+            // directly, so a write-through combines with
+            // non-default compile options.
             compile_ast_interpreter_with_options(
                 &PolydatFile {
                     statements: statements.clone(),
@@ -724,10 +700,8 @@ impl<P> SubcontextBuilder<P> {
             .map_err(|e| ContractViolation::Compile(e.to_string()))?
         } else {
             // No rewrite, no Statements fragments — reconstruct
-            // the source string and use the source-aware
-            // `compile_polydat_with_libs` so the legacy synthesiser
-            // pathway preserves byte-identical output (the
-            // compiler stashes `source_text` for diagnostics).
+            // the source string and compile it from source, so the
+            // compiler stashes `source_text` for diagnostics.
             let mut src = String::new();
             for fragment in &body {
                 match fragment {
@@ -746,7 +720,7 @@ impl<P> SubcontextBuilder<P> {
                 .map_err(|e| ContractViolation::Compile(e.to_string()))?
         };
 
-        // ----- Apply legacy-bridge inherited-output marking.
+        // ----- Apply inherited-output marking.
         // Must happen before the program Arc is cloned out into
         // the artifact (mark_inherited_outputs requires unique
         // ownership of the program Arc).
@@ -758,9 +732,7 @@ impl<P> SubcontextBuilder<P> {
         // The program is the single source of truth for these
         // bindings: any kernel built from this program (including
         // per-fiber re-instances via `bind_program_under_parent`)
-        // will inherit them via `from_program`'s automatic seeding,
-        // eliminating the side-channel that used to thread
-        // write-throughs through the activity-layer scope tree.
+        // inherits them via `from_program`'s automatic seeding.
         let kernel_write_throughs: Vec<crate::kernel::KernelWriteThrough> = write_throughs
             .iter()
             .map(|wt| crate::kernel::KernelWriteThrough {
@@ -868,8 +840,8 @@ fn collect_expr_idents(expr: &Expr, out: &mut std::collections::HashSet<String>)
             // expanded at the AST level — they're resolved by
             // the compiler during desugaring. Conservatively skip
             // them for the magic-extern injector (the user's
-            // body / count / ok can't appear inside an
-            // interpolation in any current SRD-66 use case);
+            // body / count / ok does not appear inside an
+            // interpolation in a result binding);
             // unresolved interpolations surface as standard
             // unbound-identifier diagnostics downstream.
         }

@@ -10,8 +10,8 @@ use super::name::ChildName;
 /// when a contract violation surfaces at spawn or finalize.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SourceContext {
-    /// Logical label — workload phase / op-template name / SRD
-    /// reference. Free-form; appears verbatim in diagnostics.
+    /// Logical label — workload phase / op-template name.
+    /// Free-form; appears verbatim in diagnostics.
     pub label: String,
     /// Source file path, if applicable.
     pub file: Option<String>,
@@ -69,19 +69,19 @@ impl SourceContext {
 
 /// Contract violation surfaced at finalize or spawn.
 ///
-/// Variants per SRD-67 §"Cross-binding rules" plus the umbrella
+/// Variants per the cross-binding rules plus the umbrella
 /// [`Self::Compile`] for errors raised by the Polydat compiler when
 /// the body fragment is converted into a program (typically an
 /// unbound identifier in the body, which the compiler catches
 /// after `finalize`'s name-closure check on declared imports).
 ///
-/// The set is the design doc's §7 error contract:
+/// The set is subcontext_construction.md §7's error contract:
 /// [`Self::UnboundImport`], [`Self::FinalShadow`],
 /// [`Self::DuplicateChild`], [`Self::Compile`],
 /// [`Self::StrictNonePropagation`], and [`Self::Bind`] for a child the
 /// binder could not build under its parent. An import's type and modifier are
 /// checked by the compiler and the kernel's slot types, not here
-/// (design doc §2.2).
+/// (subcontext_construction.md §2.2).
 #[derive(Debug, Clone)]
 pub enum ContractViolation {
     /// Rule 1 — Import resolution: an artifact import has no
@@ -93,18 +93,15 @@ pub enum ContractViolation {
         site: SourceContext,
     },
     /// Rule 2 — Final-shadow on export: a child can't redefine
-    /// an immutable parent export.
+    /// a parent `const` output.
     FinalShadow {
         /// The export shadowed.
         export: String,
         /// Where the child redefines it.
         site: SourceContext,
     },
-    /// Rule 2 — Shared write-through rewrite was required but
-    /// could not be performed.
-    ///
     /// Named-child registry: a duplicate spawn under the same
-    /// name (SRD-67 §"Named-child registry"). Reports both spawn
+    /// name (subcontext_construction.md §4.1). Reports both spawn
     /// sites.
     DuplicateChild {
         /// The child's name.
@@ -117,12 +114,11 @@ pub enum ContractViolation {
         this_site: SourceContext,
     },
     /// Polydat compile-time error — the body failed to compile (most
-    /// commonly: unbound identifier; corresponds to Rule 1's
-    /// closure-binding economy detecting a free identifier with
-    /// no matching import).
+    /// commonly an unbound identifier: a free identifier in the body
+    /// that no import, parent name, or local binding supplies).
     Compile(String),
     /// L2.f strict-mode hardening: an intermediate-layer
-    /// `const` binding's Plan B materialisation yielded
+    /// `const` binding's initialization yielded
     /// `Value::None`, and the build was running with strict
     /// mode enabled. Per composition_substrate.md L2.f's
     /// strict-mode hardening clause, silent fall-through to

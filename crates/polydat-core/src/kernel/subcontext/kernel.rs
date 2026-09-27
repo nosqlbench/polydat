@@ -3,8 +3,8 @@
 
 //! [`ScopeKernel<M>`] — typed wrapper around a kernel of any engine.
 //!
-//! Per SRD-67 §"Walled-off invariant", `ScopeKernel<M>` is the
-//! typed surface; the interpreter's `PolydatKernel` stays public, and its
+//! `ScopeKernel<M>` is the typed surface (subcontext_construction.md
+//! §1); the interpreter's `PolydatKernel` stays public, and its
 //! construction primitives are sealed (`from_program` is crate-private,
 //! `materialize_wiring_from_outer` private), so a child is built only
 //! through the typed surface or the binder. A child is built on its
@@ -17,8 +17,8 @@
 //!   construction on the typed path.
 //! - [`Self::spawn`] — the single chokepoint where every
 //!   cross-binding is resolved; takes a closed
-//!   [`super::ScopeModule`] artifact, applies SRD-67's
-//!   cross-binding rules, returns a typed child kernel and
+//!   [`super::ScopeModule`] artifact, applies the
+//!   cross-binding rules (subcontext_construction.md §4), returns a typed child kernel and
 //!   records the spawn under `name` in this kernel's registry.
 //! - [`Self::release_child`] — drop a registry entry to allow
 //!   re-spawn under the same name (for per-iteration
@@ -46,7 +46,7 @@ pub struct RootMarker;
 /// Phantom-marker brand for "child of `P`". `spawn` returns
 /// `ScopeKernel<Child<P>>`, distinct at the type level from a
 /// sibling's `Child<P>` *value* but type-compatible at the
-/// module-identity level (per SRD-67 §"Decision 6").
+/// module-identity level (subcontext_construction.md §1).
 #[derive(Debug)]
 pub struct Child<P>(PhantomData<fn() -> P>);
 
@@ -59,7 +59,7 @@ struct ChildEntry {
 
 /// Typed wrapper around a kernel of any engine.
 ///
-/// Construction via this type goes through the SRD-67 protocol
+/// Construction via this type goes through the subcontext protocol
 /// (`subcontext_builder` → `finalize` → `spawn`), which builds each
 /// child on its parent's engine; a root is wrapped with
 /// [`wrap_root_kernel`].
@@ -206,7 +206,7 @@ impl<M> ScopeKernel<M> {
     }
 
     /// Whether `name` is recorded in this kernel's named-child
-    /// registry. Diagnostic; Phase 1 tests assert against this.
+    /// registry. Diagnostic; the subcontext tests assert against this.
     pub fn has_child(&self, name: &ChildName) -> bool {
         self.children
             .lock()
@@ -218,7 +218,7 @@ impl<M> ScopeKernel<M> {
     /// child kernel itself is unaffected — only the registry
     /// entry. After release, the same name may be spawned again
     /// (typical for comprehension scopes that re-traverse per
-    /// iteration). See SRD-67 §"Release semantics".
+    /// iteration). See subcontext_construction.md §4.1.
     pub fn release_child(&self, name: &ChildName) {
         self.children
             .lock()
@@ -226,10 +226,11 @@ impl<M> ScopeKernel<M> {
             .remove(name);
     }
 
-    /// Begin construction of a child sub-context. Per SRD-67
-    /// §"Step 1 — Parent yields a builder": the builder takes the
-    /// parent's [`ParentView`] — its program and its in-scope cells,
-    /// which is everything finalize reads of a parent — accumulates
+    /// Begin construction of a child sub-context
+    /// (subcontext_construction.md §1): the builder takes the
+    /// parent's [`ParentView`] — its names, modifiers, ledger, and
+    /// in-scope cells, which is everything finalize reads of a
+    /// parent — accumulates
     /// module matter, and produces a closed [`ScopeModule`] artifact
     /// at finalize. It holds no reference to the parent kernel, so a
     /// caller that only has a kernel needs no `ScopeKernel` to stand up
@@ -239,9 +240,8 @@ impl<M> ScopeKernel<M> {
     }
 
     /// Spawn a child kernel from a closed [`ScopeModule`]
-    /// artifact. Per SRD-67 §"Step 4 — Parent spawns the child
-    /// kernel": this is the single chokepoint where every cross-
-    /// binding is resolved.
+    /// artifact (subcontext_construction.md §4): this is the single
+    /// chokepoint where every cross-binding is resolved.
     ///
     /// The artifact arrives with Rule 1 (name closure) and Rule 2
     /// (the shared write-through rewrite) already applied by
@@ -261,8 +261,8 @@ impl<M> ScopeKernel<M> {
         name: ChildName,
         artifact: ScopeModule<Child<M>>,
     ) -> Result<ScopeKernel<Child<M>>, ContractViolation> {
-        // ----- Named-child registry guard (SRD-67 §"Spawn
-        // semantics") -----
+        // ----- Named-child registry guard
+        // (subcontext_construction.md §4.1) -----
         {
             let mut children = self
                 .children
@@ -344,7 +344,7 @@ impl<M> ScopeKernel<M> {
     ///
     /// No-op for kernels with no write-throughs.
     ///
-    /// TYPE-STABLE (scope_model.md §"Type stability"): each pending
+    /// TYPE-STABLE (scope_model.md §6.1): each pending
     /// value passes the boundary of [`Kernel::commit_write_throughs`]:
     /// matching types pass, catalog adapters heal (widening), and an
     /// unhealable mismatch is an `Err` at the write site.
@@ -441,8 +441,7 @@ impl<'a> PolydatMatterBuilder<'a> {
     }
 
     /// Diagnostic label for this matter. Surfaces in compile
-    /// errors and the `__transient` parent name during the
-    /// SubcontextBuilder dance.
+    /// errors and as the child's `SourceContext`.
     pub fn label(mut self, label: impl Into<String>) -> Self {
         self.label = Some(label.into());
         self
@@ -483,7 +482,7 @@ impl<'a> PolydatMatterBuilder<'a> {
         self
     }
 
-    /// SRD-66 result-binding source. Folded through
+    /// Result-binding source (subcontext_construction.md §3.2). Folded through
     /// [`super::SubcontextBuilder::add_result_bindings`] at
     /// finalize. Only meaningful for source / statements forms.
     pub fn result_bindings(mut self, src: impl Into<String>) -> Self {
@@ -622,11 +621,13 @@ impl PolydatKernel {
     }
 }
 
-/// L2.f strict-mode hardening — when strict is on, escalate
-/// silent Plan B fall-through to a hard error. Per
+/// L2.f strict-mode hardening — when strict is on, escalate a
+/// const's silent fall-through to a hard error
+/// (`ContractViolation::StrictNonePropagation`,
+/// subcontext_construction.md §7). Per
 /// composition_substrate.md L2.f's strict-mode hardening
 /// clause: an intermediate-layer `const X := <expr>` whose
-/// RHS evaluates to `Value::None` at scope-init normally
+/// RHS evaluates to `Value::None` at initialization normally
 /// falls through to the outer scope's `X` via the
 /// conditional-shadow semantics (none_semantics.md). Strict
 /// mode rejects this silent fall-through, forcing the author

@@ -5,21 +5,21 @@
 //!
 //! ## Cross-crate boundary
 //!
-//! The runtime fixture / pull-plan machinery (SRD-32) lives in
+//! The runtime fixture / pull-plan machinery lives in
 //! `nbrs-runtime`. This crate (`polydat-core`) cannot depend on
 //! `nbrs-runtime` — the dependency runs the other way. The
 //! [`PullConsumer`] trait below carries only the *intent*: a list
 //! of names the consumer wants to pull at cycle time. The
 //! activity-side `ScopeFixture::register_consumer` adapter walks
 //! these names and seals them into a `PullPlan` against the
-//! spawned kernel's program. SRD-32's pull-plan format and the
-//! per-consumer contract stay as 32 specifies; only the
-//! accumulator surface unifies under
+//! spawned kernel's program. The pull-plan format and the
+//! per-consumer contract are the host's; only the accumulator
+//! surface is here, under
 //! [`crate::kernel::subcontext::SubcontextBuilder::register_pull`].
 //!
 //! The host reads the registrations back through
 //! [`crate::kernel::subcontext::ScopeKernel::consumers`] on the
-//! spawned kernel (design doc §2.4).
+//! spawned kernel (subcontext_construction.md §2.4).
 
 use std::sync::Arc;
 
@@ -66,7 +66,7 @@ impl RegisteredPullConsumer {
     }
 
     /// Inspect the names this consumer requested. Used by the
-    /// activity-side adapter at seal time and by Phase 1 tests
+    /// activity-side adapter at seal time and by the subcontext tests
     /// to verify the registration round-trip.
     pub fn names(&self) -> &[String] {
         self.inner.names()
@@ -97,7 +97,7 @@ impl std::fmt::Debug for RegisteredPullConsumer {
 /// Test-only / scratch consumer: holds a fixed list of names.
 /// Production consumers (validation / conditional / throttle /
 /// …) implement [`PullConsumer`] themselves on the activity
-/// side. This shape exists so Phase 1 tests can exercise the
+/// side. This shape exists so tests can exercise the
 /// builder + spawn path without importing the activity crate.
 #[derive(Debug)]
 pub struct NamedPullConsumer {

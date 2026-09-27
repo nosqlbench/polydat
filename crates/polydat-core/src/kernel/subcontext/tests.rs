@@ -1,7 +1,8 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Phase 1 surface tests for SRD-67. Verifies the typed builder
+//! Surface tests for parent-gated subcontext construction
+//! (subcontext_construction.md). Verifies the typed builder
 //! / spawn / release path coexists with the existing kernel API
 //! and enforces the named-child registry contract.
 
@@ -84,7 +85,7 @@ fn finalize_charges_the_subscope_compile_to_the_parents_ledger() {
 
 #[test]
 fn finalize_compiles_a_caller_native_expr_stub() {
-    // SRD-84 Part 3, end to end: a binding built in Rust becomes a real
+    // End to end: a binding built in Rust becomes a real
     // kernel output, and the ONLY string anywhere is the predicate
     // *text* — parsed once, at the boundary. Nothing re-renders the
     // binding back to source to re-parse it; that is the whole contrast
@@ -92,7 +93,7 @@ fn finalize_compiles_a_caller_native_expr_stub() {
     use crate::dsl::stub::ExprStub;
 
     // A parent kernel + its subcontext builder are the standard
-    // construction harness (SRD-67): matter is submitted to `b`, and
+    // construction harness (subcontext_construction.md): matter is submitted to `b`, and
     // `finalize()` compiles it as a child against the parent.
     let parent = parent_kernel();
     let mut b = parent.subcontext_builder();
@@ -104,7 +105,7 @@ fn finalize_compiles_a_caller_native_expr_stub() {
     //   returning::<u64>() binds the return type AT THE CALL SITE via
     //                      the `Wire` trait — the Rust `u64` *is* the
     //                      polydat `U64` — wrapping the expression in the
-    //                      Part 1b `as u64` cast (a no-op here, since a
+    //                      `as u64` cast (a no-op here, since a
     //                      comparison already yields U64 truthiness).
     //   volatile()         re-evaluate on every pull (a predicate's
     //                      per-trigger semantics).
@@ -162,8 +163,8 @@ fn finalize_rejects_unbound_import() {
 #[test]
 fn finalize_rejects_import_with_no_matching_parent_name() {
     // Direct test of Rule 1: the import names `nonexistent`,
-    // which the parent doesn't export. Phase 1's name-presence
-    // check fires before compilation.
+    // which the parent doesn't export. The name-presence check
+    // fires before compilation.
     let parent = parent_kernel();
     let mut b = parent.subcontext_builder();
     b.context(SourceContext::new("rule1-direct"));
@@ -316,8 +317,8 @@ fn body_fragment_statements_compile_to_program() {
     let parent = parent_kernel();
 
     // Parse a snippet to obtain `Vec<Statement>` directly, then
-    // submit via BodyFragment::Statements. This is the path
-    // synthesisers will use in Phase 2+.
+    // submit via BodyFragment::Statements, the path synthesisers
+    // use.
     let src = "input cycle: u64\nq := add(cycle, 7)\n";
     let tokens = lexer::lex(src).expect("lex");
     let file = parser::parse(tokens).expect("parse");
@@ -331,7 +332,7 @@ fn body_fragment_statements_compile_to_program() {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 2 — Rule 2 (write-through rewrite for shared parent exports).
+// Rule 2 (write-through rewrite for shared parent exports).
 // ---------------------------------------------------------------------------
 
 /// Build a parent kernel with a `shared <name> := <init>` export.
@@ -555,7 +556,7 @@ fn describe_keyspace_body_is_multirow_not_unary() {
          "create_statement": "CREATE VIRTUAL TABLE system_views.indexes (..."},
     ])));
 
-    // SRD-80b: ExactlyOneValue is now a PolyWire node; the macro
+    // ExactlyOneValue is a PolyWire node; the macro
     // emits `new(input_type)` taking the runtime port type of the
     // upstream wire. We pass the body's own port type so the node's
     // declared output type matches the test fixture.
@@ -571,7 +572,7 @@ fn describe_keyspace_body_is_multirow_not_unary() {
     );
 }
 
-/// End-to-end emulation of the failing workload pattern in
+/// End-to-end emulation of the workload pattern in
 /// `full_cql_vector.yaml`:
 ///
 /// - Workload-root declares `shared has_match := false`.
@@ -593,9 +594,9 @@ fn describe_keyspace_body_is_multirow_not_unary() {
 ///
 /// This test must reproduce ANY break in the cell-cascade /
 /// write-through pipeline that affects the workload. If it
-/// passes, the workload bug is in the activity layer's
-/// orchestration, not in the kernel's subscope construction
-/// or write-through commit.
+/// passes, a workload failure of this shape is in the activity
+/// layer's orchestration, not in the kernel's subscope
+/// construction or write-through commit.
 #[test]
 fn workload_emulation_shared_cell_through_op_template_chain() {
     // 1. Workload-root carrying the shared cell. Mirror of the
@@ -759,19 +760,16 @@ fn shared_bool_literal_init_does_not_leak_false_as_named_input() {
 
 #[test]
 fn log_info_preserves_bool_type_through_result_binding_cell() {
-    // SRD-66 canonical probe-phase shape:
+    // The canonical result-binding probe shape:
     //   has_sai_column_indexes := log_info(regex_match(text, "..."))
     //
     // `regex_match` produces Bool; the cell on workload-root is
-    // declared Bool. Without log_* in the assembler's
-    // skip-type-check list, the wire regex_match → log_info
-    // mismatched (Bool source vs declared-Str input) and
-    // auto_adapter inserted a Bool→Str converter — corrupting
-    // the value to Str("false") in transit. The cell received
-    // Str, downstream `pick` rejected it as non-bool.
-    //
-    // Post-fix: log_* is type-polymorphic at the assembler;
-    // the Bool flows through unchanged and lands in the cell.
+    // declared Bool. log_* is type-polymorphic at the assembler,
+    // so the Bool flows through unchanged and lands in the cell.
+    // Were the wire regex_match → log_info type-checked against a
+    // declared-Str input, auto_adapter would insert a Bool→Str
+    // converter, the cell would receive Str("false"), and
+    // downstream `pick` would reject it as non-bool.
     use super::CompileOptions;
 
     let root = compile_polydat_interpreter("input cycle: u64\nshared has_match := false\n")
@@ -839,27 +837,17 @@ fn log_info_preserves_bool_type_through_result_binding_cell() {
 
 #[test]
 fn build_kernel_under_parent_full_sees_live_parents_cells() {
-    // Exercises the activity layer's actual op-template
-    // construction path (`build_op_template_scope_kernel` →
-    // `build_kernel_under_parent_full`). The bridge wraps the
-    // live parent into a transient `ScopeKernel<RootMarker>`
-    // for the typed builder; that transient MUST mirror the
-    // live parent's cell view, not just its program shape, or
-    // Rule 2 in finalize sees zero cells and produces zero
-    // write-throughs.
+    // Exercises the op-template construction path a host drives:
+    // a result-binding child built from source under a live
+    // parent. The builder's `ParentView` MUST mirror the live
+    // parent's cell view, not just its program shape, or Rule 2
+    // in finalize sees zero cells and produces zero
+    // write-throughs: `commit_write_throughs` would be a no-op,
+    // the cell would stay at its init value, and a downstream
+    // `pick(...)` would see both selectors `Bool(false)`.
     //
-    // Pre-fix: transient was `from_program(parent.program())`
-    // — fresh state, no cells from inherited transit. The leaf
-    // kernel got `write_throughs.len() == 0`,
-    // `commit_write_throughs` was a no-op, the result-binding
-    // nodes never evaluated, the cell stayed at its init
-    // value, downstream `pick(...)` panicked with both
-    // selectors `Bool(false)`.
-    //
-    // Post-fix: `snapshot_with_cells` clones the parent's
-    // program AND attaches its cell handles, so the transient
-    // observes the same cells. Rule 2 fires; write-throughs
-    // are populated; per-cycle commit fans values back through
+    // With the live cell view, Rule 2 fires, write-throughs are
+    // populated, and per-cycle commit fans values back through
     // the cell.
     use super::CompileOptions;
 
@@ -938,10 +926,10 @@ fn shared_cell_cascade_survives_for_iteration_through_silent_intermediates() {
     //     ↓ (bind_program_under_parent)
     //   phase op       writes __write_flag → flag
     //
-    // Pre-fix, the cell would be lost at the first silent
-    // intermediate. Post-fix, every layer's `materialize_wiring_from_outer`
-    // forwards the cell as transit even when no slot exists,
-    // so the leaf phase's slot picks it up via the cascade.
+    // Every layer's `materialize_wiring_from_outer` forwards the
+    // cell as transit even when no slot exists, so the cell is
+    // not lost at a silent intermediate and the leaf phase's slot
+    // picks it up via the cascade.
     use crate::kernel::PolydatKernel;
     use std::sync::Arc;
 
@@ -1017,13 +1005,11 @@ fn shared_cell_cascade_survives_legacy_bind_program_under_parent_chain() {
     // materialize_wiring_from_outer`). This test asserts the cascade
     // survives that bridge end-to-end.
     //
-    // Pre-fix, `materialize_wiring_from_outer` walked only outer's
-    // `output_names()` and missed any cell whose name wasn't
-    // re-declared as an output on every intermediate scope.
-    // Post-fix, `materialize_wiring_from_outer` itself owns the typed
-    // cell-cascade primitive (`shared_cells_in_scope` walks
-    // input slots + transit cells), so the activity layer's
-    // existing call sites pick the fix up automatically.
+    // `materialize_wiring_from_outer` owns the typed cell-cascade
+    // primitive (`cells_in_scope` walks input slots + transit
+    // cells), so it reaches a cell whose name is not re-declared
+    // as an output on every intermediate scope, which a walk of
+    // outer's `output_names()` alone would miss.
     // Workload root: `shared X := <literal>`.
     let root_kernel = compile_polydat_interpreter("input cycle: u64\nshared counter := 0\n")
         .expect("root compile");
@@ -1076,14 +1062,14 @@ fn parent_shared_cell_cascades_to_grandchild_through_silent_intermediate() {
     // economy — no input slot for it on mid). The leaf scope
     // writes `flag := 9`.
     //
-    // Pre-fix bug: spawn's cell-attach iterated the immediate
-    // parent's `output_names`. Mid's program has no `flag`
-    // output → leaf's `extern flag` slot got no cell → Rule 2
-    // write-through silently no-op'd → root never saw the write.
-    //
-    // Post-fix: `parent.shared_cells_in_scope()` walks every
-    // input slot with an attached cell, exposing root's cell to
-    // every descendant regardless of intermediate body content.
+    // Mid's program has no `flag` output, so a cell-attach that
+    // iterated the immediate parent's `output_names` would leave
+    // leaf's `extern flag` slot without a cell and the Rule 2
+    // write-through would never reach root.
+    // `parent.shared_cells_in_scope()` walks every input slot with
+    // an attached cell, plus the transit cells, exposing root's
+    // cell to every descendant regardless of intermediate body
+    // content.
     let root = parent_with_shared_u64("flag", 0);
 
     // Mid scope: body declares no use of `flag`. Spawn it as
@@ -1140,18 +1126,17 @@ fn parent_shared_cell_cascades_to_grandchild_through_silent_intermediate() {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 3 — bridge extensions: `bind_program_under_parent` (rebind helper)
+// Bridge extensions: `bind_program_under_parent` (rebind helper)
 // and `CompileOptions` (lib paths / strict / required-output threading).
 // ---------------------------------------------------------------------------
 
 #[test]
 fn bind_program_under_parent_rebinds_compiled_program() {
-    // The rebind helper is the post-Phase-3 entry point for the
+    // The rebind helper is the entry point for the
     // `from_program → materialize_wiring_from_outer` pair used by the phase-
     // scope cache-and-rebind path and the OpBuilder's per-op-
     // template instancing loop. Verify it produces a kernel
-    // whose `lookup` resolves a parent constant — the same
-    // behaviour the legacy two-call dance produced.
+    // whose `lookup` resolves a parent constant.
     let parent_kernel = compile_polydat_interpreter(
         "input cycle: u64\n\
          const n := 7\n",
@@ -1179,10 +1164,9 @@ fn bind_program_under_parent_rebinds_compiled_program() {
 fn build_kernel_under_parent_threads_compile_options() {
     // CompileOptions threads `polydat_lib_paths` / `strict` /
     // `required_outputs` / `workload_dir` / `context_label`
-    // through the bridge so synthesisers that previously called
-    // `compile_polydat_with_libs` directly produce byte-identical
-    // kernels via the builder. Verify the bridge accepts a
-    // non-default options struct and produces a working kernel.
+    // through the bridge into the builder's compile. Verify the
+    // bridge accepts a non-default options struct and produces a
+    // working kernel.
     let parent_kernel =
         compile_polydat_interpreter("input cycle: u64\nconst n := 5\n").expect("parent compile");
 
@@ -1237,12 +1221,13 @@ fn parent_final_export_collision_still_errors() {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 5 — `add_result_bindings` (SRD-66 result-wire kernel-driven path).
+// `add_result_bindings` (the result-wire kernel-driven path,
+// subcontext_construction.md §3.2).
 // ---------------------------------------------------------------------------
 
 #[test]
 fn add_result_bindings_injects_only_referenced_magic_externs() {
-    // Closure-binding economy (SRD-67 Rule 5): only the magic
+    // Closure-binding economy (Rule 5): only the magic
     // externs the source actually references get input slots.
     // Source references `body` only; `count` and `ok` slots
     // should be absent.
@@ -1281,7 +1266,7 @@ fn add_result_bindings_diagnostic_force_allocates_unreferenced_magic_externs() {
     // debug / cycle-replay can show the operator the values the
     // runtime would otherwise drop. Same source as the
     // closure-economy test above, but `count` and `ok` slots
-    // are now present.
+    // are present.
     let parent = parent_kernel();
     let mut b = parent.subcontext_builder();
     b.context(SourceContext::new("rb-diagnostic"));
@@ -1311,7 +1296,7 @@ fn add_result_bindings_diagnostic_force_allocates_unreferenced_magic_externs() {
 
 #[test]
 fn add_result_bindings_rule2_writethrough_to_parent_shared() {
-    // The motivating SRD-66 use case: workload-root has
+    // The result-binding write-through case: workload-root has
     // `shared X := false`; result-bindings declare
     // `X := regex_match(body, "...")`. Rule 2 should rewrite
     // the binding into a write-through that propagates to the
@@ -1353,8 +1338,8 @@ fn add_result_bindings_rule2_writethrough_to_parent_shared() {
 
 #[test]
 fn add_result_bindings_rejects_reassignment_of_magic_wire() {
-    // SRD-66 §"Schema": `body` / `count` / `ok` are runtime-
-    // injected wires. Assigning to them in result-bindings is a
+    // `body` / `count` / `ok` are runtime-injected wires
+    // (subcontext_construction.md §3.2). Assigning to them in result-bindings is a
     // hard error.
     let parent = parent_kernel();
     let mut b = parent.subcontext_builder();
@@ -1393,8 +1378,8 @@ fn add_result_bindings_empty_source_is_noop() {
 }
 
 // =====================================================================
-// L2.f strict-mode hardening: silent Plan B fall-through is rejected
-// in strict mode (per composition_substrate.md L2.f).
+// L2.f strict-mode hardening: a const's silent fall-through is
+// rejected in strict mode (per composition_substrate.md L2.f).
 // =====================================================================
 
 /// With strict mode OFF, an intermediate-layer `const X := <expr>`
@@ -1581,12 +1566,11 @@ fn a_child_follows_its_parents_computed_output() {
     );
 }
 
-/// §4 item 12, the blocker under F-K5(c): a computed output's
-/// broadcast cell is what makes a child's import of it a live link
-/// rather than a copy taken once, and it existed on the interpreter
-/// alone. A compiled kernel now makes one when asked, so the binder
-/// can be expressed over `dyn Kernel` without the link silently
-/// becoming a copy on three engines out of four.
+/// A computed output's broadcast cell is what makes a child's import
+/// of it a live link rather than a copy taken once
+/// (cross_fiber_invalidation.md §3.1). A compiled kernel makes one
+/// when asked, so the binder is expressed over `dyn Kernel` and the
+/// link is live on every engine.
 ///
 /// Asked through the trait, on all four engines, both provenance modes
 /// of pure native included.
@@ -1744,15 +1728,16 @@ fn a_second_state_over_one_program_publishes_to_nobody() {
     }
 }
 
-/// F-K5(c): the binder reads its parent through the `Kernel` trait, so
-/// the parent can be on any engine. A child bound under a compiled
-/// parent sees the parent's computed output as the live link it is on
-/// the interpreter — the parent's next pull reaches the child, which
-/// is exactly what broadcast cells on the compiled engines bought.
+/// The binder reads its parent through the `Kernel` trait, so the
+/// parent can be on any engine. A child bound under a compiled parent
+/// sees the parent's computed output as the live link it is on the
+/// interpreter — the parent's next pull reaches the child through the
+/// compiled parent's broadcast cell.
 ///
-/// The child is an interpreter kernel whatever the parent is. That is
-/// the half that remains, and it is `Construction` being implemented
-/// for `PolydatKernel` alone rather than anything the binder does.
+/// The child here is an interpreter kernel because
+/// `materialize_subscope_under` builds one; `spawn` and `build_under`
+/// build a child on its parent's engine, and `bind_under` on its
+/// program's (subcontext_construction.md §4, §6).
 #[test]
 fn a_child_follows_a_compiled_parents_computed_output() {
     use crate::compile::select::{Engine, Provenance};
@@ -1869,13 +1854,11 @@ fn a_module_compiles_once_and_instantiates_many_times() {
 
 /// A child on a compiled engine, under a parent on any engine.
 ///
-/// The last restriction was the attach: binding a child attaches the
-/// parent's cells to whichever of the child's input slots match by
-/// name, and a compiled kernel used to take a cell only on a slot
-/// built as `shared`. With `bind_input_cell` the child takes the
+/// Binding a child attaches the parent's cells to whichever of the
+/// child's input slots match by name, whether or not the slot was
+/// built as `shared`. Through `bind_input_cell` the child takes the
 /// cascade whatever engine it is on, so every pairing of parent and
-/// child engine agrees — and the import stays a live link, which is
-/// the property the whole exercise was for.
+/// child engine agrees — and the import stays a live link.
 #[test]
 fn a_compiled_child_binds_under_a_parent_of_any_engine() {
     use crate::compile::select::{Engine, Provenance};
@@ -1941,8 +1924,8 @@ fn a_compiled_child_binds_under_a_parent_of_any_engine() {
 /// same name, is what a scope below reads for that name — not the value
 /// the shadowed slot carries from the scope above. This is a scenario's
 /// `set: { mode: "mode_for_{size}" }` under a params root that binds
-/// `mode` and `size`. Reported against 0.4.0 by nmbrs, where two example
-/// workloads read the root's `default` instead of `mode_for_small`.
+/// `mode` and `size`: the scope below reads `mode_for_small`, not the
+/// root's `default`.
 #[test]
 fn a_computed_const_that_shadows_a_param_is_what_the_scope_below_reads() {
     let compile = |src: &str| compile_polydat_interpreter(src).expect("compile");
@@ -1956,7 +1939,7 @@ fn a_computed_const_that_shadows_a_param_is_what_the_scope_below_reads() {
     let root = compile("const mode := \"default\"\nconst size := \"small\"\n");
     let phase_src = "input cycle: u64\nextern mode: String\nextern size: String\n";
 
-    // Computed and shadowing: the case that broke.
+    // Computed and shadowing: the case under test.
     let set = under(
         &root,
         "extern size: String\nconst mode := \"mode_for_{size}\"\n",
@@ -1973,7 +1956,7 @@ fn a_computed_const_that_shadows_a_param_is_what_the_scope_below_reads() {
     );
 
     // Controls: a literal shadow, and a computed const that shadows
-    // nothing, each reached the scope below before the fix too.
+    // nothing, each reach the scope below.
     let literal = under(&root, "const mode := \"lit\"\n");
     assert_eq!(
         lookup(under(literal.as_ref(), phase_src).as_ref(), "mode"),

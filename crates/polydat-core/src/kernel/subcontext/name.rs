@@ -3,12 +3,13 @@
 
 //! [`ChildName`] — structured identifier for a spawned child.
 //!
-//! Per SRD-67 §"Named-child registry": each parent records the
+//! Each parent records the
 //! names it has spawned children under so duplicate spawn under
 //! the same name is caught at the API boundary. Names are
 //! `PathBuf`-shaped (hierarchical, comparable, debug-printable);
 //! the runtime constructs them from workload scope-tree node
-//! labels (phase / op-template / iteration coordinate).
+//! labels (phase / op-template / iteration coordinate). See
+//! subcontext_construction.md §4.1.
 
 use std::fmt;
 

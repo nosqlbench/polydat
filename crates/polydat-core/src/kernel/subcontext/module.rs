@@ -3,12 +3,11 @@
 
 //! [`ScopeModule<M>`] — closed, immutable module-matter artifact.
 //!
-//! Per SRD-67 §"Step 3 — Artifact is a closed value": the
-//! artifact carries everything the parent needs to spawn — type
+//! The artifact carries everything the parent needs to spawn — type
 //! contracts, the compiled program, registered pull consumers —
-//! but holds no live reference to the parent. The artifact can
-//! be moved, hashed, debug-printed, and (per Phase 4) cached for
-//! reuse.
+//! but holds no live reference to the parent
+//! (subcontext_construction.md §3, SC2). The artifact can be moved,
+//! debug-printed, and cached for reuse.
 
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -24,7 +23,7 @@ use super::spec::{ExportSpec, ImportSpec};
 /// Body fragment — what the builder accepts via
 /// [`super::SubcontextBuilder::body`].
 ///
-/// Per SRD-67 §"Decision 4". `PolydatSource` is for user-facing
+/// See subcontext_construction.md §2.1. `PolydatSource` is for user-facing
 /// `bindings:` / `result:` content (parsed at finalize);
 /// `Statements` is for synthesisers that already produce GK
 /// programmatically.
@@ -40,7 +39,7 @@ pub enum BodyFragment {
     Statements(Vec<Statement>),
 }
 
-/// Typed handle bundle (per SRD-13e §1.2).
+/// Typed handle bundle (subcontext_construction.md §1).
 ///
 /// The bundle is minimal by design: a handle for each declared
 /// import / export, identified by name. Slot resolution happens
@@ -139,8 +138,8 @@ impl<M> std::fmt::Debug for ExportHandle<M> {
 /// child's `X := <expr>` collides with a parent `shared X`
 /// export. The child's compiled program produces a synthetic
 /// output named [`Self::source_output`] (typically
-/// `__write_<X>`); spawn wires the parent's `SharedCell` into
-/// the child's `X` input slot via `materialize_wiring_from_outer`. After
+/// `__write_<X>`); spawn's binder wires the parent's `SharedCell`
+/// into the child's `X` input slot. After
 /// per-cycle eval, [`super::ScopeKernel::commit_write_throughs`]
 /// pulls the synthetic output and stores its value through the
 /// child's input slot, which propagates to the cell.
@@ -159,8 +158,8 @@ pub struct WriteThroughBinding {
 ///
 /// Produced by [`super::SubcontextBuilder::finalize`]; consumed
 /// by [`super::ScopeKernel::spawn`]. The artifact carries no
-/// live reference to its parent — it can be stored, hashed,
-/// inspected, or moved freely.
+/// live reference to its parent — it can be stored, inspected,
+/// or moved freely.
 pub struct ScopeModule<M> {
     pub(crate) imports: Vec<ImportSpec>,
     pub(crate) exports: Vec<ExportSpec>,
