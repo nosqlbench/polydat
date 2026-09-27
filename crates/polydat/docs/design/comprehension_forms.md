@@ -790,13 +790,13 @@ surface and every engine:
   comprehension's error (`RuntimeError::SourceEval`). A composed name
   whose composition nothing binds yields nothing for the tuples that
   compose it, under strictness too, because no compile can know it.
-- The traversal evaluators report each such read on the clause's
-  `ClauseYield::reads_none`, the name as read with whether it was
-  unbound (`NoneRead::Unbound`) or bound to None (`NoneRead::BoundNone`),
-  once each over all the clause's evaluations
-  (`evaluate_for_iteration_reported`). A host that holds a read of an
-  unbound name as an error reads it there; polydat's own evaluation
-  yields nothing.
+- The traversal evaluators report each such read per clause
+  (`evaluate_for_iteration_with_none_reads`, which returns a `NoneReads`
+  beside the `EvaluatedIteration`, indexed like its `clauses`): the
+  name as read with whether it was unbound (`NoneRead::Unbound`) or
+  bound to None (`NoneRead::BoundNone`), once each over all the
+  clause's evaluations. A host that holds a read of an unbound name as
+  an error reads it there; polydat's own evaluation yields nothing.
 - A predicate that reads None for a tuple is None and keeps no tuple
   (§10.9.1). `&&` and `||` stop at the first operand that decides them,
   so a tuple a predicate decides before it reads the name is kept or

@@ -89,8 +89,9 @@ pub use cardinality::{CardinalityClass, Hybrid, Interval, MeasureName, ProductMe
 pub use eval_source::{EvalClass, EvalContext, EvalError, EvaluatedSource, NoneRead, SourceEval};
 pub use metadata::{IndexFn, Materialization, Metadata, NaturalOrder};
 pub use runtime::{
-    ClauseYield, EvaluatedIteration, IndexedTuples, evaluate_for_iteration,
-    evaluate_for_iteration_materialized, evaluate_for_iteration_reported, evaluate_indexed,
+    ClauseYield, EvaluatedIteration, IndexedTuples, NoneReads, evaluate_for_iteration,
+    evaluate_for_iteration_materialized, evaluate_for_iteration_materialized_with_none_reads,
+    evaluate_for_iteration_reported, evaluate_for_iteration_with_none_reads, evaluate_indexed,
 };
 pub use source::Source;
 pub use strategy::{StrategyName, ZipMode};

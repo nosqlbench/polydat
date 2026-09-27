@@ -17,8 +17,8 @@
 
 use polydat::ast::Value;
 use polydat::iteration::comprehension::runtime::{
-    EvaluatedIteration, evaluate_for_iteration_materialized, evaluate_for_iteration_reported,
-    evaluate_indexed,
+    EvaluatedIteration, NoneReads, evaluate_for_iteration_materialized_with_none_reads,
+    evaluate_for_iteration_reported, evaluate_for_iteration_with_none_reads, evaluate_indexed,
 };
 use polydat::iteration::comprehension::spec::parse_comprehension_algebra;
 use polydat::iteration::comprehension::surfaces::CompiledComprehension;
@@ -64,26 +64,50 @@ fn rows(evaluated: &EvaluatedIteration) -> Vec<Vec<String>> {
         .collect()
 }
 
-/// Evaluate `ast` in `scope` with both traversal evaluators, held to
-/// each other, and report what each clause yielded.
-fn traverse(ast: &Comprehension, scope: &dyn Lookup, what: &str) -> EvaluatedIteration {
-    let reported =
-        evaluate_for_iteration_reported(ast, scope).unwrap_or_else(|e| panic!("{what}: {e}"));
-    let materialized =
-        evaluate_for_iteration_materialized(ast, scope).unwrap_or_else(|e| panic!("{what}: {e}"));
-    assert_eq!(reported.tuples, materialized.tuples, "{what}");
-    assert_eq!(reported.clauses, materialized.clauses, "{what}");
-    let indexed = evaluate_indexed(ast, scope).unwrap_or_else(|e| panic!("{what}: {e}"));
-    assert_eq!(indexed.to_vec(), reported.tuples, "{what}");
-    reported
+/// What a traversal yielded, and each clause's None reads beside it.
+struct Traversed {
+    evaluated: EvaluatedIteration,
+    none_reads: NoneReads,
 }
 
-fn clause<'a>(evaluated: &'a EvaluatedIteration, var: &str) -> &'a ClauseYield {
-    evaluated
-        .clauses
-        .iter()
-        .find(|c| c.var == var)
-        .unwrap_or_else(|| panic!("no clause {var}"))
+impl Traversed {
+    fn clause(&self, var: &str) -> &ClauseYield {
+        &self.evaluated.clauses[self.index(var)]
+    }
+
+    fn reads_none(&self, var: &str) -> &[NoneRead] {
+        self.none_reads.clause(self.index(var))
+    }
+
+    fn index(&self, var: &str) -> usize {
+        self.evaluated
+            .clauses
+            .iter()
+            .position(|c| c.var == var)
+            .unwrap_or_else(|| panic!("no clause {var}"))
+    }
+}
+
+/// Evaluate `ast` in `scope` with both traversal evaluators, held to
+/// each other, and report what each clause yielded and read as None.
+fn traverse(ast: &Comprehension, scope: &dyn Lookup, what: &str) -> Traversed {
+    let (reported, none_reads) = evaluate_for_iteration_with_none_reads(ast, scope)
+        .unwrap_or_else(|e| panic!("{what}: {e}"));
+    let (materialized, materialized_none) =
+        evaluate_for_iteration_materialized_with_none_reads(ast, scope)
+            .unwrap_or_else(|e| panic!("{what}: {e}"));
+    assert_eq!(reported.tuples, materialized.tuples, "{what}");
+    assert_eq!(reported.clauses, materialized.clauses, "{what}");
+    assert_eq!(none_reads, materialized_none, "{what}");
+    let plain =
+        evaluate_for_iteration_reported(ast, scope).unwrap_or_else(|e| panic!("{what}: {e}"));
+    assert_eq!(plain.clauses, reported.clauses, "{what}");
+    let indexed = evaluate_indexed(ast, scope).unwrap_or_else(|e| panic!("{what}: {e}"));
+    assert_eq!(indexed.to_vec(), reported.tuples, "{what}");
+    Traversed {
+        evaluated: reported,
+        none_reads,
+    }
 }
 
 /// Whether the kernel's scope has `name`.
@@ -103,8 +127,8 @@ fn all_over_a_cursor_reads_its_extent() {
         let k = kernel("input cycle: u64\ncursor row = range(0, 50)\n", engine);
         let scope = KernelLookup::new(k.as_ref());
         let found = traverse(&ast, &scope, &format!("{engine}"));
-        assert_eq!(rows(&found), expected, "{engine}");
-        assert!(clause(&found, "xval").reads_none.is_empty(), "{engine}");
+        assert_eq!(rows(&found.evaluated), expected, "{engine}");
+        assert!(found.reads_none("xval").is_empty(), "{engine}");
         check_names(&ast, Surface::Traversal(&has(&scope)))
             .unwrap_or_else(|e| panic!("{engine}: {e}"));
         // A stream has no scope to read the extent in.
@@ -119,9 +143,9 @@ fn all_over_a_cursor_reads_its_extent() {
         let bare = kernel("input cycle: u64\n", engine);
         let scope = KernelLookup::new(bare.as_ref());
         let found = traverse(&ast, &scope, &format!("{engine}: no cursor"));
-        assert!(found.tuples.is_empty(), "{engine}");
+        assert!(found.evaluated.tuples.is_empty(), "{engine}");
         assert_eq!(
-            clause(&found, "xval").reads_none,
+            found.reads_none("xval"),
             [NoneRead::Unbound("__cursor_extent_row_start".into())],
             "{engine}"
         );
@@ -167,11 +191,11 @@ fn a_composed_source_name_reads_its_composed_target() {
         ] {
             let ast = parse(text);
             let found = traverse(&ast, &scope, &format!("{engine}: {text}"));
-            assert_eq!(rows(&found), expected, "{engine}: {text}");
+            assert_eq!(rows(&found.evaluated), expected, "{engine}: {text}");
             assert!(
-                found.clauses.iter().all(|c| c.reads_none.is_empty()),
+                found.none_reads.is_empty(),
                 "{engine}: {text}: {:?}",
-                found.clauses
+                found.none_reads
             );
             check_names(&ast, Surface::Traversal(&has(&scope)))
                 .unwrap_or_else(|e| panic!("{engine}: {text}: {e}"));
@@ -206,21 +230,21 @@ fn a_composed_target_that_reads_none_yields_nothing_and_is_reported() {
         };
         let found = traverse(&ast, &scope, &format!("{engine}"));
         assert_eq!(
-            rows(&found),
+            rows(&found.evaluated),
             [["k=1", "limit=1"], ["k=1", "limit=2"]],
             "{engine}"
         );
-        let limit = clause(&found, "limit");
+        let limit = found.clause("limit");
         assert_eq!((limit.evaluations, limit.values), (3, 2), "{engine}");
         assert_eq!(
-            limit.reads_none,
+            found.reads_none("limit"),
             [
                 NoneRead::Unbound("k_7_limits".into()),
                 NoneRead::BoundNone("k_9_limits".into()),
             ],
             "{engine}"
         );
-        assert!(clause(&found, "k").reads_none.is_empty(), "{engine}");
+        assert!(found.reads_none("k").is_empty(), "{engine}");
         check_names(&ast, Surface::Traversal(&has(&scope)))
             .unwrap_or_else(|e| panic!("{engine}: {e}"));
     }
@@ -236,9 +260,6 @@ fn a_composed_target_that_reads_none_yields_nothing_and_is_reported() {
     let k = kernel(LIMITS, Engine::Interpreter(JitMode::Off));
     let scope = KernelLookup::new(k.as_ref());
     let found = traverse(&unbound_leaf, &scope, "unbound leaf");
-    assert!(found.tuples.is_empty());
-    assert_eq!(
-        clause(&found, "limit").reads_none,
-        [NoneRead::Unbound("zz".into())]
-    );
+    assert!(found.evaluated.tuples.is_empty());
+    assert_eq!(found.reads_none("limit"), [NoneRead::Unbound("zz".into())]);
 }

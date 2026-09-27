@@ -220,12 +220,25 @@ pub fn evaluate_for_iteration_reported(
     comp: &Comprehension,
     scope: &dyn Lookup,
 ) -> Result<EvaluatedIteration, RuntimeError> {
+    evaluate_for_iteration_with_none_reads(comp, scope).map(|(evaluated, _)| evaluated)
+}
+
+/// [`evaluate_for_iteration_reported`], and for each clause the names
+/// whose reads of None made an evaluation of its source yield nothing
+/// ([`NoneReads`]).
+///
+/// Outside `pragma strict`, a source that reads a name nothing binds,
+/// or a name bound to None, yields nothing (comprehension_forms.md §5
+/// V3). A host that holds such a name as an error, naming the clause,
+/// reads the clause's entry here instead of checking the scope again.
+pub fn evaluate_for_iteration_with_none_reads(
+    comp: &Comprehension,
+    scope: &dyn Lookup,
+) -> Result<(EvaluatedIteration, NoneReads), RuntimeError> {
     let mut state = EvalState::new(comp, scope);
     let (node, _) = state.index_node(comp, &[])?;
-    Ok(EvaluatedIteration {
-        tuples: IndexedTuples { node }.to_vec(),
-        clauses: state.yields,
-    })
+    let tuples = IndexedTuples { node }.to_vec();
+    Ok(state.finish(tuples))
 }
 
 /// Evaluate a comprehension against a scope to its tuples addressed by
@@ -267,12 +280,19 @@ pub fn evaluate_for_iteration_materialized(
     comp: &Comprehension,
     scope: &dyn Lookup,
 ) -> Result<EvaluatedIteration, RuntimeError> {
+    evaluate_for_iteration_materialized_with_none_reads(comp, scope).map(|(evaluated, _)| evaluated)
+}
+
+/// [`evaluate_for_iteration_materialized`], and the clauses' None reads
+/// as [`evaluate_for_iteration_with_none_reads`] reports them; the
+/// equivalence harness compares the two.
+pub fn evaluate_for_iteration_materialized_with_none_reads(
+    comp: &Comprehension,
+    scope: &dyn Lookup,
+) -> Result<(EvaluatedIteration, NoneReads), RuntimeError> {
     let mut state = EvalState::new(comp, scope);
     let tuples = state.evaluate_node(comp, &[])?.tuples;
-    Ok(EvaluatedIteration {
-        tuples,
-        clauses: state.yields,
-    })
+    Ok(state.finish(tuples))
 }
 
 /// A comprehension's tuples addressed by position: each tuple is
@@ -451,11 +471,9 @@ impl Indexed {
 /// An empty stream is a legal value of the algebra, so none of these
 /// is an error. What a host does about one is the host's policy.
 ///
-/// `reads_none` says why an evaluation yielded nothing when the reason
-/// is a read of None (comprehension_forms.md §5 V3, none_semantics.md
-/// Rule 1): the names the source read, after composition, that nothing
-/// binds or that are bound to None. A host that holds an unbound name
-/// in a source as an error reads it here.
+/// Why an evaluation yielded nothing, when the reason is a read of
+/// None, is reported beside these records by
+/// [`evaluate_for_iteration_with_none_reads`] ([`NoneReads`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClauseYield {
     /// The clause's element name.
@@ -466,11 +484,39 @@ pub struct ClauseYield {
     pub evaluations: usize,
     /// How many values it produced, summed over those evaluations.
     pub values: usize,
-    /// Each name whose read made an evaluation of the source yield
-    /// nothing, with whether it was unbound or bound to None: over
-    /// every evaluation, once each, ordered by [`NoneRead`]'s order.
-    /// Empty when no evaluation read None.
-    pub reads_none: Vec<NoneRead>,
+}
+
+/// Per leaf clause, the names whose reads of None made an evaluation of
+/// its source yield nothing (comprehension_forms.md §5 V3,
+/// none_semantics.md Rule 1): the names the source read, after
+/// composition, that nothing binds or that are bound to None, each with
+/// which of the two it was. A host that holds an unbound name in a
+/// source as an error reads it here.
+///
+/// Indexed like [`EvaluatedIteration::clauses`]: entry `i` belongs to
+/// clause `i`. Each list holds a name once over every evaluation, in
+/// [`NoneRead`]'s order, and is empty when no evaluation read None.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NoneReads {
+    per_clause: Vec<Vec<NoneRead>>,
+}
+
+impl NoneReads {
+    /// The None reads of clause `index` of [`EvaluatedIteration::clauses`];
+    /// empty past the end.
+    pub fn clause(&self, index: usize) -> &[NoneRead] {
+        self.per_clause.get(index).map_or(&[], Vec::as_slice)
+    }
+
+    /// Every clause's None reads, in clause order.
+    pub fn iter(&self) -> impl Iterator<Item = &[NoneRead]> {
+        self.per_clause.iter().map(Vec::as_slice)
+    }
+
+    /// Whether no evaluation of any clause read None.
+    pub fn is_empty(&self) -> bool {
+        self.per_clause.iter().all(Vec::is_empty)
+    }
 }
 
 /// A traversal's tuples, and what each leaf clause yielded reaching
@@ -491,6 +537,9 @@ struct EvalState<'a> {
     /// evaluation so a clause never reached is present with zero
     /// evaluations rather than absent.
     yields: Vec<ClauseYield>,
+    /// Per leaf clause, parallel to `yields`, the names whose reads of
+    /// None made an evaluation yield nothing.
+    none_reads: Vec<Vec<NoneRead>>,
     /// Leaf identity → index into `yields`. Keyed by the address of the
     /// clause's own `Source` inside the borrowed tree, which is what
     /// distinguishes two clauses that share a name across the branches
@@ -509,11 +558,26 @@ impl<'a> EvalState<'a> {
         let mut state = EvalState {
             scope,
             yields: Vec::new(),
+            none_reads: Vec::new(),
             by_leaf: std::collections::HashMap::new(),
             mult: 1,
         };
         state.enumerate_leaves(comp);
         state
+    }
+
+    /// The evaluation's report: the tuples with each clause's yield, and
+    /// each clause's None reads beside it.
+    fn finish(self, tuples: Vec<RuntimeTuple>) -> (EvaluatedIteration, NoneReads) {
+        (
+            EvaluatedIteration {
+                tuples,
+                clauses: self.yields,
+            },
+            NoneReads {
+                per_clause: self.none_reads,
+            },
+        )
     }
 
     fn enumerate_leaves(&mut self, node: &Comprehension) {
@@ -526,8 +590,8 @@ impl<'a> EvalState<'a> {
                     source: source.to_text(),
                     evaluations: 0,
                     values: 0,
-                    reads_none: Vec::new(),
                 });
+                self.none_reads.push(Vec::new());
             }
             Comprehension::Cartesian { children }
             | Comprehension::Zip { children, .. }
@@ -553,9 +617,10 @@ impl<'a> EvalState<'a> {
                 .values
                 .saturating_add(values.saturating_mul(self.mult));
             if !reads_none.is_empty() {
-                clause.reads_none.extend(reads_none);
-                clause.reads_none.sort();
-                clause.reads_none.dedup();
+                let reads = &mut self.none_reads[i];
+                reads.extend(reads_none);
+                reads.sort();
+                reads.dedup();
             }
         }
     }

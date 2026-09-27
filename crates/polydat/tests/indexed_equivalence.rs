@@ -30,8 +30,9 @@
 use polydat::iteration::comprehension::ast::Comprehension;
 use polydat::iteration::comprehension::cardinality::{Interval, ProductMeasure};
 use polydat::iteration::comprehension::runtime::{
-    RuntimeError, evaluate_for_iteration_materialized, evaluate_for_iteration_reported,
-    evaluate_indexed,
+    RuntimeError, evaluate_for_iteration_materialized,
+    evaluate_for_iteration_materialized_with_none_reads, evaluate_for_iteration_reported,
+    evaluate_for_iteration_with_none_reads, evaluate_indexed,
 };
 use polydat::iteration::comprehension::source::{LiteralValue, Source};
 use polydat::iteration::comprehension::strategies::Tuple;
@@ -115,6 +116,10 @@ fn compare(ast: &Comprehension, scope: &polydat::kernel::PolydatKernel) -> Compa
                 "clause yields differ for {ast:?}"
             );
             assert_eq!(reported.tuples, reference.tuples);
+            let (_, none_reads) = evaluate_for_iteration_with_none_reads(ast, scope).unwrap();
+            let (_, reference_none) =
+                evaluate_for_iteration_materialized_with_none_reads(ast, scope).unwrap();
+            assert_eq!(none_reads, reference_none, "None reads differ for {ast:?}");
             assert_counts(ast, reference.tuples.len());
             Ok(reference.tuples)
         }
@@ -1335,13 +1340,9 @@ fn generated_shapes_index_as_they_materialize() {
         outer += shapes.outer;
         composed += shapes.composed;
         if shapes.composed > 0
-            && let Ok(reported) = evaluate_for_iteration_reported(&shape, &scope)
+            && let Ok((_, none_reads)) = evaluate_for_iteration_with_none_reads(&shape, &scope)
         {
-            composed_none += reported
-                .clauses
-                .iter()
-                .filter(|c| !c.reads_none.is_empty())
-                .count() as u64;
+            composed_none += none_reads.iter().filter(|reads| !reads.is_empty()).count() as u64;
         }
         if found.tuples > 0 && order_chains(&shape) > 0 {
             chained += 1;

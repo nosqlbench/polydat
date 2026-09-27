@@ -627,13 +627,17 @@ when it is evaluated
   under `cursor row = range(0, 50)` yields the 50 ordinals; V3 and a
   strict name check look for the cursor's extent, not a value named
   `row`.
-- **A clause's yield names what it read as None.** `ClauseYield` gains
-  `reads_none: Vec<NoneRead>`: each name whose read made an evaluation
-  of the clause's source yield nothing, as read after composition, with
-  whether it was unbound or bound to None. A host that holds an unbound
-  `{name}` in a source as an error reads it there instead of deriving
-  it from the source text. polydat constructs every `ClauseYield`; a
-  host that builds one with a struct literal adds the field.
+- **An evaluation reports what each clause read as None.**
+  `evaluate_for_iteration_with_none_reads` returns the same
+  `EvaluatedIteration` as `evaluate_for_iteration_reported`, and beside
+  it a `NoneReads`: for each clause (`none_reads.clause(i)`, indexed like
+  `clauses`), each name whose read made an evaluation of its source
+  yield nothing, as read after composition, with whether it was unbound
+  (`NoneRead::Unbound`) or bound to None (`NoneRead::BoundNone`). A
+  host that holds an unbound `{name}` in a source as an error reads it
+  there instead of deriving it from the source text. `ClauseYield` and
+  `EvaluatedIteration` keep their 0.6.0 fields, so existing code,
+  struct literals included, compiles unchanged.
 - **The index-addressed evaluator sees a composed dependency.** A
   cartesian whose later clause composes a name over an earlier clause
   is a dependent product for `evaluate_indexed` and
