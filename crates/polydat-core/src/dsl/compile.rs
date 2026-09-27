@@ -1179,19 +1179,10 @@ fn evaluate_default_expr(
 }
 
 /// Try to fold a `shared X := <expr>` initializer to a typed
-/// `(Value, PortType)`. Returns `Some` for literal forms (the
-/// shareable-cell case); returns `None` for non-literal
-/// expressions (which keep the ordinary binding shape — the
-/// `shared` keyword carries metadata only and the binding has
-/// no cross-scope mutability today).
-///
-/// Literal-init shared bindings compile to an input slot +
-/// passthrough output, so `materialize_wiring_from_outer` can wire a
-/// `SharedCell` between this slot and inner kernels' matching
-/// inputs. Non-literal shared bindings retain the
-/// computation-node shape; full cross-scope mutability for
-/// those is future work (see scope_model.md §6.2 "Concurrent
-/// semantics").
+/// `(Value, PortType)`. Returns `Some` for literal forms, which
+/// become the register slot's default; returns `None` for any other
+/// expression, which the declaring kernel's initialization evaluates
+/// and writes through the register.
 fn try_fold_shared_init(
     expr: &crate::dsl::ast::Expr,
 ) -> Option<(crate::ast::Value, crate::ast::PortType)> {
@@ -2160,16 +2151,16 @@ impl Compiler {
             match stmt {
                 Statement::InputDecl(_) => {}
                 Statement::Binding(b) => {
-                    // `shared X := <literal>` compiles to an input
-                    // slot + passthrough output, so
-                    // `materialize_wiring_from_outer` can wire a
+                    // `shared X := <expr>` compiles to an input slot +
+                    // passthrough output, so the binder can wire a
                     // `SharedCell` for cross-scope mutability (SRD-16
-                    // §"Mutability Rules: Shared Mutable"). Non-literal
-                    // inits and tuple-target shared bindings are
-                    // rejected on every entry point: the cell needs a
-                    // single, well-defined initial value, and a
-                    // computation-shaped RHS doesn't have one. See
-                    // SRD-16 §"Non-literal `shared` initializers".
+                    // §"Mutability Rules: Shared Mutable"). A literal
+                    // is the slot's default; any other expression
+                    // compiles as the output `__init_X`, which the
+                    // declaring kernel's initialization evaluates once
+                    // and writes through the register. Tuple-target
+                    // shared bindings are rejected: a register holds
+                    // one value.
                     if b.modifier == BindingModifier::SHARED {
                         if b.targets.len() != 1 {
                             return Err(format!(
@@ -2180,21 +2171,56 @@ impl Compiler {
                             ));
                         }
                         let name = &b.targets[0];
-                        let (init_value, port_type) =
-                            try_fold_shared_init(&b.value).ok_or_else(|| {
-                                format!(
-                                    "shared binding '{name}' requires a literal initial value \
-                                 (number, string, true/false). Computed and cycle-dependent \
-                                 expressions don't have a well-defined single init for the \
-                                 shared cell. See SRD-16 §\"Non-literal `shared` initializers\"."
-                                )
-                            })?;
-                        let (init_value, port_type) = apply_shared_type_annotation(
-                            name,
-                            b.type_annotation.as_ref(),
-                            init_value,
-                            port_type,
-                        )?;
+                        let (init_value, port_type) = match try_fold_shared_init(&b.value) {
+                            Some((init_value, port_type)) => apply_shared_type_annotation(
+                                name,
+                                b.type_annotation.as_ref(),
+                                init_value,
+                                port_type,
+                            )?,
+                            None => {
+                                let source = format!("__init_{name}");
+                                self.compile_binding(
+                                    &mut asm,
+                                    std::slice::from_ref(&source),
+                                    &b.value,
+                                )?;
+                                let Some(computed) = asm.output_type(&source) else {
+                                    return Err(format!(
+                                        "internal error: the starting value of shared '{name}' \
+                                         was just compiled, so the assembler should carry its \
+                                         type"
+                                    ));
+                                };
+                                let port_type = match b.type_annotation.as_ref() {
+                                    None => computed,
+                                    Some(t) => {
+                                        let annotated = crate::ast::PortType::from_keyword(t)
+                                            .ok_or_else(|| {
+                                                format!(
+                                                    "shared binding '{name}': unknown type \
+                                                     `{t}` in annotation"
+                                                )
+                                            })?;
+                                        if annotated != computed {
+                                            return Err(format!(
+                                                "shared binding '{name}: {t}': the starting \
+                                                 value is {computed:?}, which doesn't match the \
+                                                 annotated type. A cell keeps ONE type for \
+                                                 life — convert the starting value to {t}."
+                                            ));
+                                        }
+                                        annotated
+                                    }
+                                };
+                                asm.add_output(&source, WireRef::node(&source));
+                                // One reading, at initialization, as a
+                                // const takes it.
+                                asm.set_output_modifier(&source, BindingModifier::CONST);
+                                asm.mark_shared_start(name, &source);
+                                (crate::ast::Value::None, port_type)
+                            }
+                        };
                         asm.add_input(
                             name,
                             init_value,
@@ -2966,24 +2992,39 @@ mod tests {
     }
 
     #[test]
-    fn shared_non_literal_init_rejected() {
-        // Non-literal `shared` initializers no longer fall
-        // through to the cycle-binding shape. Compile error
-        // surfaces with a clear message naming the binding and
-        // pointing at the SRD-16 §"Non-literal `shared`
-        // initializers" section.
+    fn shared_computed_start_over_a_coordinate_is_refused() {
+        // A computed starting value is evaluated once, at
+        // initialization, so it may not read a coordinate.
         let src = r#"
             input cycle: u64
             shared rolling := hash(cycle)
         "#;
-        let err =
-            compile_polydat_interpreter(src).expect_err("non-literal shared const must error");
+        let err = compile_polydat_interpreter(src)
+            .expect_err("a starting value over a coordinate must error");
         assert!(
-            err.to_string().contains("shared binding 'rolling'"),
+            err.to_string().contains("shared 'rolling'")
+                && err.to_string().contains("coordinate 'cycle'"),
             "error: {err}"
         );
+    }
+
+    #[test]
+    fn shared_computed_start_is_seeded_at_init() {
+        let src = r#"
+            input cycle: u64
+            extern base: u64 = 20
+            shared rolling := u64_add(base, base)
+        "#;
+        let k = compile_polydat_interpreter(src).expect("a computed start compiles");
+        assert_eq!(k.lookup("rolling"), Some(crate::ast::Value::U64(40)));
+    }
+
+    #[test]
+    fn shared_const_is_refused() {
+        let err = compile_polydat_interpreter("shared const x := 1\n")
+            .expect_err("`shared const` must error");
         assert!(
-            err.to_string().contains("literal initial value"),
+            err.to_string().contains("const") && err.to_string().contains("shared"),
             "error: {err}"
         );
     }

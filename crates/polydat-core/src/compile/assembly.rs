@@ -573,6 +573,9 @@ pub struct PolydatAssembler {
     output_modifiers: HashMap<String, crate::dsl::ast::BindingModifier>,
     /// The const bindings a kernel initializes, in dependency order.
     const_inits: Vec<crate::kernel::ConstInit>,
+    /// `shared` registers whose starting value is computed, as
+    /// `(register input, output computing the value)`.
+    shared_starts: Vec<(String, String)>,
     /// A template's build is not initialized: its inputs come from a
     /// binder, and each kernel bound from it is initialized then.
     pub(crate) template: bool,
@@ -668,6 +671,7 @@ impl PolydatAssembler {
             context: "(assembler)".into(),
             output_modifiers: HashMap::new(),
             const_inits: Vec::new(),
+            shared_starts: Vec::new(),
             template: false,
             const_outputs: std::collections::HashSet::new(),
             strict_values: false,
@@ -759,6 +763,16 @@ impl PolydatAssembler {
         self.const_outputs.insert(name.to_string());
     }
 
+    /// Give the `shared` register at input `name` the starting value
+    /// output `source` computes. A kernel's initialization evaluates it
+    /// once and writes it through the register, while nothing has
+    /// written the register: a scope attached to a register another
+    /// scope declared never seeds it again.
+    pub(crate) fn mark_shared_start(&mut self, name: &str, source: &str) {
+        self.shared_starts
+            .push((name.to_string(), source.to_string()));
+    }
+
     /// Rewrite the graph so every const whose value is not known at
     /// build is captured when a kernel is initialized, and record how
     /// ([`crate::kernel::ConstInit`]), in the order initialization
@@ -848,7 +862,7 @@ impl PolydatAssembler {
 
         // Rewrite each: its expression under `__init_<name>`, its readers
         // on a passthrough of its slot.
-        let mut records: Vec<(String, String, String, PortType)> = Vec::new();
+        let mut records: Vec<(String, String, String, PortType, bool)> = Vec::new();
         for (_, name, node, port) in captured {
             let Some(index) = node_of(&self.nodes, &node) else {
                 continue;
@@ -904,20 +918,29 @@ impl PolydatAssembler {
                 .entry(name.clone())
                 .or_insert(BindingModifier::CONST);
             self.set_output_modifier(&source, modifier);
-            records.push((name, slot, source, ty));
+            records.push((name, slot, source, ty, false));
+        }
+        // A `shared` register with a computed starting value: its input
+        // is the slot, written at initialization while nothing has
+        // written the register.
+        for (name, source) in std::mem::take(&mut self.shared_starts) {
+            let Some(ty) = self.input_type(&name) else {
+                return Err(AssemblyError::UnknownWire(name));
+            };
+            records.push((name.clone(), name, source, ty, true));
         }
 
         // What each captured const reads, now that every other captured
         // const reads as its slot.
         let slot_owner: HashMap<String, String> = records
             .iter()
-            .map(|(name, slot, _, _)| (slot.clone(), name.clone()))
+            .map(|(name, slot, _, _, _)| (slot.clone(), name.clone()))
             .collect();
         let mut pending: Vec<(crate::kernel::ConstInit, Vec<String>)> = Vec::new();
-        for (name, slot, source, ty) in records {
+        for (name, slot, source, ty, register) in records {
             let root = match self.outputs.get(&source) {
                 Some(WireRef::Node(n, _)) => n.clone(),
-                _ => unreachable!("the source output was just added over a node"),
+                _ => return Err(AssemblyError::UnknownWire(source)),
             };
             let (inputs, _) = cone(&self.nodes, &root);
             if let Some(coord) = inputs.iter().find(|i| {
@@ -925,10 +948,15 @@ impl PolydatAssembler {
                     .iter()
                     .any(|d| &d.name == *i && d.kind == InputKind::Coordinate)
             }) {
+                let what = if register {
+                    format!("the starting value of shared '{name}'")
+                } else {
+                    format!("const '{name}'")
+                };
                 return Err(AssemblyError::Other(format!(
-                    "const '{name}' reads the coordinate '{coord}': a const is evaluated once \
-                     when the kernel is initialized, and a coordinate advances every cycle. Drop \
-                     `const`, or read an extern or another const instead."
+                    "{what} reads the coordinate '{coord}': it is evaluated once when the \
+                     kernel is initialized, and a coordinate advances every cycle. Read an \
+                     extern or a const instead."
                 )));
             }
             let deps: Vec<String> = inputs
@@ -937,7 +965,7 @@ impl PolydatAssembler {
                 .filter(|owner| **owner != name)
                 .cloned()
                 .collect();
-            if !inputs.is_empty() && self.input_type(&name).is_none() {
+            if !register && !inputs.is_empty() && self.input_type(&name).is_none() {
                 self.add_input(
                     &name,
                     crate::ast::Value::None,
@@ -946,13 +974,14 @@ impl PolydatAssembler {
                 );
                 self.set_input_origin(&name, TypeOrigin::Inferred);
             }
-            let fallback = self.input_type(&name).is_some().then(|| name.clone());
+            let fallback = (!register && self.input_type(&name).is_some()).then(|| name.clone());
             pending.push((
                 crate::kernel::ConstInit {
                     name,
                     slot,
                     source,
                     fallback,
+                    register,
                     slot_index: 0,
                     source_index: 0,
                     fallback_index: None,

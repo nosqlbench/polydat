@@ -1137,26 +1137,27 @@ fn shared_last_write_wins_under_concurrent_writers() {
 }
 
 #[test]
-fn shared_non_literal_init_rejected() {
-    // `shared X := <non-literal>` is rejected at compile time —
-    // a shared cell needs a single well-defined initial value
-    // and a computed RHS doesn't have one. See SRD-16
-    // §"Non-literal `shared` initializers".
+fn shared_computed_start_is_taken_at_init() {
+    // `shared X := <expr>` starts the register at the expression's
+    // value, taken once when the declaring kernel is initialized; one
+    // that reads a coordinate is refused, as a const's is.
+    let k = compile_polydat_interpreter(
+        r#"
+        input cycle: u64
+        extern base: u64 = 20
+        shared rolling := base * 2
+    "#,
+    )
+    .expect("a computed starting value compiles");
+    assert_eq!(k.lookup("rolling"), Some(Value::U64(40)));
     let err = compile_polydat_interpreter(
         r#"
         input cycle: u64
         shared rolling := hash(cycle)
     "#,
     )
-    .expect_err("non-literal shared const must error");
-    assert!(
-        err.to_string().contains("shared binding 'rolling'"),
-        "error: {err}"
-    );
-    assert!(
-        err.to_string().contains("literal initial value"),
-        "error: {err}"
-    );
+    .expect_err("a starting value over a coordinate must error");
+    assert!(err.to_string().contains("shared 'rolling'"), "error: {err}");
 }
 
 // =========================================================================

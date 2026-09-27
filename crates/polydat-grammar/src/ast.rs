@@ -514,10 +514,10 @@ pub enum WireModifier {
 /// [`Self::has`] to test for individual modifiers and
 /// [`Self::insert`] / `Self::from_iter` to build instances.
 ///
-/// **Validity:** the combination `const` + `volatile` is
-/// rejected at parse time as contradictory (`Self::from_iter`
-/// is the validating builder). All other combinations are
-/// representable.
+/// **Validity:** the combinations `const` + `volatile` and
+/// `const` + `shared` are rejected at parse time as contradictory
+/// (`Self::try_from_iter` is the validating builder). All other
+/// combinations are representable.
 ///
 /// Lives on every [`Statement::Binding`] — the modifier set
 /// determines the binding's lifecycle. Other statement kinds
@@ -580,6 +580,12 @@ impl BindingModifier {
                  `volatile` excludes the wire from const-fold and signals \
                  per-cycle variability. Drop one.",
             );
+        }
+        if out.has(WireModifier::Const) && out.has(WireModifier::Shared) {
+            return Err("modifier conflict: `const` and `shared` are contradictory \
+                 — `const` fixes the value for the kernel's life; `shared` \
+                 makes the binding a register other scopes write. Drop one: \
+                 `shared` alone takes a computed starting value.");
         }
         Ok(out)
     }
@@ -853,14 +859,20 @@ mod modifier_tests {
 
     #[test]
     fn from_iter_collects_combinations() {
-        let m = BindingModifier::try_from_iter([WireModifier::Const, WireModifier::Shared])
-            .expect("const+shared is valid");
-        assert!(m.is_const() && m.is_shared());
-        assert!(!m.is_volatile());
-
         let m = BindingModifier::try_from_iter([WireModifier::Shared, WireModifier::Volatile])
             .expect("shared+volatile is valid");
         assert!(m.is_shared() && m.is_volatile());
+        assert!(!m.is_const());
+    }
+
+    #[test]
+    fn from_iter_rejects_const_plus_shared() {
+        let err = BindingModifier::try_from_iter([WireModifier::Shared, WireModifier::Const])
+            .expect_err("const+shared must be rejected");
+        assert!(
+            err.contains("const") && err.contains("shared") && err.contains("register"),
+            "error should name both keywords and why: {err}"
+        );
     }
 
     #[test]
@@ -900,12 +912,12 @@ mod modifier_tests {
 
     #[test]
     fn equality_distinguishes_combinations() {
-        let const_only = BindingModifier::CONST;
-        let const_shared =
-            BindingModifier::try_from_iter([WireModifier::Const, WireModifier::Shared]).unwrap();
+        let shared_only = BindingModifier::SHARED;
+        let shared_volatile =
+            BindingModifier::try_from_iter([WireModifier::Shared, WireModifier::Volatile]).unwrap();
         assert_ne!(
-            const_only, const_shared,
-            "const-only must not equal const+shared"
+            shared_only, shared_volatile,
+            "shared-only must not equal shared+volatile"
         );
     }
 }

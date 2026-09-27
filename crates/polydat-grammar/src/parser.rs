@@ -726,8 +726,9 @@ fn parse_cursor_decl(p: &mut Parser) -> Result<Statement, String> {
 
 /// `<modifier>* name := expr` where each modifier ∈ {const,
 /// shared, volatile, ...}. Modifiers may appear in any order;
-/// duplicates and the contradictory `const` + `volatile` combo
-/// are rejected (see [`BindingModifier::from_iter`]).
+/// duplicates and the contradictory `const` + `volatile` and
+/// `const` + `shared` combos are rejected (see
+/// [`BindingModifier::try_from_iter`]).
 fn parse_modified_binding(p: &mut Parser) -> Result<Statement, String> {
     let start_span = p.span();
     let mut collected: Vec<WireModifier> = Vec::new();
@@ -1447,13 +1448,24 @@ mod tests {
 
     #[test]
     fn parse_modifiers_in_any_order_yields_same_set() {
-        let m1 = cycle_modifier_of(&parse_str("const shared x := 42"));
-        let m2 = cycle_modifier_of(&parse_str("shared const x := 42"));
+        let m1 = cycle_modifier_of(&parse_str("shared volatile x := 42"));
+        let m2 = cycle_modifier_of(&parse_str("volatile shared x := 42"));
         assert_eq!(
             m1, m2,
-            "ordering shouldn't matter: `const shared` and `shared const` collapse to the same set"
+            "ordering shouldn't matter: `shared volatile` and `volatile shared` collapse to the same set"
         );
-        assert!(m1.is_const() && m1.is_shared());
+        assert!(m1.is_shared() && m1.is_volatile());
+    }
+
+    #[test]
+    fn parse_rejects_shared_const_in_either_order() {
+        for src in ["const shared x := 42", "shared const x := 42"] {
+            let err = parse_str_err(src);
+            assert!(
+                err.contains("const") && err.contains("shared"),
+                "error should name the conflicting keywords: {err}"
+            );
+        }
     }
 
     #[test]

@@ -575,8 +575,9 @@ impl Externs {
     }
 
     /// Record the const bindings a kernel initializes.
-    /// Marks each const's slot and fallback input as read only by
-    /// initialization.
+    /// Marks each const's slot and fallback input, and each `shared`
+    /// register initialization seeds, as not counted unset: only
+    /// initialization gives them their value.
     pub(crate) fn set_const_inits(&mut self, inits: &[crate::kernel::ConstInit]) {
         self.scope.const_inits = inits.to_vec();
         for s in &mut self.slots {
@@ -773,7 +774,8 @@ impl Externs {
     /// no value, for a native kernel's refusal. A const's slot and its
     /// fallback input are not among them: only initialization reads or
     /// writes those, from Rust, and every reader of the const reads the
-    /// passthrough of its slot once it is set.
+    /// passthrough of its slot once it is set. Nor is a `shared` register
+    /// with a computed start, which initialization seeds.
     #[cfg(feature = "jit")]
     pub(crate) fn first_unset(&self) -> Option<(&str, PortType)> {
         self.slots

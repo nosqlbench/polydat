@@ -463,12 +463,20 @@ pub trait Kernel: Send + Sync + internals::KernelInternals {
     /// copied from the enclosing scope, so the outer binding stays
     /// visible. A const whose expression fails makes initialization
     /// fail, naming the const; a slow one makes initialization slow.
+    ///
+    /// A `shared` register with a computed starting value is seeded here
+    /// too, in the same order, while nothing has written the register: a
+    /// kernel attached to a register another scope declared, and one
+    /// initialized again, leave it as it is.
     fn init(&mut self) -> Result<(), crate::KernelError> {
         for i in 0..self.const_inits().len() {
-            let (source, slot, fallback) = {
+            let (source, slot, fallback, register) = {
                 let c = &self.const_inits()[i];
-                (c.source_index, c.slot_index, c.fallback_index)
+                (c.source_index, c.slot_index, c.fallback_index, c.register)
             };
+            if register && register_written(self, i) {
+                continue;
+            }
             let own =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.pull_at(source)))
                     .map_err(|payload| crate::KernelError::ConstInit {
@@ -695,6 +703,22 @@ pub trait Kernel: Send + Sync + internals::KernelInternals {
     /// the same program compiled twice included. What a host seals a
     /// plan of pre-resolved indices against.
     fn program_id(&self) -> ProgramId;
+}
+
+/// Whether the `shared` register the `index`th init seeds has been
+/// written: its cell has a revision, from the scope that declared it or
+/// from any writer since. A register held in no cell is never counted as
+/// written.
+fn register_written<K: Kernel + ?Sized>(kernel: &K, index: usize) -> bool {
+    let name = &kernel.const_inits()[index].slot;
+    kernel.shared_cells().iter().any(|entry| {
+        &entry.name == name
+            && entry
+                .cell
+                .revision
+                .load(std::sync::atomic::Ordering::Acquire)
+                > 0
+    })
 }
 
 /// The identity of a compiled program; see [`Kernel::program_id`].

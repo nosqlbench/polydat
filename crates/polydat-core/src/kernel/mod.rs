@@ -139,6 +139,12 @@ pub struct ConstInit {
     /// The input holding the enclosing scope's value, when the const's
     /// expression references names.
     pub fallback: Option<String>,
+    /// Whether this is the computed starting value of a `shared`
+    /// register rather than a const: `slot` is the register's own input,
+    /// and initialization writes it only while nothing has written the
+    /// register, so a scope attached to a register another scope
+    /// declared never seeds it again.
+    pub register: bool,
     /// `slot`'s index among the kernel's inputs.
     pub(crate) slot_index: usize,
     /// `source`'s index among the kernel's outputs.

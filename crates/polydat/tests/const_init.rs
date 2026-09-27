@@ -130,6 +130,78 @@ fn a_programmatically_marked_const_is_captured_at_init() {
     }
 }
 
+/// `shared x := <expr>` starts the register at the expression's value,
+/// taken when the declaring kernel is initialized, on every engine. A
+/// write to the register is what readers see, and initializing again
+/// does not seed it a second time.
+#[test]
+fn a_shared_register_takes_a_computed_start_at_init() {
+    let src =
+        "input cycle: u64\nextern base: u64 = 20\nshared rolling := base * 2\nout := rolling + 1\n";
+    for engine in every_engine() {
+        let mut k = compile_polydat_with(src, engine).unwrap_or_else(|e| panic!("{engine}: {e}"));
+        k.set_inputs(&[0]);
+        assert_eq!(k.pull("rolling"), Value::U64(40), "{engine}");
+        assert_eq!(k.pull("out"), Value::U64(41), "{engine}");
+        k.set_input("rolling", Value::U64(7)).unwrap();
+        assert_eq!(k.pull("out"), Value::U64(8), "{engine}");
+        k.set_input("base", Value::U64(5)).unwrap();
+        k.init().unwrap();
+        assert_eq!(
+            k.pull("rolling"),
+            Value::U64(7),
+            "{engine}: a written register is not seeded again"
+        );
+    }
+}
+
+/// A child that declares the same `shared` binding and is attached to
+/// its parent's register never seeds it: it reads the parent's start,
+/// and a write on either side is what both read.
+#[test]
+fn a_child_attached_to_a_register_does_not_seed_it() {
+    let parent_src = "input cycle: u64\nextern base: u64 = 20\nshared rolling := base * 2\n";
+    let child_src = "input cycle: u64\nextern base: u64 = 1\nshared rolling := base + 1000\nseen := rolling + 0\n";
+    for engine in every_engine() {
+        let mut parent =
+            compile_polydat_with(parent_src, engine).unwrap_or_else(|e| panic!("{engine}: {e}"));
+        let child_program = compile_polydat_with(child_src, engine)
+            .unwrap_or_else(|e| panic!("{engine}: {e}"))
+            .into_program();
+        let mut child = polydat::kernel::bind_under(parent.as_ref(), child_program, &[])
+            .unwrap_or_else(|e| panic!("{engine}: {e}"));
+        child.set_inputs(&[0]);
+        assert_eq!(
+            child.pull("seen"),
+            Value::U64(40),
+            "{engine}: the parent's start, not the child's"
+        );
+        child.set_input("rolling", Value::U64(3)).unwrap();
+        assert_eq!(parent.pull("rolling"), Value::U64(3), "{engine}");
+        child.init().unwrap();
+        assert_eq!(child.pull("seen"), Value::U64(3), "{engine}");
+    }
+}
+
+/// `shared const` is refused: a value fixed for the kernel's life cannot
+/// also be a register other scopes write.
+#[test]
+fn shared_const_is_refused() {
+    for src in [
+        "shared const x := n + 1\nextern n: u64 = 1\n",
+        "const shared x := 1\n",
+    ] {
+        let err = compile_polydat_with(src, Engine::default())
+            .err()
+            .unwrap_or_else(|| panic!("`{src}` compiles"));
+        let text = err.to_string();
+        assert!(
+            text.contains("const") && text.contains("shared") && text.contains("register"),
+            "{text}"
+        );
+    }
+}
+
 /// Each `for` activation initializes its body, so a const over a tuple
 /// element holds that element's value.
 #[test]

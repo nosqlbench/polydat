@@ -297,17 +297,32 @@ fn shared_on_cycle_binding() {
 }
 
 #[test]
-fn shared_non_literal_rejected() {
+fn shared_computed_start_over_a_coordinate_rejected() {
+    // A computed starting value is taken once, at initialization, so it
+    // may not read a coordinate; one over an extern compiles.
     let src = r#"
         input cycle: u64
         shared counter := hash(cycle)
     "#;
-    let err = compile_polydat_interpreter(src).expect_err("non-literal shared const must error");
+    let err = compile_polydat_interpreter(src)
+        .expect_err("a starting value over a coordinate must error");
     assert!(
-        err.to_string().contains("shared binding 'counter'"),
+        err.to_string().contains("shared 'counter'")
+            && err.to_string().contains("coordinate 'cycle'"),
         "error: {err}"
     );
-    assert!(err.to_string().contains("literal"), "error: {err}");
+    compile_polydat_interpreter("extern n: u64 = 3\nshared counter := hash(n)\n")
+        .expect("a starting value over an extern compiles");
+}
+
+#[test]
+fn shared_const_rejected() {
+    let err = compile_polydat_interpreter("input cycle: u64\nconst shared counter := 0\n")
+        .expect_err("`const shared` must error");
+    assert!(
+        err.to_string().contains("const") && err.to_string().contains("shared"),
+        "error: {err}"
+    );
 }
 
 #[test]
