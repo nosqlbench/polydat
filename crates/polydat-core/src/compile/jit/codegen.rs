@@ -417,9 +417,10 @@ extern "C" fn jit_current_epoch_millis() -> u64 {
 // does not call `__register_frame`; teaching the system
 // unwinder about JIT frames needs either an upstream Cranelift
 // change or a personality-routine shim that's a project on its
-// own. We take the self-contained route instead: a setjmp
+// own. The self-contained route is used instead: a setjmp
 // sentinel installed by the Rust eval wrapper, and extern
-// helpers that `longjmp` back to it on violation.
+// helpers that `longjmp` back to it on violation
+// (jit_boundary.md §"The setjmp / longjmp workaround").
 //
 // The longjmp skips over the JIT frame entirely — no unwind,
 // no personality lookup, no catch-block walk. Control returns
@@ -427,8 +428,8 @@ extern "C" fn jit_current_epoch_millis() -> u64 {
 // thread-local and raises a normal Rust `panic!`. That panic
 // unwinds through the Rust caller's frames (which have proper
 // `rust_eh_personality` FDEs) and `catch_unwind` catches it
-// like any other panic. Fail-path callers no longer lose the
-// entire process to an abort.
+// like any other panic, so a failing call never aborts the
+// process.
 //
 // Safety
 //   - longjmp skips C-level destructors. The JIT code is pure
@@ -1554,7 +1555,7 @@ pub enum JitOp {
     /// with the configured predicate name — (ptr, len) into the
     /// node's meta const, (0, 0) for the default. Message parity
     /// with the interpreter's `is_positive({name}): …` is asserted
-    /// by the SRD-105 battery.
+    /// by the failure parity suite.
     IsPositiveCheck {
         /// Address of the predicate's name, or 0 for the default.
         name_ptr: u64,
@@ -1571,7 +1572,7 @@ pub enum JitOp {
     /// — (ptr, len) into the node's meta VecU64 const, (0, 0)
     /// when unavailable. Message parity with the interpreter's
     /// `is_one_of: … not in allowed set […]` is asserted by the
-    /// SRD-105 battery. Inline comparisons use the baked vector.
+    /// failure parity suite. Inline comparisons use the baked vector.
     IsOneOfCheck {
         /// The allow-list, baked into the comparisons.
         allowed: Vec<u64>,
@@ -1598,7 +1599,7 @@ pub enum JitOp {
     /// and demote as needed, integer lanes reduce from u64.
     RegSplat(u8),
 
-    // --- Comparisons & selections (SRD 110) ---
+    // --- Comparisons & selections ---
     /// Integer comparison: `output[0]` = if a `<cond>` b { 1 } else { 0 }
     U64Cmp(ir::condcodes::IntCC),
     /// Float comparison: `output[0]` = if a `<cond>` b { 1 } else { 0 }
@@ -1608,7 +1609,7 @@ pub enum JitOp {
     /// Conditional select for f64: `output[0]` = if cond != 0 { a } else { b }
     SelectF64,
 
-    // --- Type conversions & lattice adapters (SRD 110) ---
+    // --- Type conversions & lattice adapters ---
     /// Signed integer to float: `output[0]` = (`input[0]` as i64 as f64).to_bits()
     I64ToF64,
     /// Truthiness boolean coercion: `output[0]` = if `input[0]` != 0 { 1 } else { 0 }
@@ -1618,7 +1619,7 @@ pub enum JitOp {
     /// Constant f64: `output[0]` = val_bits
     ConstF64(u64),
 
-    // --- Interpolation & Hashing (SRD 110) ---
+    // --- Interpolation & Hashing ---
     /// Hash range: `output[0]` = if max == 0 { 0 } else { hash(`input[0]`) % max }
     HashRangeConst(u64),
     /// Hash interval: `output[0]` = min + (hash(`input[0]`) / MAX) * (max - min)
@@ -1628,7 +1629,7 @@ pub enum JitOp {
     /// Remap: `output[0]` = out_min + ((`input[0]` - in_min) / (in_max - in_min)) * (out_max - out_min)
     RemapConst(u64, u64, u64, u64),
 
-    // --- Context & Datetime (SRD 110) ---
+    // --- Context & Datetime ---
     /// Epoch offset: `output[0]` = `input[0]`.wrapping_add(base)
     EpochOffsetConst(u64),
     /// Epoch scale: `output[0]` = `input[0]`.wrapping_mul(factor)
@@ -1638,7 +1639,7 @@ pub enum JitOp {
     /// Wall clock millis
     CurrentEpochMillis,
 
-    // --- Coherent Noise (SRD 110) ---
+    // --- Coherent Noise ---
     /// `output[0] = jit_perlin_1d(input[0], perm, freq)`: (permutation table address, frequency bits).
     Perlin1dConst(u64, u64),
     /// `jit_perlin_2d` over two inputs: (permutation table address, frequency bits).
@@ -1650,7 +1651,7 @@ pub enum JitOp {
     /// `jit_fractal_noise_2d` over two inputs: (permutation table address, frequency bits, octaves).
     FractalNoise2dConst(u64, u64, u64),
 
-    // --- Variadics & wire arithmetic (SRD 110) ---
+    // --- Variadics & wire arithmetic ---
     /// Variadic sum across all inputs
     VariadicSum,
     /// Variadic product across all inputs
@@ -1670,7 +1671,7 @@ pub enum JitOp {
     /// Multiples at least: `output[0]` = if m == 0 { 0 } else { v.div_ceil(m) }
     MultiplesAtLeast,
 
-    // --- Probability & permutations (SRD 110) ---
+    // --- Probability & permutations ---
     /// Fair coin flip: `output[0]` = `input[0]` & 1
     FairCoin,
     /// Float blend with constant mix: `output[0]` = (fa * (1 - mix) + fb * mix).round() as u64
@@ -1941,7 +1942,7 @@ pub fn classify_node(node: &dyn PolydatNode) -> JitOp {
         "f64_div" => JitOp::F64Div,
         "f64_mod" => JitOp::F64Mod,
 
-        // ── Comparisons & Selections (SRD 110) ───────────────────
+        // ── Comparisons & Selections ─────────────────────────────
         "u64_eq" => JitOp::U64Cmp(ir::condcodes::IntCC::Equal),
         "u64_ne" => JitOp::U64Cmp(ir::condcodes::IntCC::NotEqual),
         "u64_lt" => JitOp::U64Cmp(ir::condcodes::IntCC::UnsignedLessThan),
@@ -1957,7 +1958,7 @@ pub fn classify_node(node: &dyn PolydatNode) -> JitOp {
         "select_u64" | "select" => JitOp::SelectU64,
         "select_f64" => JitOp::SelectF64,
 
-        // ── Wire Arithmetic & Multiples (SRD 110) ────────────────
+        // ── Wire Arithmetic & Multiples ──────────────────────────
         "div_wire" => JitOp::U64DivWire,
         "mod_wire" => JitOp::U64ModWire,
         "ceil_to_multiple" => JitOp::CeilToMultiple,
@@ -1966,13 +1967,13 @@ pub fn classify_node(node: &dyn PolydatNode) -> JitOp {
         "checked_sub" => JitOp::CheckedSub,
         "checked_mul" => JitOp::CheckedMul,
 
-        // ── Variadics (SRD 110) ──────────────────────────────────
+        // ── Variadics ────────────────────────────────────────────
         "sum" => JitOp::VariadicSum,
         "product" => JitOp::VariadicProduct,
         "min" => JitOp::VariadicMin,
         "max" => JitOp::VariadicMax,
 
-        // ── PRNG & Probability (SRD 110) ─────────────────────────
+        // ── PRNG & Probability ───────────────────────────────────
         "blend" => {
             // No range guard here: `mix` carries a declared
             // `RangeF64` constraint, so the factory refuses an
@@ -2129,7 +2130,7 @@ pub fn classify_node(node: &dyn PolydatNode) -> JitOp {
             }
         }
 
-        // ── Parameter helpers (SRD 12) ─────────────────────────
+        // ── Parameter helpers (library_catalog.md) ─────────────
         // `is_positive` / `in_range` are JIT-lowered inline: one
         // comparison on the happy path, an extern call on the
         // fail path (which panics). The pass-through is a plain
@@ -2350,7 +2351,7 @@ pub(crate) fn compile_jit_raw_with(
 }
 
 /// A compiled segment for an engine that owns its own buffer: the
-/// entry point and the module that keeps it alive (SRD-105 cones,
+/// entry point and the module that keeps it alive (interpreter cones,
 /// hybrid JIT segments).
 pub(crate) type JitSegmentCode = (NativeFn, super::kernels::JitCode);
 
@@ -2514,8 +2515,8 @@ fn compile_jit_module(
         "jit_current_epoch_millis",
         jit_current_epoch_millis as *const u8,
     );
-    // Parameter-helper predicates (SRD 12 §"Parameter resolution
-    // and validation"): happy path is inline, violation is an
+    // Parameter-helper predicates (library_catalog.md §"Parameter
+    // resolution and validation"): happy path is inline, violation is an
     // extern call that never returns.
     jit_builder.symbol("jit_is_positive_fail", jit_is_positive_fail as *const u8);
     jit_builder.symbol("jit_in_range_fail", jit_in_range_fail as *const u8);
@@ -3134,9 +3135,9 @@ fn compile_jit_module(
                 }
                 for &step_idx in members {
                     let (jit_op, input_slots, output_slots) = &steps[step_idx];
-                    // A7: name the step for the failure path. The store stays only
-                    // when the step calls a helper, the one way native code fails;
-                    // a step of inline arithmetic pays nothing.
+                    // Name the step for the failure path (engines.md §3.4). The
+                    // store stays only when the step calls a helper, the one way
+                    // native code fails; a step of inline arithmetic pays nothing.
                     let tracker_store = tracker.map(|t| {
                         let idx = builder.ins().iconst(types::I64, step_idx as i64);
                         let inst = store_slot(&mut builder, buffer_ptr, t, idx);

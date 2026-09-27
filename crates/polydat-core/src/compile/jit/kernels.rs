@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! JIT kernel types: structs and impls for all four kernel variants.
+//! JIT kernel types: the pure native kernels.
 //!
 //! `JitCore` holds the shared buffer, slot map, and module handle.
 //! The two kernel structs (`JitKernelRaw` and `JitKernelPushPull`)
@@ -93,7 +93,7 @@ pub(super) struct JitCore {
     pub(super) output_types: HashMap<String, crate::ast::PortType>,
     /// The extern inputs, written through at every set.
     pub(super) externs: crate::compile::externs::Externs,
-    /// The traversals the program declares (SRD 113), opened through the
+    /// The traversals the program declares (for_traversal.md), opened through the
     /// `Kernel` trait.
     pub(super) traversals: std::sync::Arc<[crate::dsl::traversal::Traversal]>,
     pub(super) _module: JitCode,
@@ -103,7 +103,7 @@ pub(super) struct JitCore {
     /// The coordinates set through the `Kernel` trait, pending
     /// evaluation.
     pub(super) drive: crate::compile::Drive,
-    /// Where each step came from, for the failure path (A7).
+    /// Where each step came from, for the failure path (engines.md §3.4).
     pub(super) sites: std::sync::Arc<crate::compile::Attribution>,
     /// The slot past the layout where native code names the step it
     /// is in before calling a helper; `u64::MAX` before any.
@@ -600,7 +600,7 @@ impl JitCore {
         Ok(self.externs.set_at(index, value, &mut self.buffer)?.0)
     }
 
-    /// Bind a `shared` binding to `cell` (engine parity, step 9). The
+    /// Bind a `shared` binding to `cell` (engines.md §3.6). The
     /// next pull or evaluation reads it.
     fn attach_cell(&mut self, name: &str, cell: crate::kernel::SharedCell) -> Result<(), String> {
         self.externs.attach_cell(name, cell)?;
@@ -628,7 +628,8 @@ impl JitCore {
         // native code names the step it is in before each helper call;
         // a failure before any names none. The capture guard is armed
         // for the run, so the helper's panic is recorded quietly and
-        // re-raised enriched, as the interpreter re-raises a node's (A7).
+        // re-raised enriched, as the interpreter re-raises a node's
+        // (engines.md §3.4).
         if !self.fallible {
             native();
         } else {
@@ -693,8 +694,8 @@ impl JitCore {
     /// Externs are not consulted: a compile-constant step is one no
     /// input reaches, extern inputs included, so a program whose
     /// externs are still unset folds its constants anyway. That is the
-    /// difference from [`Self::run`], which refuses an unset extern
-    /// because a real evaluation reads them.
+    /// difference from a pull or an evaluation, whose caller refuses an
+    /// unset extern the run reads before [`Self::run`] (engines.md §3.3).
     pub(super) fn fold_constants(
         &mut self,
         folded: &[(super::codegen::JitOp, Vec<usize>, Vec<usize>)],
@@ -801,7 +802,7 @@ macro_rules! jit_accessors {
             self.core.output_types = output_types;
         }
 
-        /// Where each step came from, for the failure path (A7).
+        /// Where each step came from, for the failure path (engines.md §3.4).
         pub(crate) fn set_attribution(
             &mut self,
             sites: std::sync::Arc<crate::compile::Attribution>,
