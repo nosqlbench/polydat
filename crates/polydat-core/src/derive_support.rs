@@ -5,7 +5,7 @@
 //! (`polydat-derive`) calls into for boxing / unboxing wire
 //! values.
 //!
-//! ## Canonical trait surface (SRD-80b)
+//! ## Canonical trait surface (library_catalog.md "Shapes")
 //!
 //! - [`Wire`] — `Sized + 'static` Rust-type ↔ [`Value`] bridge.
 //!   Owned types only; the macro recognises borrow shapes
@@ -21,8 +21,7 @@
 //! A `Const<T>` position is not a `Wire`: the macro classifies it
 //! syntactically into a `ConstShape` and emits the extraction from
 //! the `ConstArg` inline, so there is no trait for it to dispatch
-//! through. A `ConstSource` trait once carried that, and stayed here
-//! after the macro stopped emitting calls to it.
+//! through.
 //!
 //! ## Why the trait surface lives here
 //!
@@ -66,14 +65,14 @@ pub trait Wire: Sized + 'static {
     /// Static port type for the DSL type-checker.
     const PORT: PortType;
 
-    /// SRD-53 §"Source-string call-site sugar" — auto-resolver
+    /// Auto-resolver (library_catalog.md "Shapes", `Resolved<R, T>`)
     /// for `Str`-typed upstream wires feeding this slot. `None`
     /// (the default) disables auto-promotion; the workload must
     /// supply the wire's actual port type directly. Set via the
     /// [`Resolved<R, T>`] marker wrapper.
     const RESOLVER: Option<crate::dsl::registry::DefaultResolver> = None;
 
-    /// SRD-15 §"WireCost::Config" — cost class for this wire.
+    /// Cost class for this wire (library_catalog.md "Wire cost classes").
     /// Defaults to [`WireCost::Data`](crate::ast::WireCost::Data) (cheap per-cycle input).
     /// Set to [`WireCost::Config`](crate::ast::WireCost::Config) via the [`Config<T>`] marker
     /// wrapper to signal that the wire is rarely-changing and
@@ -111,10 +110,10 @@ impl Wire for u32 {
 
 impl Wire for i32 {
     const PORT: PortType = PortType::I32;
-    // Lenient extract: honest `Value::I64` (sign-extended I32
-    // storage convention) plus the legacy bit-stuffed `Value::U64`
-    // form during the alignment migration — same precedent as
-    // `Wire<bool>` accepting `U64(n != 0)`.
+    // Lenient extract: an honest `Value::I64` (sign-extended I32
+    // storage convention) and the bit-stuffed `Value::U64` form that
+    // `inject` writes — same precedent as `Wire<bool>` accepting
+    // `U64(n != 0)`.
     fn extract(v: &Value) -> Self {
         v.as_i64() as i32
     }
@@ -156,8 +155,8 @@ impl Wire for u16 {
 
 impl Wire for i8 {
     const PORT: PortType = PortType::I8;
-    // Lenient extract through as_i64 (honest I64 or legacy
-    // stuffed U64), narrowed by truncation — sign survives
+    // Lenient extract through as_i64 (honest I64 or bit-stuffed
+    // U64), narrowed by truncation — sign survives
     // because the storage convention is sign-extension.
     fn extract(v: &Value) -> Self {
         v.as_i64() as i8
@@ -299,7 +298,7 @@ impl Wire for bool {
 impl Wire for String {
     const PORT: PortType = PortType::Str;
     fn extract(v: &Value) -> Self {
-        // SRD-80b: panic on shape mismatch — the type-checker is
+        // Panic on shape mismatch — the type-checker is
         // responsible for routing well-typed values to each slot,
         // and a non-Str input here is a "type system was lied to"
         // bug, not a coercion opportunity. Nodes that want a
@@ -337,8 +336,7 @@ impl Wire for std::sync::Arc<str> {
 /// `Arc<dyn Any + Send + Sync>` — opaque Handle wire. The body
 /// receives the runtime-typed handle directly; downcast is the
 /// operator's responsibility. Use [`Resolved<R, T>`] when the
-/// node wants a typed Handle with SRD-53 source-string
-/// auto-promotion sugar; use this raw shape when the body
+/// node wants a typed Handle with source-string auto-promotion; use this raw shape when the body
 /// needs to handle multiple inner types via runtime dispatch.
 impl Wire for std::sync::Arc<dyn std::any::Any + Send + Sync> {
     const PORT: PortType = PortType::Handle;
@@ -471,7 +469,7 @@ impl_wire_vec!(half::f16, VecF16, VecF16);
 impl_wire_vec!(i16, VecI16, VecI16);
 impl_wire_vec!(i8, VecI8, VecI8);
 
-// ── Phase C combinators ────────────────────────────────────────
+// ── Combinators ────────────────────────────────────────────────
 
 /// None-aware wire combinator. Macro auto-emits
 /// `accepts_none_inputs() -> true` when any arg is `Option<_>`.
@@ -541,7 +539,7 @@ impl<T: ReflectedValue + Clone + 'static> Wire for Ext<T> {
 /// Marker wrapper for node return types whose output port
 /// COUNT is determined at construction time from a
 /// const-list arg's length, not at codegen time.
-/// SRD-80b shape extension covering nodes like `mixed_radix`
+/// This return shape (library_catalog.md "Shapes") covers nodes like `mixed_radix`
 /// that emit one output per radix where `radix` count is a
 /// workload-supplied list.
 ///
@@ -578,12 +576,11 @@ impl<T> std::ops::Deref for DynamicOutputs<T> {
 /// configuration input — expensive to change because the node
 /// keeps internal state (LUTs, alias tables, parsed specs)
 /// derived from it. The macro emits the matching slot with
-/// `Port::config()` (SRD 15 §"WireCost::Config") so the
+/// `Port::config()` (library_catalog.md "Wire cost classes") so the
 /// compiler warns on cycle-time binding.
 ///
-/// In-spirit replacement for a `#[wire_cost(Config)]` arg-level
-/// attribute — operator declares the cost intent via the type
-/// system. Body unwraps with `.0` or via `Deref`.
+/// The operator declares the cost intent through the type system
+/// rather than an arg-level attribute. Body unwraps with `.0` or via `Deref`.
 pub struct Config<T>(pub T);
 
 impl<T> std::ops::Deref for Config<T> {
@@ -605,10 +602,10 @@ impl<T: Wire> Wire for Config<T> {
     }
 }
 
-// ── Resolved<R, T> — Handle wire with SRD-53 auto-resolver ────
+// ── Resolved<R, T> — Handle wire with an auto-resolver ────────
 
-/// SRD-80b in-spirit replacement for the `default_resolver`
-/// attribute. The `R` parameter (a [`ResolverKind`] impl) carries
+/// A Handle wire that declares its default resolver through its
+/// type (library_catalog.md "Shapes"). The `R` parameter (a [`ResolverKind`] impl) carries
 /// the auto-resolver kind; the `T` parameter is the concrete
 /// `Handle`-inner type the body sees.
 ///
@@ -667,7 +664,7 @@ pub trait ResolverKind: 'static {
 }
 
 /// Splice `dataset_group_open(<source>)` upstream when the wire
-/// source is a `Str` (SRD-53 `DefaultResolver::Group`).
+/// source is a `Str` (`DefaultResolver::Group`).
 pub struct GroupResolver;
 impl ResolverKind for GroupResolver {
     const RESOLVER: crate::dsl::registry::DefaultResolver =
@@ -711,16 +708,12 @@ impl<R: ResolverKind, T: 'static + Send + Sync> Wire for Resolved<R, T> {
     }
 }
 
-// FromValue / IntoValue retired 2026-06-05 — the `#[polydat_node]`
-// macro now dispatches every owned type through `<T as Wire>::extract`
-// / `::inject` and emits direct `match`-on-`Value` extraction for
-// borrow shapes (`&str`, `&[u8]`, `&[T]`, `&serde_json::Value`).
-// Per SRD-80b Phase B; the old trait pair plus their borrow-impls'
-// `unsafe { transmute }` lifetime-extension hack are gone.
-//
-// [PLACEHOLDER_PHASE_B_DELETE]
+// The `#[polydat_node]` macro dispatches every owned type through
+// `<T as Wire>::extract` / `::inject` and emits direct
+// `match`-on-`Value` extraction for borrow shapes (`&str`, `&[u8]`,
+// `&[T]`, `&serde_json::Value`), with no lifetime transmute.
 
-/// SRD-80 PR B.5 — marker wrapper for const arguments in
+/// Marker wrapper for const arguments in
 /// `#[polydat_node]` function signatures.
 ///
 /// Use in arg position to signal that the value is captured at
@@ -774,7 +767,7 @@ impl<T> std::ops::DerefMut for Const<T> {
     }
 }
 
-/// SRD-80 PR B.6 — construction-time setup contract for nodes
+/// Construction-time setup contract for nodes
 /// that derive a pre-computed runtime state from their const
 /// args (e.g. `combinations` parsing a charset pattern into
 /// segments + modulus, `regex_match` compiling a pattern,
@@ -1015,10 +1008,10 @@ fn carrier_slot_bits(v: &Value) -> u64 {
     }
 }
 
-// SRD-80 PR B.2/B.3 — macro-generated nodes register through
-// the existing `NodeRegistration` inventory channel
-// (`polydat::dsl::registry::NodeRegistration`), the same
-// channel `register_nodes!` already uses. The proc-macro
+// Macro-generated nodes register through the `NodeRegistration`
+// inventory channel (`polydat::dsl::registry::NodeRegistration`,
+// library_catalog.md "Registration"), the same channel
+// `register_nodes!` uses. The proc-macro
 // emits a `NodeRegistration` per `#[polydat_node]` site, so
 // every consumer that already iterates the registry
 // (`registry()`, `lookup()`, the compile pipeline's
@@ -1113,10 +1106,10 @@ mod tests {
     /// type the language has: what a polymorphic node returns is what
     /// the next polymorphic node takes, on every compiled engine.
     ///
-    /// A register reaching a polymorphic node's input used to arrive as
-    /// its low limb typed `U64`, because the read had a `U64` fallback
-    /// arm and the limb reassembly lived only in the output read the
-    /// host makes. The fuzzer found it on `log_warn(reg_splat_f64(..))`.
+    /// A register reaching a polymorphic node's input arrives whole,
+    /// with its limbs reassembled as the host's output read reassembles
+    /// them, not as its low limb typed `U64`
+    /// (`log_warn(reg_splat_f64(..))` is the case).
     #[test]
     fn every_port_type_reads_back_what_was_written() {
         for &ty in PortType::ALL {

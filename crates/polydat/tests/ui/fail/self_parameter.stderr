@@ -1,4 +1,4 @@
-error: #[polydat_node] does not support `self` parameters yet; state-bearing nodes are deferred to a later PR.
+error: #[polydat_node] does not support `self` parameters; a node keeps state through `state = <path>` or a `#[poly_const]` setup argument.
  --> tests/ui/fail/self_parameter.rs:2:6
   |
 2 | fn f(&self, a: u64) -> u64 { a }

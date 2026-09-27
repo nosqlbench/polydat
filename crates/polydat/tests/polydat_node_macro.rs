@@ -762,7 +762,7 @@ fn macro_tuple_return_jit_round_trip() {
     let node = MacroPilotDivmod::default();
     let compiled = node
         .compiled_u64()
-        .expect("u64×u64→(u64,u64) is JIT-eligible after PR B.15");
+        .expect("u64×u64→(u64,u64) is JIT-eligible");
     let mut out = [0u64; 2];
     compiled(&[17, 5], &mut out);
     assert_eq!(out[0], 3);

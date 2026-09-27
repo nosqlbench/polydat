@@ -230,8 +230,8 @@ pub mod tile {
 pub mod resource;
 
 // Proc-macro trait surface (library_catalog.md, "Registration"). The `polydat-derive`
-// crate emits paths like `polydat::derive_support::FromValue` /
-// `IntoValue` that resolve here.
+// crate emits paths like `polydat::derive_support::Wire` /
+// `Const` that resolve here.
 pub mod derive_support;
 
 // `Const<T>` wrapper re-exported at crate root

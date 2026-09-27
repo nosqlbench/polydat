@@ -47,7 +47,7 @@ use std::sync::Arc;
 //   - U64/U32/I64/I32 share `Value::U64` storage. Narrow ints
 //     occupy the low bits with sign extension for signed types.
 //   - F64/F32 share `Value::U64` storage via `f32::to_bits()`;
-//     the macro-generated `IntoValue for f32` performs the
+//     `<f32 as Wire>::inject` performs the
 //     bit-stuffing.
 //
 // Range-check panics keep silent truncation/saturation out of
@@ -906,7 +906,7 @@ mod tests {
         }
     }
 
-    // Bit-stuffed-f32 helper: macro `IntoValue for f32` produces
+    // Bit-stuffed-f32 helper: `<f32 as Wire>::inject` produces
     // `Value::U64(self.to_bits() as u64)`. The polyfill family's
     // F32-targeting nodes all return through this convention, so
     // the test expectations construct the same shape.
