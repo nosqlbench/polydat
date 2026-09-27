@@ -60,6 +60,9 @@ The release makes three things true that a host builds on:
 | `dsl::factory::compile_ctx` (`current_binding`, `scoped_binding`, `BindingScope`) is removed | a factory that read the binding it was built for | `ctx.binding()` on the `BuildContext` it receives, which is correct under nesting and across threads |
 | `RESOURCE_ACCESSOR` and `resource_lookup(key)` are removed | a host that installed a process-wide accessor, and a node that looked resources up | install the accessor per kernel tree with `CompileOptions::resources` or `kernel.resources().install(acc)`; a node keeps `ctx.resources().clone()` and calls `.lookup(key)` when it evaluates |
 | `CompileOptions` gains the field `resources: Option<ResourceScope>` | a `CompileOptions { … }` literal that names every field | add `resources: None`, or build from `CompileOptions::default()` |
+| `NodeFactory::build` takes `(&self, ctx: &BuildContext, name, wires: &[WireRef], wire_types: &[PortType], consts: &[ConstArg])`, and `signatures` returns `&[FuncSig]` | a host `NodeFactory` implementation | update both methods; the compiler now builds every node through its factory, so `build` is called ([library_catalog.md](../design/library_catalog.md), "Host-registered nodes") |
+| `FactoryArg` is removed | a factory reading `FactoryArg` | use `ConstArg` |
+| `PolydatRuntime::register_factory`, `build_from_factory`, and `factory_count` are removed | a host that registered a factory at run time | link it with `inventory::submit! { FactoryRegistration { factory: &MY_FACTORY } }`; list factories with `registry::factories()` |
 | `ScopedExpr::set` returns `Result<&mut Self, WriteError>` | a chained or ignored call | handle the error: an unknown name, a coordinate, or a value that does not convert is now refused as `set_input` refuses it ([polydat_grammar_programmatic.md](../design/polydat_grammar_programmatic.md) §11) |
 | `#[polydat_node]` refuses a signature that mixes a const list (`Const<Vec<C>>`) with a wire variadic (`&[T]`), and an unknown `from = (…)` setup source | a host node written that way, which the macro accepted before | split it into two nodes, or pass the constants as individual `Const` arguments ([library_catalog.md](../design/library_catalog.md), "Shapes") |
 
@@ -374,8 +377,18 @@ a rule the specifications now state and every engine follows.
 - **`canonical_hash` values change.** The hash is taken before any
   engine folds or fuses, so one program hashes to one value on all four
   engines, and it now covers extern defaults and `for` bodies, which it
-  missed. A checkpoint keyed by a 0.5 hash does not match; re-key it
-  ([scope_model.md](../design/scope_model.md) §8).
+  missed. A child's inherited outputs count on every engine, and a
+  kernel built from a graph without the DSL hashes like the same program
+  built from source. A checkpoint keyed by a 0.5 hash does not match;
+  re-key it ([scope_model.md](../design/scope_model.md) §8).
+- **`is_subset_of` ignores the outputs that re-export inputs.** The
+  compiler exposes every input as an output, so a child built from
+  source with inputs was never a subset of its parent; those outputs no
+  longer count, and such a child is flattenable when it adds nothing
+  else ([scope_model.md](../design/scope_model.md) §8.3).
+- **A factory that lists a name must build it.** A registration whose
+  builder returns `None` for a non-variadic name it lists is an error;
+  lookup used to fall through to later registrations.
 
 ### Release requirements
 
