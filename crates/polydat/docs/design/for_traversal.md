@@ -177,10 +177,13 @@ traversal opens, even where the body declares the same name. The tuple
 set is materialized at open, so a later change to a referenced wire does
 not affect a traversal that is already open; the next open reads the new
 values. A name the enclosing scope has no wire for, and the
-comprehension does not bind, is a compile error
-([Comprehension Forms](comprehension_forms.md) §5 V3). The producer's
-`StreamerValue` records the enclosing names its comprehension reads
-(`outer`); a stream has none of them, so `coordinate_stream` refuses the
+comprehension does not bind, is bound nowhere
+([Comprehension Forms](comprehension_forms.md) §5 V3): a compile error
+under `pragma strict` in the scope the statement is written in, and
+otherwise a warning on the compile ledger, with the name read as None
+when the traversal opens. The producer's
+`StreamerValue` records the enclosing names its comprehension reads and
+the scope has (`outer`); a stream has none of them, so `coordinate_stream` refuses the
 comprehension, naming them.
 
 ### 3.2 Traversal
@@ -464,8 +467,10 @@ body once per tuple and once per cycle.
   moment. First it takes a **snapshot**, a copy of the current value of
   every cascaded wire and every wire a source or predicate reads and
   the comprehension does not bind, read through the trait (`pull` for a
-  wire the parent computes, `input_value` for an input or extern); the
-  compile refused any such name the parent has no wire for
+  wire the parent computes, `input_value` for an input or extern). A
+  name the parent has no wire for is bound nowhere, which the compile
+  refused under `pragma strict` and warned about otherwise; it is not
+  captured, and reads None
   ([Comprehension Forms](comprehension_forms.md) §5 V3). Then it
   evaluates the comprehension against that snapshot alone, through the
   evaluator's `Lookup` view: the captured names first, then the

@@ -272,6 +272,22 @@ impl SourceEval for Source {
                     ),
                     None => return Err(EvalError::NeedsContext),
                 };
+                // A source over None yields nothing (none_semantics.md
+                // Rule 1, comprehension_forms.md §5 V3): a name it reads
+                // that nothing binds, or that is bound to None, reads None.
+                let reads_none = self
+                    .referenced_names()
+                    .iter()
+                    .any(|name| matches!(scope.lookup(name), None | Some(Value::None)));
+                if reads_none {
+                    return Ok(EvaluatedSource {
+                        values: Vec::new(),
+                        cardinality: 0,
+                        index_fn: IndexFn::Lattice {
+                            axis_sizes: vec![0],
+                        },
+                    });
+                }
                 let vals = crate::iteration::comprehension::eval::evaluate_spec(&spec_text, &scope)
                     .map_err(|e| EvalError::EvalFailed {
                         var: var_name.to_string(),

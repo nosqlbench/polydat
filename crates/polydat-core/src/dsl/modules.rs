@@ -371,10 +371,57 @@ impl Compiler {
                     })?;
                     self.pending_events
                         .extend(super::traversal::warning_events(&rewritten, &warnings));
+                    // V3 (comprehension_forms.md §5) under the module's
+                    // pragmas: the module's scope has its inputs, as the
+                    // wires the caller passes for them, and its own
+                    // bindings, under the module prefix.
+                    let internal: Vec<String> = module_stmts
+                        .iter()
+                        .flat_map(|s| match s {
+                            Statement::Binding(b) => b.targets.clone(),
+                            Statement::Tile(t) => vec![t.name.clone()],
+                            _ => Vec::new(),
+                        })
+                        .collect();
+                    let wires: Vec<String> = module_inputs
+                        .iter()
+                        .filter_map(|input| match arg_map.get(input) {
+                            Some(
+                                Arg::Positional(Expr::Ident(w, _))
+                                | Arg::Named(_, Expr::Ident(w, _)),
+                            ) => Some(w.clone()),
+                            _ => None,
+                        })
+                        .collect();
+                    let has = |n: &str| {
+                        module_inputs.iter().any(|i| i == n)
+                            || wires.iter().any(|w| w == n)
+                            || n.strip_prefix(prefix.as_str())
+                                .is_some_and(|rest| internal.iter().any(|t| t == rest))
+                    };
+                    let reads = crate::iteration::comprehension::unresolved_names(
+                        &comprehension,
+                        crate::iteration::comprehension::Surface::Traversal(&has),
+                    );
+                    let warning = self
+                        .check_statement_names(
+                            &format!("{} := for {}", b.targets.join(","), rewritten.to_text()),
+                            b.span,
+                            reads,
+                        )
+                        .map_err(|e| {
+                            format!(
+                                "producer '{}' inside module '{}': {e}",
+                                b.targets.join(","),
+                                func_name
+                            )
+                        })?;
+                    self.pending_events.extend(warning);
                     let name = format!("{prefix}{}", b.targets.join(","));
                     let value = crate::iteration::comprehension::StreamerValue::in_scope(
                         rewritten.to_text(),
                         comprehension.clone(),
+                        &has,
                     );
                     let call = Expr::Call(CallExpr {
                         func: "streamer".into(),

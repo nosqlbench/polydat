@@ -36,8 +36,9 @@ use polydat::iteration::comprehension::runtime::{
 use polydat::iteration::comprehension::source::{LiteralValue, Source};
 use polydat::iteration::comprehension::strategies::Tuple;
 use polydat::iteration::comprehension::strategy::{StrategyName, ZipMode};
+use polydat::iteration::comprehension::surfaces::CompiledComprehension;
 use polydat::iteration::comprehension::validate::{
-    Mode, Surface, ValidationError, check_names, validate,
+    Mode, Surface, ValidationError, ValidationWarning, check_names, unresolved_names, validate,
 };
 
 fn scope() -> polydat::kernel::PolydatKernel {
@@ -121,22 +122,41 @@ fn compare(ast: &Comprehension, scope: &polydat::kernel::PolydatKernel) -> Compa
         &polydat::kernel::interp::NoScope::new(),
     );
     // V3 (§5): a stream supplies no name and a traversal the names of
-    // its scope, so the stream refuses every shape the traversal's check
-    // refuses, and a shape reading a name it does not bind compiles to no
-    // stream, with V3.
-    let traversal_names = check_names(&flat, Surface::Traversal(&in_scope));
-    if check_names(&flat, Surface::Stream).is_err() {
+    // its scope. A shape that reads a name the stream does not bind is
+    // refused by a strict stream compile, and a permissive one that
+    // compiles it warns and reads the name as None, as the traversal
+    // does a name its scope does not have.
+    let unresolved = unresolved_names(&flat, Surface::Stream);
+    if !unresolved.is_empty() {
         assert!(
             matches!(
-                polydat::iteration::comprehension::surfaces::compile(ast),
+                CompiledComprehension::from_ast_with(ast, Mode::Strict),
                 Err(ValidationError::V3UnresolvedNames { .. })
             ),
-            "the stream compiles {ast:?}, which reads a name it does not bind"
+            "the strict stream compiles {ast:?}, which reads a name it does not bind"
         );
+        if let Ok((_, report)) = CompiledComprehension::from_ast_with(ast, Mode::Permissive) {
+            assert!(
+                matches!(
+                    report.warnings.first(),
+                    Some(ValidationWarning::UnresolvedNames { reads }) if *reads == unresolved
+                ),
+                "the stream compiles {ast:?} without its V3 warning"
+            );
+        }
     }
-    if traversal_names.is_err() {
-        assert!(streamed(ast).is_none(), "{ast:?}");
-    }
+    // The stream is held to the traversal in its own scope, which has no
+    // name: where the shape reads a name the traversal's scope has, the
+    // stream reads it as None.
+    let no_scope = polydat::kernel::interp::NoScope::new();
+    let reads_scope = unresolved.iter().any(|r| !r.bare && in_scope(&r.name));
+    let stream_scope: &dyn polydat::kernel::interp::Lookup =
+        if reads_scope { &no_scope } else { scope };
+    let stream_outcome = if reads_scope {
+        evaluate_indexed(ast, &no_scope).map(|t| t.to_vec())
+    } else {
+        outcome.clone()
+    };
     if validate(&flat, Mode::Permissive).is_ok() {
         let rewritten = polydat::iteration::comprehension::optimize::optimize(flat.clone());
         if let Err(e) = validate(&rewritten, Mode::Permissive) {
@@ -158,15 +178,15 @@ fn compare(ast: &Comprehension, scope: &polydat::kernel::PolydatKernel) -> Compa
     // traversal ends as the traversal of the shape as written does, and
     // the stream is held to it.
     let optimized_ast = polydat::iteration::comprehension::optimize::optimize(ast.clone());
-    let optimized = evaluate_indexed(&optimized_ast, scope).map(|t| t.to_vec());
+    let optimized = evaluate_indexed(&optimized_ast, stream_scope).map(|t| t.to_vec());
     assert!(
-        same_outcome(&outcome, &optimized),
+        same_outcome(&stream_outcome, &optimized),
         "the optimizer's rewrite changes the outcome of {ast:?}:\n  as written: {:?}\n  \
          optimized: {:?}",
-        outcome.as_ref().map(Vec::len),
+        stream_outcome.as_ref().map(Vec::len),
         optimized.as_ref().map(Vec::len)
     );
-    match &outcome {
+    match &stream_outcome {
         Ok(expected) => {
             assert_counts(&optimized_ast, expected.len());
             // On a shape that validates, which the streaming surface
@@ -207,7 +227,7 @@ fn compare(ast: &Comprehension, scope: &polydat::kernel::PolydatKernel) -> Compa
                 } else {
                     let another_fault = match error {
                         RuntimeError::ZipLengthMismatch { .. } => strict_zips(ast) > 0,
-                        _ => evaluate_indexed(&truncated(ast), scope)
+                        _ => evaluate_indexed(&truncated(ast), stream_scope)
                             .err()
                             .is_some_and(|e| std::mem::discriminant(&e) == kind),
                     };
@@ -1009,6 +1029,15 @@ impl Shapes {
                     .map(|i| LiteralValue::String(format!("s{i}")))
                     .collect(),
             },
+            2 if self.rng.coin(20) => {
+                // A source over a name nothing binds, which reads None
+                // and yields nothing (§5 V3).
+                self.outer += 1;
+                Source::Generator {
+                    expr: "0..{zz}".into(),
+                    cardinality_hint: None,
+                }
+            }
             2 if !bound.is_empty() => {
                 // A source over an earlier axis: the product depends
                 // on the tuple before it.
@@ -1223,7 +1252,8 @@ fn generated_shapes_index_as_they_materialize() {
     }
     eprintln!(
         "{compared} shapes compared, {tuples} tuples, {streamed_tuples} through streams, \
-         {chained} yielding through order chains, {outer} predicates reading outer names"
+         {chained} yielding through order chains, {outer} predicates and sources reading outer \
+         names"
     );
     assert!(compared > cases / 2, "only {compared} of {cases} compared");
     assert!(tuples > 0, "no generated shape produced a tuple");
@@ -1913,21 +1943,22 @@ fn every_strategy_orders_every_order() {
 /// comprehension where it is read or supplied by the surface. A stream
 /// supplies nothing; a `for` traversal supplies the names of the scope it
 /// opens in, and captures them when it opens. A name resolved nowhere is
-/// V3 on both; a name only the enclosing scope has is the stream's
-/// `ContextRequired` for a source and `PredicateContextRequired` for a
-/// predicate.
+/// V3 on both: refused under strictness, and otherwise a warning, with
+/// the name read as None, alike on the stream and the traversal. A name
+/// only the enclosing scope has is the stream's `ContextRequired` for a
+/// source and `PredicateContextRequired` for a predicate.
 #[test]
 fn names_resolve_in_the_comprehension_or_the_surface() {
     use polydat::iteration::comprehension::surfaces::compile;
     let scope = scope();
-    let compile_program = |text: &str| {
+    let compile_program = |pragma: &str, text: &str| {
         polydat::dsl::compile_polydat_interpreter(&format!(
-            "input cycle: u64\nsweep := for {text}\nfor {text} {{\n    s := u64_add(k, 1)\n}}\n"
+            "{pragma}input cycle: u64\nsweep := for {text}\nfor {text} {{\n    s := u64_add(k, 1)\n}}\n"
         ))
     };
-    let compile_traversal = |text: &str| {
+    let compile_traversal = |pragma: &str, text: &str| {
         polydat::dsl::compile_polydat_interpreter(&format!(
-            "input cycle: u64\nfor {text} {{\n    s := u64_add(k, 1)\n}}\n"
+            "{pragma}input cycle: u64\nfor {text} {{\n    s := u64_add(k, 1)\n}}\n"
         ))
     };
     let parse = |text: &str| {
@@ -1935,7 +1966,8 @@ fn names_resolve_in_the_comprehension_or_the_surface() {
     };
 
     // Resolved nowhere: V3 on every surface, naming the name and where
-    // it is read.
+    // it is read. Strict surfaces refuse it; lax ones read it as None,
+    // and the stream and the traversal dispense the same tuples.
     for (text, name, site) in [
         ("k in 1..5 where {k} > {zz}", "zz", "predicate `{k} > {zz}`"),
         ("k in pow2({zz})", "zz", "clause 'k'"),
@@ -1947,7 +1979,7 @@ fn names_resolve_in_the_comprehension_or_the_surface() {
         for err in [
             check_names(&ast, Surface::Stream).unwrap_err(),
             check_names(&ast, Surface::Traversal(&in_scope)).unwrap_err(),
-            compile(&ast).unwrap_err(),
+            CompiledComprehension::from_ast_with(&ast, Mode::Strict).unwrap_err(),
         ] {
             assert!(
                 matches!(&err, ValidationError::V3UnresolvedNames { reads }
@@ -1956,19 +1988,45 @@ fn names_resolve_in_the_comprehension_or_the_surface() {
             );
             assert!(err.to_string().contains(site), "{text}: {err}");
         }
-        for program in [compile_traversal(text), compile_program(text)] {
+        for program in [
+            compile_traversal("pragma strict\n", text),
+            compile_program("pragma strict\n", text),
+        ] {
             let Err(err) = program else {
-                panic!("{text} compiles")
+                panic!("{text} compiles under pragma strict")
             };
             let err = err.to_string();
             assert!(err.contains("V3:"), "{text}: {err}");
             assert!(err.contains(&format!("`{name}`")), "{text}: {err}");
         }
+        for program in [compile_traversal("", text), compile_program("", text)] {
+            let kernel = program.unwrap_or_else(|e| panic!("{text}: {e}"));
+            let warnings = kernel.program().ledger().unresolved_names();
+            assert!(
+                warnings
+                    .iter()
+                    .all(|w| w.reads.iter().any(|r| r.name == name)),
+                "{text}: {warnings:?}"
+            );
+        }
+        let (_, report) = CompiledComprehension::from_ast_with(&ast, Mode::Permissive)
+            .unwrap_or_else(|e| panic!("{text}: {e}"));
+        assert!(
+            matches!(report.warnings.first(),
+                Some(ValidationWarning::UnresolvedNames { reads })
+                    if reads.iter().any(|r| r.name == name)),
+            "{text}"
+        );
+        assert!(
+            compare(&ast, &scope).streamed,
+            "{text} does not stream outside strictness"
+        );
     }
 
     // Resolved in the scope: the traversal captures the name when it
-    // opens; a stream of the producer's wire refuses it, and the same
-    // comprehension compiled with no scope resolves it nowhere.
+    // opens, and a stream of the producer's wire refuses it. The same
+    // comprehension compiled with no scope resolves it nowhere and reads
+    // it as None.
     for (text, body, expected, predicate) in [
         (
             "k in 1..6 where {k} > {cycle}",
@@ -1986,9 +2044,10 @@ fn names_resolve_in_the_comprehension_or_the_surface() {
         let ast = parse(text);
         check_names(&ast, Surface::Traversal(&in_scope)).unwrap();
         assert!(matches!(
-            compile(&ast),
+            CompiledComprehension::from_ast_with(&ast, Mode::Strict),
             Err(ValidationError::V3UnresolvedNames { .. })
         ));
+        assert_eq!(compile(&ast).unwrap().coordinate_stream().count(), 0);
         let mut kernel = polydat::dsl::compile_polydat_interpreter(&format!(
             "input cycle: u64\nsweep := for {text}\nfor {text} {{\n    {body}\n}}\n"
         ))

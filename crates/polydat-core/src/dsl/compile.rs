@@ -1382,6 +1382,66 @@ impl Compiler {
         }
     }
 
+    /// V3 at a comprehension statement written in this compiler's scope
+    /// (comprehension_forms.md §5): `reads` are the names its
+    /// comprehension reads that nothing binds. Under `pragma strict` in
+    /// this scope they are the statement's error. Outside it the
+    /// statement compiles: the names are recorded on the tree's ledger
+    /// ([`UnresolvedNameWarning`](crate::kernel::UnresolvedNameWarning)),
+    /// the returned event carries them to the compile event log, and each
+    /// reads None when the comprehension is evaluated.
+    pub(super) fn check_statement_names(
+        &self,
+        statement: &str,
+        span: super::lexer::Span,
+        reads: Vec<crate::iteration::comprehension::NameRead>,
+    ) -> Result<Option<super::events::CompileEvent>, String> {
+        if reads.is_empty() {
+            return Ok(None);
+        }
+        if self.pragmas.strict_names() {
+            return Err(format!(
+                "`{statement}` at line {}, col {}: {}",
+                span.line,
+                span.col,
+                crate::iteration::comprehension::ValidationError::V3UnresolvedNames { reads }
+            ));
+        }
+        let warning = crate::kernel::UnresolvedNameWarning {
+            context: self.context_label.clone(),
+            statement: statement.to_string(),
+            line: span.line,
+            col: span.col,
+            reads,
+        };
+        let event = super::events::CompileEvent::Warning {
+            message: warning.to_string(),
+        };
+        self.ledger.record_unresolved_names(warning);
+        Ok(Some(event))
+    }
+
+    /// A compiler with this one's settings and nothing compiled: the
+    /// state a compile of this scope starts from.
+    pub(super) fn fresh_like(&self) -> Compiler {
+        let mut fresh = Compiler::with_lib_paths(
+            self.source_dir.clone(),
+            self.polydat_lib_paths.clone(),
+            self.strict,
+        );
+        fresh.module_cache = self.module_cache.clone();
+        fresh.source_text = self.source_text.clone();
+        fresh.context_label = self.context_label.clone();
+        fresh.cursor_limit = self.cursor_limit;
+        fresh.input_variance = self.input_variance;
+        fresh.inferred_externs = self.inferred_externs.clone();
+        fresh.pragmas = self.pragmas.clone();
+        fresh.resources = self.resources.clone();
+        fresh.ledger = self.ledger.clone();
+        fresh.template = self.template;
+        fresh
+    }
+
     /// The scope a context-free source evaluates in during this
     /// compile (comprehension_forms.md §10.7.0): no name resolves, and
     /// what has to compile is charged to the program tree's ledger.
@@ -1954,18 +2014,13 @@ impl Compiler {
                 .extend(warning_events(&f.source, &warnings));
             // V3 (comprehension_forms.md §5): the traversal supplies the
             // names of the scope it opens in, this program's.
-            crate::iteration::comprehension::check_names(
+            let reads = crate::iteration::comprehension::unresolved_names(
                 &comprehension,
                 crate::iteration::comprehension::Surface::Traversal(&|n| type_of(n).is_some()),
-            )
-            .map_err(|e| {
-                format!(
-                    "`for {}` at line {}, col {}: {e}",
-                    f.source.to_text(),
-                    f.span.line,
-                    f.span.col
-                )
-            })?;
+            );
+            let warnings =
+                self.check_statement_names(&format!("for {}", f.source.to_text()), f.span, reads)?;
+            self.pending_events.extend(warnings);
             let mut probe = |expr: &str| self.probe_element_type(expr);
             let elements = element_types(&comprehension, &mut probe).map_err(|e| {
                 format!(
@@ -2675,17 +2730,73 @@ fn compile_file_with<K: Built>(
     ) -> Result<K, crate::KernelError>,
 ) -> Result<(K, PolydatFile), crate::KernelError> {
     use crate::KernelError;
-    let (parent_file, for_stmts, producers) = super::traversal::strip_for_forms(
+    use crate::iteration::comprehension::{Surface, unresolved_names};
+    let (mut parent_file, for_stmts, producers) = super::traversal::strip_for_forms(
         file,
         compiler.validation_mode(),
         &compiler.source_scope(),
         &mut compiler.pending_events,
+        &|_| true,
     )
     .map_err(KernelError::Source)?;
+    // The compiler as it stands before assembly, to assemble again from.
+    let mut stripped = compiler.fresh_like();
+    stripped.pending_events = compiler.pending_events.clone();
     compiler.producers_seen = producers.clone();
-    let asm = compiler
+    let mut asm = compiler
         .assemble_parent(&parent_file, filter)
         .map_err(KernelError::Source)?;
+    // V3 (comprehension_forms.md §5): a producer's comprehension reads
+    // the names of the scope its wire is bound in, which a traversal over
+    // it captures when it opens and the assembled program has.
+    let has = |name: &str| {
+        asm.output_type(name).is_some()
+            || asm.input_type(name).is_some()
+            || asm.output_names().contains(&name)
+    };
+    let mut scope_names: Vec<String> = Vec::new();
+    let mut reads_none = false;
+    let mut warnings = Vec::new();
+    for p in &producers {
+        let reads = unresolved_names(&p.comprehension, Surface::Traversal(&has));
+        reads_none |= reads.iter().any(|r| !r.bare);
+        scope_names.extend(
+            crate::iteration::comprehension::outer_reads(&p.comprehension)
+                .into_iter()
+                .filter(|r| !r.bare && has(&r.name))
+                .map(|r| r.name),
+        );
+        warnings.extend(
+            compiler
+                .check_statement_names(
+                    &format!("{} := for {}", p.name, p.source_text),
+                    p.span,
+                    reads,
+                )
+                .map_err(KernelError::Source)?,
+        );
+    }
+    // A producer that reads a name nothing binds carries on its wire only
+    // the names the scope has, so its stream reads the others as None: the
+    // program assembles again, from the compiler as it stood before, with
+    // those streamers.
+    if reads_none {
+        let (restripped, _, _) = super::traversal::strip_for_forms(
+            file,
+            compiler.validation_mode(),
+            &compiler.source_scope(),
+            &mut Vec::new(),
+            &|name| scope_names.iter().any(|n| n == name),
+        )
+        .map_err(KernelError::Source)?;
+        parent_file = restripped;
+        *compiler = stripped;
+        compiler.producers_seen = producers.clone();
+        asm = compiler
+            .assemble_parent(&parent_file, filter)
+            .map_err(KernelError::Source)?;
+    }
+    compiler.pending_events.extend(warnings);
     // The tiles typed while assembling belong to this program's log.
     if let Some(log) = log.as_deref_mut() {
         for e in compiler.pending_events.drain(..) {
@@ -2712,21 +2823,6 @@ fn compile_file_with<K: Built>(
                     })
             })
         };
-        // V3 (comprehension_forms.md §5): a producer's comprehension reads
-        // the names of the scope its wire is bound in, which a traversal
-        // over it captures when it opens.
-        for p in &producers {
-            crate::iteration::comprehension::check_names(
-                &p.comprehension,
-                crate::iteration::comprehension::Surface::Traversal(&|n| type_of(n).is_some()),
-            )
-            .map_err(|e| {
-                KernelError::Source(format!(
-                    "`{} := for {}` at line {}, col {}: {e}",
-                    p.name, p.source_text, p.span.line, p.span.col
-                ))
-            })?;
-        }
         let traversals = compiler
             .compile_traversals(&for_stmts, &producers, &type_of)
             .map_err(KernelError::Source)?;

@@ -905,7 +905,13 @@ are these:
 - `strict_types` is accepted and acknowledged, and it has no effect.
   Wires are statically typed, so a runtime type assertion would have
   nothing to catch.
-- `strict` is an alias for both.
+- `strict` is a pragma of its own. It implies `strict_values` and
+  `strict_types`, and it turns on strict name checking: a comprehension
+  read in its scope that reads a name nothing binds is refused
+  (`ValidationError::V3UnresolvedNames`, comprehension_forms.md §5 V3).
+  Outside `strict` such a name compiles with a V3 warning on the
+  program's compile ledger and reads None. `strict_values` and
+  `strict_types`, alone or together, do not check names strictly.
 
 **Unknown pragmas are forward-compatible.** An unknown name is logged
 as a warning (`UnknownPragma`), never an error.
@@ -989,6 +995,39 @@ module that declares `strict_values` fails the build under a host that
 declares no pragma, and the host's own round trips stay warnings. A
 round trip inside a module that declares no pragma is a warning under a
 strict host, whose own round trips fail the build.
+
+Name checking (comprehension_forms.md §5 V3) follows the same rule. A
+comprehension's names are checked under the pragmas of the scope its
+statement is written in: a `for` statement's and a producer binding's in
+the scope that holds the statement, and a producer binding's in a module
+body under the module's own. Under `strict` a name nothing binds fails
+the build; otherwise the build records a warning and the name reads
+None. This program compiles, and its traversal dispenses nothing,
+because `limit` is bound nowhere and reads None:
+
+```polydat compile
+input cycle: u64
+for k in 1..4 where {k} > {limit} {
+    x := hash(k)
+}
+```
+
+The same traversal nested in a body that declares `strict` fails the
+build, and the program around the body stays unchecked:
+
+```text
+input cycle: u64
+for j in 1..3 {
+    pragma strict
+    for k in 1..4 where {k} > {limit} {
+        x := hash(k)
+    }
+}
+```
+
+A module that declares `strict` refuses its own producers' unbound
+names under a host that declares no pragma, and a module that declares
+no pragma warns about them under a `strict` host.
 
 ---
 
@@ -1132,15 +1171,20 @@ A string in a predicate is quoted, as everywhere in the language:
 `{region} == "us-east"` or `{region} == 'us-east'`. A bare word is a
 name, never a string, and a predicate has no names beside its elements,
 so `{region} == us-east` reads `us - east` as a subtraction of two names
-that nothing supplies, and the compile refuses it, saying a string is
-quoted.
+that nothing supplies. Under `pragma strict` the compile refuses it,
+saying a string is quoted; otherwise the compile warns, saying the same,
+and the two names read None, so the predicate keeps no tuple.
 
 Every name a source or a predicate reads is bound by the comprehension
 or is a name of the scope the traversal opens in: a source reads the
 elements of the clauses before it, a predicate its tuple's elements, and
 both read the enclosing scope's wires, which the traversal captures when
-it opens. The compile refuses a name that is neither, naming it and
-where it is read (comprehension_forms.md §5 V3).
+it opens. A name that is neither is bound nowhere (comprehension_forms.md
+§5 V3). Under `pragma strict` (§[14](#sec-pragmas)) the compile refuses
+it, naming it and where it is read. Otherwise the compile records a
+warning naming the same, and the name reads None: a source reading it
+yields nothing, and a predicate that reads it for a tuple keeps that
+tuple not.
 
 ```polydat compile
 input cycle: u64

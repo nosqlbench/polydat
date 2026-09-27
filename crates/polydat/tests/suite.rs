@@ -165,6 +165,8 @@ mod tile_syntax;
 mod tile_typing;
 #[path = "ui.rs"]
 mod ui;
+#[path = "v3_names.rs"]
+mod v3_names;
 #[path = "variadic_lowering.rs"]
 mod variadic_lowering;
 #[path = "vector_set_ops.rs"]

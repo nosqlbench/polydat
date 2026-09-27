@@ -96,7 +96,7 @@ pub use source::Source;
 pub use strategy::{StrategyName, ZipMode};
 pub use validate::{
     Mode, NameRead, ReadSite, Surface, ValidationError, ValidationReport, ValidationWarning,
-    check_names, outer_reads, validate,
+    check_names, outer_reads, unresolved_names, validate,
 };
 
 // --- Parse-pipeline support re-exports. These are evaluator

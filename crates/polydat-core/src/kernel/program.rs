@@ -165,11 +165,51 @@ pub(crate) struct LifecycleClasses {
 ///
 /// The ledger also holds every native cone the interpreter planned and
 /// left on the interpreter because the cone could not be built
-/// ([`ConeFallback`], engines.md §2.1).
+/// ([`ConeFallback`], engines.md §2.1), and every comprehension compiled
+/// outside `pragma strict` that reads a name nothing binds
+/// ([`UnresolvedNameWarning`], comprehension_forms.md §5 V3).
 #[derive(Debug, Default)]
 pub struct CompileLedger {
     programs: std::sync::atomic::AtomicU64,
     cone_fallbacks: std::sync::Mutex<Vec<ConeFallback>>,
+    unresolved_names: std::sync::Mutex<Vec<UnresolvedNameWarning>>,
+}
+
+/// A comprehension statement compiled outside `pragma strict` that reads
+/// names neither the comprehension binds nor the scope it is read in has
+/// (comprehension_forms.md §5 V3), recorded on the tree's
+/// [`CompileLedger`]. The statement compiles, and each such name reads
+/// None when the comprehension is evaluated. Under `pragma strict` the
+/// same statement is refused with `ValidationError::V3UnresolvedNames`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnresolvedNameWarning {
+    /// The diagnostic context of the program the statement belongs to.
+    pub context: String,
+    /// The statement as written: `for <source>` for a traversal, or
+    /// `<name> := for <source>` for a producer binding.
+    pub statement: String,
+    /// Line of the statement.
+    pub line: usize,
+    /// Column of the statement.
+    pub col: usize,
+    /// Each name nothing binds, with where the comprehension reads it,
+    /// in tree order.
+    pub reads: Vec<crate::iteration::comprehension::NameRead>,
+}
+
+impl std::fmt::Display for UnresolvedNameWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "`{}` at line {}, col {}: {}",
+            self.statement,
+            self.line,
+            self.col,
+            crate::iteration::comprehension::ValidationWarning::UnresolvedNames {
+                reads: self.reads.clone()
+            }
+        )
+    }
 }
 
 /// Why a planned native cone stayed on the interpreter (engines.md §2.1).
@@ -237,6 +277,29 @@ impl CompileLedger {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(fallback);
+    }
+
+    /// The comprehension statements compiled outside `pragma strict`
+    /// that read names nothing binds, in the order they compiled, across
+    /// every program of the tree, each statement once.
+    pub fn unresolved_names(&self) -> Vec<UnresolvedNameWarning> {
+        self.unresolved_names
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Record one statement that reads names nothing binds. A body
+    /// compiles once per engine it runs on, so a statement already
+    /// recorded is not recorded again.
+    pub(crate) fn record_unresolved_names(&self, warning: UnresolvedNameWarning) {
+        let mut recorded = self
+            .unresolved_names
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !recorded.contains(&warning) {
+            recorded.push(warning);
+        }
     }
 }
 

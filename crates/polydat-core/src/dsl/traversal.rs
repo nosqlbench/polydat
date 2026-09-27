@@ -238,12 +238,15 @@ pub struct Producer {
 /// Producer bindings stay in the parent as `const name := streamer(...)`
 /// calls carrying the resolved comprehension, so the wire exists with a
 /// `Streamer` value on it (for_traversal.md §3.1). Derivations resolve against
-/// producers bound earlier in the file, in document order.
+/// producers bound earlier in the file, in document order. `has` answers
+/// whether the file's scope has a name a producer reads, which the
+/// streamer carries (`StreamerValue::in_scope`).
 pub fn strip_for_forms(
     file: &PolydatFile,
     mode: ValidationMode,
     scope: &dyn Lookup,
     events: &mut Vec<super::events::CompileEvent>,
+    has: &dyn Fn(&str) -> bool,
 ) -> Result<(PolydatFile, Vec<ForStmt>, Vec<Producer>), String> {
     let mut parent = Vec::with_capacity(file.statements.len());
     let mut fors = Vec::new();
@@ -259,7 +262,7 @@ pub fn strip_for_forms(
                     resolve_source_with(source, &producers, mode, scope)?;
                 events.extend(warning_events(source, &warnings));
                 let name = b.targets.join(",");
-                let value = StreamerValue::in_scope(source.to_text(), comprehension.clone());
+                let value = StreamerValue::in_scope(source.to_text(), comprehension.clone(), has);
                 parent.push(Statement::Binding(Binding {
                     targets: b.targets.clone(),
                     value: Expr::Call(CallExpr {

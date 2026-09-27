@@ -20,7 +20,7 @@ use crate::iteration::comprehension::ir::{Program, compile as compile_to_ir};
 use crate::iteration::comprehension::optimize::optimize;
 use crate::iteration::comprehension::predicate::recognizers::extract_coord_refs;
 use crate::iteration::comprehension::validate::{
-    Mode, Surface, ValidationError, ValidationReport, check_names, validate,
+    Mode, Surface, ValidationError, ValidationReport, ValidationWarning, unresolved_names, validate,
 };
 
 use crate::kernel::interp::NoScope;
@@ -64,8 +64,10 @@ impl CompiledComprehension {
     /// values.
     ///
     /// The comprehension is compiled with no enclosing scope, so a name
-    /// it reads and does not bind is resolved nowhere: V3
-    /// (`ValidationError::V3UnresolvedNames`). [`from_ast_in`](Self::from_ast_in)
+    /// it reads and does not bind is resolved nowhere (V3): in
+    /// `Permissive` mode it is a `ValidationWarning::UnresolvedNames` in
+    /// the report and reads None, and in `Strict` mode it is
+    /// `ValidationError::V3UnresolvedNames`. [`from_ast_in`](Self::from_ast_in)
     /// compiles one bound in a scope.
     pub fn from_ast_with(
         ast: &Comprehension,
@@ -79,14 +81,17 @@ impl CompiledComprehension {
     /// for, as a producer wire's comprehension is (comprehension_forms.md
     /// §5 V3, §9.5.2).
     ///
-    /// These surfaces supply no name, so every name the comprehension
-    /// reads where it does not bind it is refused. A name the enclosing
-    /// scope does not have either is resolved nowhere: V3. A name only
-    /// that scope has is one a `for` traversal captures when it opens and
-    /// a stream cannot see: a source reading one is
-    /// `ValidationError::ContextRequired`, as is a source reading an
-    /// earlier axis, which only a traversal evaluates, and a predicate
-    /// reading one is `ValidationError::PredicateContextRequired`.
+    /// These surfaces supply no name. A name the enclosing scope does not
+    /// have either is resolved nowhere (V3): outside `Strict` mode it is
+    /// a `ValidationWarning::UnresolvedNames` in the report and reads
+    /// None, so a source reading one yields nothing and a predicate that
+    /// reads one for a tuple keeps it not; in `Strict` mode it is
+    /// `ValidationError::V3UnresolvedNames`. A name only that scope has
+    /// is one a `for` traversal captures when it opens and a stream cannot
+    /// see: a source reading one is `ValidationError::ContextRequired`, as
+    /// is a source reading an earlier axis, which only a traversal
+    /// evaluates, and a predicate reading one is
+    /// `ValidationError::PredicateContextRequired`.
     pub fn from_ast_in(
         ast: &Comprehension,
         mode: Mode,
@@ -95,11 +100,14 @@ impl CompiledComprehension {
         let ast = flatten_static_sources(ast, &NoScope::new());
         // Resolved nowhere: neither bound nor a name a traversal of it in
         // the enclosing scope would capture.
-        check_names(&ast, Surface::Traversal(in_scope))?;
-        if let Some((name, references)) = first_context_required(&ast) {
+        let unresolved = unresolved_names(&ast, Surface::Traversal(in_scope));
+        if mode == Mode::Strict && !unresolved.is_empty() {
+            return Err(ValidationError::V3UnresolvedNames { reads: unresolved });
+        }
+        if let Some((name, references)) = first_context_required(&ast, in_scope) {
             return Err(ValidationError::ContextRequired { name, references });
         }
-        if let Some((predicate, references)) = first_unbound_predicate(&ast) {
+        if let Some((predicate, references)) = first_unbound_predicate(&ast, in_scope) {
             return Err(ValidationError::PredicateContextRequired {
                 predicate,
                 references,
@@ -108,7 +116,12 @@ impl CompiledComprehension {
         if let Some((name, message)) = first_failed_static(&ast) {
             return Err(ValidationError::SourceFailed { name, message });
         }
-        let report = validate(&ast, mode)?;
+        let mut report = validate(&ast, mode)?;
+        if !unresolved.is_empty() {
+            report
+                .warnings
+                .insert(0, ValidationWarning::UnresolvedNames { reads: unresolved });
+        }
         Ok((
             Self {
                 program: Arc::new(compile_to_ir(&optimize(ast))),
@@ -178,48 +191,81 @@ impl CompiledComprehension {
 
 /// The first clause of `ast` whose source needs a scope
 /// (comprehension_forms.md §10.7.0), with the names it references:
-/// the scope-less surfaces refuse such a comprehension by name.
-fn first_context_required(ast: &Comprehension) -> Option<(String, Vec<String>)> {
-    match ast {
-        Comprehension::Clause { name, source } => {
-            (source.eval_class() == EvalClass::ContextRequired).then(|| {
-                (
-                    name.clone(),
-                    source.referenced_names().into_iter().collect(),
-                )
-            })
-        }
-        Comprehension::Cartesian { children }
-        | Comprehension::Zip { children, .. }
-        | Comprehension::Union { children } => children.iter().find_map(first_context_required),
-        Comprehension::Filter { child, .. } | Comprehension::Order { child, .. } => {
-            first_context_required(child)
+/// the scope-less surfaces refuse such a comprehension by name. A source
+/// that reads a name resolved nowhere, bound neither by an earlier axis
+/// nor in the enclosing scope (`in_scope`), reads None and yields
+/// nothing on every surface, so it needs no scope.
+fn first_context_required(
+    ast: &Comprehension,
+    in_scope: &dyn Fn(&str) -> bool,
+) -> Option<(String, Vec<String>)> {
+    fn walk(
+        c: &Comprehension,
+        in_scope: &dyn Fn(&str) -> bool,
+        before: &mut Vec<String>,
+    ) -> Option<(String, Vec<String>)> {
+        match c {
+            Comprehension::Clause { name, source } => {
+                let references = source.referenced_names();
+                let reads_none = references
+                    .iter()
+                    .any(|n| !before.contains(n) && !in_scope(n));
+                (source.eval_class() == EvalClass::ContextRequired && !reads_none)
+                    .then(|| (name.clone(), references.into_iter().collect()))
+            }
+            Comprehension::Cartesian { children } => {
+                let depth = before.len();
+                let mut found = None;
+                for child in children {
+                    found = walk(child, in_scope, before);
+                    if found.is_some() {
+                        break;
+                    }
+                    before.extend(child.coordinate_names());
+                }
+                before.truncate(depth);
+                found
+            }
+            Comprehension::Zip { children, .. } | Comprehension::Union { children } => children
+                .iter()
+                .find_map(|child| walk(child, in_scope, before)),
+            Comprehension::Filter { child, .. } | Comprehension::Order { child, .. } => {
+                walk(child, in_scope, before)
+            }
         }
     }
+    walk(ast, in_scope, &mut Vec::new())
 }
 
 /// The first filter of `ast` whose predicate names what its tuples do
-/// not bind, with those names: the scope-less surfaces evaluate a
-/// predicate in the empty scope, so they refuse it by name.
-fn first_unbound_predicate(ast: &Comprehension) -> Option<(String, Vec<String>)> {
+/// not bind and the enclosing scope has (`in_scope`), with those names:
+/// the scope-less surfaces evaluate a predicate in the empty scope, so
+/// they refuse it by name. A name the scope does not have either reads
+/// None on every surface.
+fn first_unbound_predicate(
+    ast: &Comprehension,
+    in_scope: &dyn Fn(&str) -> bool,
+) -> Option<(String, Vec<String>)> {
     match ast {
         Comprehension::Clause { .. } => None,
         Comprehension::Cartesian { children }
         | Comprehension::Zip { children, .. }
-        | Comprehension::Union { children } => children.iter().find_map(first_unbound_predicate),
+        | Comprehension::Union { children } => children
+            .iter()
+            .find_map(|child| first_unbound_predicate(child, in_scope)),
         Comprehension::Filter { child, predicate } => {
             let bound = child.coordinate_names();
             let unbound: Vec<String> = extract_coord_refs(predicate)
                 .into_iter()
-                .filter(|name| !bound.contains(name))
+                .filter(|name| !bound.contains(name) && in_scope(name))
                 .collect();
             if unbound.is_empty() {
-                first_unbound_predicate(child)
+                first_unbound_predicate(child, in_scope)
             } else {
                 Some((predicate.clone(), unbound))
             }
         }
-        Comprehension::Order { child, .. } => first_unbound_predicate(child),
+        Comprehension::Order { child, .. } => first_unbound_predicate(child, in_scope),
     }
 }
 
@@ -361,7 +407,8 @@ mod tests {
     /// (comprehension_forms.md §9.5.2, §10.7.0): compiled in a scope
     /// that has the names it reads, the compile refuses it by name, with
     /// the names it needs, instead of dispensing nothing. With no scope
-    /// those names resolve nowhere (V3).
+    /// those names resolve nowhere (V3): a permissive compile warns and
+    /// the source, reading None, yields nothing; a strict one refuses it.
     #[test]
     fn from_ast_refuses_a_context_required_source_by_name() {
         let ast = Comprehension::cartesian(vec![
@@ -385,7 +432,16 @@ mod tests {
             "{err}"
         );
         assert!(err.to_string().contains("traverse it with `for`"), "{err}");
-        let err = CompiledComprehension::from_ast(&ast).unwrap_err();
+        let (compiled, report) = CompiledComprehension::from_ast_with(&ast, Mode::Permissive)
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert!(
+            matches!(report.warnings.as_slice(),
+                [ValidationWarning::UnresolvedNames { reads }] if reads.len() == 1),
+            "{:?}",
+            report.warnings
+        );
+        assert_eq!(compiled.coordinate_stream().count(), 0);
+        let err = CompiledComprehension::from_ast_with(&ast, Mode::Strict).unwrap_err();
         assert!(
             matches!(err, ValidationError::V3UnresolvedNames { ref reads } if reads.len() == 1),
             "{err}"
@@ -394,11 +450,13 @@ mod tests {
 
     /// A predicate naming what its tuples do not bind has no scope to
     /// resolve in on a coordinate stream: compiled in a scope that has
-    /// the name, the compile refuses it by name; with no scope the name
-    /// resolves nowhere (V3).
+    /// the name, the compile refuses it by name. With no scope the name
+    /// resolves nowhere (V3): a permissive compile warns and the name
+    /// reads None, so only a tuple the predicate decides before reading
+    /// it is kept; a strict one refuses it.
     #[test]
     fn from_ast_refuses_a_predicate_that_needs_a_scope() {
-        let ast = Comprehension::filter(clause("k", &[1, 2, 3]), "{k} > {limit} || {k} == 1");
+        let ast = Comprehension::filter(clause("k", &[1, 2, 3]), "{k} == 1 || {k} > {limit}");
         let err = CompiledComprehension::from_ast_in(&ast, Mode::Permissive, &|n| n == "limit")
             .unwrap_err();
         assert!(
@@ -410,7 +468,17 @@ mod tests {
             "{err}"
         );
         assert!(err.to_string().contains("traverse it with `for`"), "{err}");
-        let err = CompiledComprehension::from_ast(&ast).unwrap_err();
+        let compiled = CompiledComprehension::from_ast(&ast).unwrap_or_else(|e| panic!("{e}"));
+        let kept: Vec<_> = compiled
+            .coordinate_stream()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(kept.len(), 1);
+        assert_eq!(
+            kept[0].bindings[0].1,
+            crate::iteration::comprehension::strategies::TupleValue::I64(1)
+        );
+        let err = CompiledComprehension::from_ast_with(&ast, Mode::Strict).unwrap_err();
         assert!(
             matches!(err, ValidationError::V3UnresolvedNames { .. }),
             "{err}"

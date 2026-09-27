@@ -47,13 +47,19 @@ impl StreamerValue {
         }
     }
 
-    /// A streamer over `ast` bound to a wire of a scope that has every
-    /// name the comprehension reads and does not bind, as the compile of
-    /// a producer binding establishes (comprehension_forms.md §5 V3).
-    pub fn in_scope(text: impl Into<String>, ast: Comprehension) -> Self {
+    /// A streamer over `ast` bound to a wire of a scope that has the
+    /// names `has` answers true for. [`Self::outer`] holds the names the
+    /// comprehension reads, does not bind, and the scope has; a name it
+    /// reads that the scope does not have is resolved nowhere and reads
+    /// None (comprehension_forms.md §5 V3).
+    pub fn in_scope(
+        text: impl Into<String>,
+        ast: Comprehension,
+        has: &dyn Fn(&str) -> bool,
+    ) -> Self {
         let mut outer: Vec<String> = crate::iteration::comprehension::validate::outer_reads(&ast)
             .into_iter()
-            .filter(|r| !r.bare)
+            .filter(|r| !r.bare && has(&r.name))
             .map(|r| r.name)
             .collect();
         outer.sort();
@@ -88,7 +94,8 @@ impl StreamerValue {
     /// ([`Self::outer`]), which this surface has none of
     /// (`ContextRequired`, `PredicateContextRequired`,
     /// comprehension_forms.md §9.5.2); one built programmatically is
-    /// validated here.
+    /// validated here. A name it reads that nothing binds reads None
+    /// (§5 V3).
     pub fn compiled(&self) -> Result<CompiledComprehension, ValidationError> {
         CompiledComprehension::from_ast_in(&self.ast, Mode::Permissive, &|name| {
             self.outer.iter().any(|n| n == name)

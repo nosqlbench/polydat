@@ -182,29 +182,7 @@ impl std::fmt::Display for ValidationError {
                 actual.join(", "),
                 expected.join(", ")
             ),
-            Self::V3UnresolvedNames { reads } => {
-                let each: Vec<String> = reads
-                    .iter()
-                    .map(|r| format!("`{}` read by {}", r.name, r.site))
-                    .collect();
-                write!(
-                    f,
-                    "V3: {} {} bound neither by the comprehension nor by the scope it is \
-                     evaluated in",
-                    each.join(", "),
-                    if reads.len() == 1 { "is" } else { "are" }
-                )?;
-                if let Some(bare) = reads.iter().find(|r| r.bare) {
-                    write!(
-                        f,
-                        "; a bare word in a predicate is a name, which nothing supplies: a \
-                         string in a predicate is quoted, as in `\"{}\"`, and a scope's \
-                         name is read as `{{{}}}`",
-                        bare.name, bare.name
-                    )?;
-                }
-                Ok(())
-            }
+            Self::V3UnresolvedNames { reads } => write_unresolved(f, reads, false),
             Self::V4InputShape { strategy, reason } => {
                 write!(
                     f,
@@ -250,6 +228,47 @@ impl std::fmt::Display for ValidationError {
 }
 
 impl std::error::Error for ValidationError {}
+
+/// The V3 diagnostic over `reads`: each name with where it is read, and
+/// for a bare word in a predicate, how a string and a scope's name are
+/// written. `lax` says the names compile and read None
+/// (comprehension_forms.md §5 V3).
+fn write_unresolved(
+    f: &mut std::fmt::Formatter<'_>,
+    reads: &[NameRead],
+    lax: bool,
+) -> std::fmt::Result {
+    let each: Vec<String> = reads
+        .iter()
+        .map(|r| format!("`{}` read by {}", r.name, r.site))
+        .collect();
+    write!(
+        f,
+        "V3: {} {} bound neither by the comprehension nor by the scope it is evaluated in",
+        each.join(", "),
+        if reads.len() == 1 { "is" } else { "are" }
+    )?;
+    if lax {
+        write!(
+            f,
+            ", so {} None, as a name nothing binds does outside `pragma strict`",
+            if reads.len() == 1 {
+                "it reads"
+            } else {
+                "each reads"
+            }
+        )?;
+    }
+    if let Some(bare) = reads.iter().find(|r| r.bare) {
+        write!(
+            f,
+            "; a bare word in a predicate is a name, which nothing supplies: a string in a \
+             predicate is quoted, as in `\"{}\"`, and a scope's name is read as `{{{}}}`",
+            bare.name, bare.name
+        )?;
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone, PartialEq)]
 /// Non-blocking warning for degenerate-but-defined compositions
@@ -305,6 +324,15 @@ pub enum ValidationWarning {
         /// The combinator with one child.
         combinator: &'static str,
     },
+
+    /// V3 outside strictness (§5 V3): names the comprehension reads
+    /// that neither it binds nor the surface supplies. The comprehension
+    /// compiles, and each such name reads None. A `Strict` compile
+    /// refuses it as [`ValidationError::V3UnresolvedNames`].
+    UnresolvedNames {
+        /// Each such name, with where it is read, in tree order.
+        reads: Vec<NameRead>,
+    },
 }
 
 impl std::fmt::Display for ValidationWarning {
@@ -336,6 +364,7 @@ impl std::fmt::Display for ValidationWarning {
                     "`{var}` has no values; every composition it takes part in dispenses nothing"
                 ),
             },
+            Self::UnresolvedNames { reads } => write_unresolved(f, reads, true),
         }
     }
 }
@@ -474,15 +503,26 @@ fn collect_outer_reads(c: &Comprehension, before: &mut Vec<String>, out: &mut Ve
     }
 }
 
-/// V3 (comprehension_forms.md §5): every name a clause source or a
-/// filter predicate of `c` reads is bound by the comprehension where it
-/// is read, or supplied by `surface`. The error names each name that is
-/// neither, with where it is read.
-pub fn check_names(c: &Comprehension, surface: Surface<'_>) -> Result<(), ValidationError> {
-    let reads: Vec<NameRead> = outer_reads(c)
+/// Every name a clause source or a filter predicate of `c` reads that
+/// neither the comprehension binds where it is read nor `surface`
+/// supplies, with where it is read, in tree order
+/// (comprehension_forms.md §5 V3). Under `pragma strict` each is an
+/// error ([`check_names`]); outside it each is a warning, and the name
+/// reads None.
+pub fn unresolved_names(c: &Comprehension, surface: Surface<'_>) -> Vec<NameRead> {
+    outer_reads(c)
         .into_iter()
         .filter(|r| r.bare || !surface.supplies(&r.name))
-        .collect();
+        .collect()
+}
+
+/// V3 under strictness (comprehension_forms.md §5): every name a clause
+/// source or a filter predicate of `c` reads is bound by the
+/// comprehension where it is read, or supplied by `surface`. The error
+/// names each name that is neither, with where it is read
+/// ([`unresolved_names`]).
+pub fn check_names(c: &Comprehension, surface: Surface<'_>) -> Result<(), ValidationError> {
+    let reads = unresolved_names(c, surface);
     if reads.is_empty() {
         Ok(())
     } else {

@@ -404,8 +404,10 @@ pub fn open_traversal(
     // where the body declares the same name, as every body declares
     // `cycle`: a source or predicate belongs to the enclosing scope, and
     // a traversal reads that frame once, when it opens
-    // (for_traversal.md §3.1). The compile refused a name the parent
-    // has no wire for (comprehension_forms.md §5 V3).
+    // (for_traversal.md §3.1). A name the parent has no wire for is one
+    // nothing binds, which the compile refused under `pragma strict` and
+    // otherwise warned about: it is not captured, and reads None
+    // (comprehension_forms.md §5 V3).
     let mut captured: Vec<(String, Value)> = Vec::new();
     let mut outer: Vec<String> =
         crate::iteration::comprehension::validate::outer_reads(&traversal.comprehension)

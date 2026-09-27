@@ -687,7 +687,8 @@ elimination.
 Not every syntactically-composable AST is semantically valid.
 The validity rules are **type-level constraints** the well-
 formedness check (Axiom C2) enforces. There are nine of them
-(V1 – V9).
+(V1 – V9). Every one but V3 is refused unconditionally; V3 is refused
+under strictness and is a warning otherwise.
 
 **Axiom V1 (cartesian / zip disjoint names).** All children of
 a `cartesian` or `zip` must have disjoint tuple name sets.
@@ -704,7 +705,9 @@ sub-spaces.
 **Axiom V3 (name closure).** Every name a clause source or a filter
 predicate reads is bound by the comprehension where it is read, or
 supplied by the surface the comprehension is evaluated on. *Reason:* a
-name neither bound nor supplied can never evaluate.
+name neither bound nor supplied has no value. Unlike the other axioms,
+V3 is refused only under strictness; outside it a name bound nowhere
+reads None, which gives the comprehension a defined meaning (below).
 
 What the comprehension binds where a name is read:
 
@@ -724,22 +727,62 @@ What each surface supplies (§9.5):
   §5.2).
 
 V3 is checked on the tree as written when the surface compiles it
-(`validate::check_names`, with the surface's `Surface`). The `for`
-lowering checks every traversal and every producer binding against the
-names of the program it is compiled in, and the stream compile
-(`CompiledComprehension::from_ast`) checks against no name. A violation
-is `ValidationError::V3UnresolvedNames`, which names each unresolved
-name and where it is read, a clause's source or a predicate.
+(`validate::unresolved_names`, with the surface's `Surface`, lists each
+name bound nowhere and where it is read, a clause's source or a
+predicate). The `for` lowering checks every traversal and every producer
+binding against the names of the scope its statement is written in, a
+module body's producer bindings against the module's inputs and
+bindings, and the stream compile (`CompiledComprehension::from_ast`)
+checks against no name.
+
+Whether a name bound nowhere is refused depends on strictness at the
+place it is read:
+
+- **Strict.** In a program, strictness is `pragma strict` in the scope
+  the statement is written in, decided lexically as every pragma is
+  ([polydat_grammar.md §14](polydat_grammar.md#sec-pragmas)); a module
+  body is strict under its own `pragma strict` alone. `strict_values`
+  and `strict_types` do not make it strict. On the stream surface
+  strictness is `Mode::Strict` (§5.8). A strict compile refuses the
+  comprehension with `ValidationError::V3UnresolvedNames`
+  (`validate::check_names`), which names each such name and where it is
+  read.
+- **Lax.** Otherwise the comprehension compiles with a V3 warning that
+  names each such name and where it is read. A program's compile records
+  it on the program tree's compile ledger as an `UnresolvedNameWarning`
+  (`CompileLedger::unresolved_names`), naming the statement, its line and
+  column, and each read, once per statement however many engines its
+  body compiles for, and logs it as a warning-level compile event with
+  the same text. The stream compile returns it as the first
+  `ValidationWarning::UnresolvedNames` of its report. A bare word in a
+  predicate warns the same way, and the warning shows how a string is
+  quoted.
+
+At run time a name bound nowhere reads None, and None propagates
+([None Semantics](none_semantics.md) Rule 1), identically on every
+surface and every engine:
+
+- A clause source that reads None yields nothing, so every cartesian it
+  takes part in yields nothing.
+- A predicate that reads None for a tuple is None and keeps no tuple
+  (§10.9.1). `&&` and `||` stop at the first operand that decides them,
+  so a tuple a predicate decides before it reads the name is kept or
+  dropped as the rest of the predicate says.
+
+A name the scope has but that holds None at run time, such as an extern
+with no default, reads the same way.
 
 A name the stream cannot see is not always resolved nowhere. A producer
 wire's comprehension is bound in a scope (`StreamerValue::outer` holds
-the names it reads from there), and a host that compiles a comprehension
-bound in a scope passes that scope's names
+the names it reads that the scope has), and a host that compiles a
+comprehension bound in a scope passes that scope's names
 (`CompiledComprehension::from_ast_in`). A name only that scope has is
 one a traversal resolves and a stream cannot: the stream compile refuses
 a source that reads one with `ValidationError::ContextRequired` and a
 predicate that reads one with `ValidationError::PredicateContextRequired`
-(§9.5.2). A name that scope does not have either is V3.
+(§9.5.2), under strictness or not. These are limits of the stream
+surface, which has no scope, not unbound names. A name that scope does
+not have either is V3, and a stream reads it as a traversal does.
 
 **Axiom V4 (strategy input-shape contract).** Each named
 ordering strategy declares its accepted input `IndexFn` shape in
@@ -972,8 +1015,10 @@ class operands.
 ### 5.8 Validation modes
 
 V1 – V9 are about **mathematical validity** — failing any of
-them produces an AST that has no defined meaning, and the
-validator rejects unconditionally. There is a separate class of
+them except V3 produces an AST that has no defined meaning, and the
+validator rejects it unconditionally. V3 depends on strictness at the
+place the name is read (§5): outside it, a name bound nowhere reads
+None. There is a separate class of
 *degenerate but defined* compositions that the validator
 flags rather than rejects. These are mathematically well-formed
 (the operator's definition applies, the dispense sequence is
@@ -983,7 +1028,9 @@ something else.
 
 Two validation modes:
 
-- **Permissive (default).** V1 – V9 enforced as errors;
+- **Permissive (default).** V1, V2, and V4 – V9 enforced as errors; on
+  the stream compile, V3 is the report's
+  `ValidationWarning::UnresolvedNames`;
   degenerate compositions emit a `ValidationWarning` containing
   the location, the degeneracy reason, and a suggested
   alternative if one exists. The comprehension compiles and
@@ -996,7 +1043,10 @@ Two validation modes:
   every `ValidationWarning` to a hard error. Selected by a strict
   compile (`CompileOptions::strict`, the binary's `--strict`) and by
   `CompiledComprehension::from_ast_with(_, Mode::Strict)`. Used by
-  workload-loading paths that want a clean bill of health.
+  workload-loading paths that want a clean bill of health. On the
+  stream compile it refuses V3 as `ValidationError::V3UnresolvedNames`.
+  In a program's compile V3 follows `pragma strict` in the scope the
+  statement is written in, not the compile's mode (§5).
 
 The degenerate-composition catalog:
 
@@ -1777,10 +1827,12 @@ parent. A `StreamerValue`, the value on a producer wire, exposes
 `compiled()` and `coordinate_stream()` over the same factories
 ([The `for` Construct](for_traversal.md) §3.1); both return a
 `Result`, failing when the comprehension does not compile. These
-surfaces supply no names (§5 V3): a comprehension that reads a name it
-does not bind compiles to no stream. `compile` / `from_ast` compile
-with no enclosing scope, so such a name is resolved nowhere and the
-compile refuses it with `ValidationError::V3UnresolvedNames`.
+surfaces supply no names (§5 V3). `compile` / `from_ast` compile
+with no enclosing scope, so a name the comprehension reads and does not
+bind is resolved nowhere: a `Strict` compile refuses it with
+`ValidationError::V3UnresolvedNames`, and a permissive one reports
+`ValidationWarning::UnresolvedNames` and streams the comprehension with
+the name read as None, as a traversal reads it.
 `from_ast_in`, and `StreamerValue::compiled` for a producer wire, whose
 comprehension reads the names of the scope the wire is bound in, tell
 the names that scope has apart: a context-required source (§10.7.0: a
@@ -1793,7 +1845,9 @@ comprehension that binds only `k` in a scope that has `limit`, needs a
 scope the same way, and the compile refuses it with
 `ValidationError::PredicateContextRequired`, naming the predicate and
 those names. Those names are resolved on the traversal surface below. A
-`StreamerValue` holds the same comprehension in either case.
+name the scope does not have is not among them: it reads None on the
+stream as on the traversal. A `StreamerValue` holds the same
+comprehension in either case.
 
 The following diagram shows the consumption surfaces and what each
 one produces.
@@ -2988,22 +3042,27 @@ same way (`predicate::CompiledPredicate`), per tuple:
 - **Elements.** `{name}` is the value the tuple binds to `name`. A
   name the tuple does not bind resolves in the scope the traversal
   opens in, which captures it when it opens; a stream has none and
-  refuses such a predicate when it compiles (§5 V3,
-  `ValidationError::PredicateContextRequired`, §9.5.2).
+  refuses a predicate that reads a name that scope has when it compiles
+  (`ValidationError::PredicateContextRequired`, §9.5.2). A name bound
+  nowhere reads None (§5 V3), and so does an element bound to None.
 - **Literals.** Integers, floats, `true`, `false`, and quoted strings,
   `"us-east"` or `'us-east'`. A bare word is a name, never a string,
   as everywhere in the language (§3.1.4). A predicate has no names
-  beside its elements, so a bare word is resolved nowhere, and every
-  surface refuses it when it compiles (§5 V3): `{region} == us-east`
-  reads the names `us` and `east`, and the error says a string in a
-  predicate is quoted, as in `"us"`. A predicate evaluated without that
-  check, through `runtime::evaluate_indexed` directly, fails where it
-  evaluates the word, and when the expression that fails reads as words
-  joined by hyphens, the error shows it quoted: "`us-east` is a name,
-  not a string: a string in a predicate is quoted, as in
-  `"us-east"`".
+  beside its elements, so a bare word is resolved nowhere (§5 V3):
+  `{region} == us-east` reads the names `us` and `east`. Under
+  strictness the compile refuses it, and otherwise it warns; either
+  diagnostic says a string in a predicate is quoted, as in `"us"`. At
+  run time the bare word reads None, and so does the expression that
+  reads it.
+- **None.** None propagates ([None Semantics](none_semantics.md)
+  Rule 1). A comparison, a membership test, a negation, arithmetic, a
+  call, or a cast that reads None is None; an expression the evaluator
+  interpolates is None when it interpolates None. The predicate's
+  value is None when the operand that decides it is None, and a
+  predicate whose value is None keeps no tuple.
 - **Connectives.** `&&` and `||` evaluate their operands left to
-  right and stop at the first that decides the result; `!` negates.
+  right and stop at the first that decides the result, and at an
+  operand that is None, which makes them None; `!` negates.
   A value's truth is a boolean's own, or a number's being non-zero;
   a string has none, and using one as a truth value is an error.
 - **Comparisons.** Values compare as scalars. Integers and floats
@@ -3029,6 +3088,9 @@ same way (`predicate::CompiledPredicate`), per tuple:
 | `{w} > 2` | `w = "s0"` | error: cannot order `"s0"` and `2` |
 | `{w} == 2 && {w} > 2` | `w = "s0"` | false; `{w} > 2` is never evaluated |
 | `!{done} \|\| {retry}` | `done = true, retry = false` | false |
+| `{k} > {zz}`, `zz` bound nowhere | `k = 1` | None; the tuple is not kept |
+| `{k} == 1 \|\| {k} > {zz}` | `k = 1` | true; `{zz}` is never read |
+| `{k} == 1 \|\| {k} > {zz}` | `k = 2` | None; the tuple is not kept |
 
 A predicate is **total** over tuples whose elements have known kinds
 when no evaluation of it can fail; R5 moves only total predicates

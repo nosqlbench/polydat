@@ -103,6 +103,13 @@ when every input is an intra-cone wire, where no None can arrive.
 `Kernel::pull` returns `None` for a slot that holds None on the
 interpreter, the closure tier, and native.
 
+A comprehension applies the rule to the names its clause sources and
+filter predicates read ([comprehension_forms.md](comprehension_forms.md)
+§5 V3, §10.9.1). A name bound nowhere, outside `pragma strict`, and a
+name bound to None both read None. A source that reads None yields
+nothing, and a predicate that reads None for a tuple is None and keeps
+no tuple, on every surface and every engine.
+
 Pure native has no closures to hold a None, so it refuses a pull
 whose output depends on an unset input, naming the extern, where the
 other three engines would return `None` for that output

@@ -11,7 +11,7 @@
 //! ```polydat
 //! pragma strict_values
 //! pragma strict_types
-//! pragma strict          // convenience alias for both
+//! pragma strict          // both, and strict name checking
 //!
 //! id := mod(hash(cycle), 1000)
 //! ```
@@ -32,7 +32,11 @@
 //!   graph. Wires are statically typed and a resolved wire's type is
 //!   the sink port's type, so a runtime type assertion has nothing to
 //!   catch.
-//! - `strict` — alias for both `strict_types` and `strict_values`.
+//! - `strict` — a pragma of its own: it implies `strict_types` and
+//!   `strict_values`, and it turns on strict name checking, under which
+//!   a comprehension that reads a name nothing binds is refused
+//!   (comprehension_forms.md §5 V3). Outside it such a name compiles
+//!   with a warning and reads None.
 //!
 //! Unknown pragmas are recorded and warned about, not errored:
 //! pragmas are forward-compatible by design so old binaries can
@@ -78,16 +82,23 @@ impl PragmaSet {
         self.entries.iter().any(|p| p.name == name)
     }
 
-    /// Returns true if either `strict_types` or the `strict` alias
-    /// is in force.
+    /// Returns true if either `strict_types` or `strict`, which implies
+    /// it, is in force.
     pub fn strict_types(&self) -> bool {
         self.contains("strict_types") || self.contains("strict")
     }
 
-    /// Returns true if either `strict_values` or the `strict`
-    /// alias is in force.
+    /// Returns true if either `strict_values` or `strict`, which implies
+    /// it, is in force.
     pub fn strict_values(&self) -> bool {
         self.contains("strict_values") || self.contains("strict")
+    }
+
+    /// Returns true if strict name checking is in force: `strict`, and no
+    /// other pragma. A comprehension read in this scope that reads a
+    /// name nothing binds is then refused (comprehension_forms.md §5 V3).
+    pub fn strict_names(&self) -> bool {
+        self.contains("strict")
     }
 
     /// Iterate the pragmas in force that the compiler doesn't
@@ -150,17 +161,20 @@ mod tests {
     }
 
     #[test]
-    fn parse_strict_alias() {
+    fn strict_implies_both_modes_and_strict_names() {
         let set = pragmas_from("pragma strict\nid := cycle\n");
         assert!(set.strict_types());
         assert!(set.strict_values());
+        assert!(set.strict_names());
     }
 
+    /// Only `strict` checks names strictly: the two modes together do not.
     #[test]
     fn parse_individual_modes() {
         let set = pragmas_from("pragma strict_types\npragma strict_values\nid := cycle\n");
         assert!(set.strict_types());
         assert!(set.strict_values());
+        assert!(!set.strict_names());
     }
 
     #[test]

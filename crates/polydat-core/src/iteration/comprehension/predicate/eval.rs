@@ -19,20 +19,27 @@
 //! with each other, strings and booleans with their own kind, and a
 //! value of one kind is never equal to a value of another, so
 //! `"s0" != 2` holds. Ordering values of different kinds is an error.
-//! A string is quoted; a bare word is a name, and since a predicate has
-//! no names beside its elements, it fails to resolve, with an error
-//! that shows the word quoted. A predicate that does not parse is
+//! A string is quoted; a bare word is a name, and a predicate has no
+//! names beside its elements. A predicate that does not parse is
 //! evaluated whole as a Polydat expression. The value a predicate
 //! yields is true when it is `true` or a non-zero number.
+//!
+//! None propagates (none_semantics.md Rule 1, comprehension_forms.md
+//! §10.9.1). An element the tuple binds to None, and a name that
+//! neither the tuple nor the scope binds, reads None, and so does a
+//! bare word. A comparison, a membership test, a negation, and an
+//! expression that reads None are None; `&&` and `||` stop at an
+//! operand that is None, and are None. A predicate whose value is None
+//! keeps no tuple.
 
 use crate::ast::Value;
 use crate::dsl::compile::eval_const_expr_for;
 use crate::iteration::comprehension::ast::Comprehension;
 use crate::iteration::comprehension::runtime::{RuntimeError, RuntimeTuple};
 use crate::iteration::comprehension::source::{LiteralValue, Source};
-use crate::kernel::interp::{Layered, Lookup, interpolate_via_kernel};
+use crate::kernel::interp::{Layered, Lookup, interpolate_with_lookup};
 use polydat_grammar::comprehension::predicate::{
-    Comparison, Predicate, PredicateKind, PredicateLiteral, parse_predicate,
+    Comparison, Predicate, PredicateKind, PredicateLiteral, parse_predicate, predicate_reads,
 };
 
 /// A predicate parsed once, testing tuples.
@@ -40,6 +47,9 @@ use polydat_grammar::comprehension::predicate::{
 pub struct CompiledPredicate {
     text: String,
     tree: Predicate,
+    /// The spans of the expressions evaluated through the language that
+    /// read a bare word, which reads None, so each of them is None.
+    bare: Vec<std::ops::Range<usize>>,
 }
 
 /// A value a predicate compares.
@@ -69,9 +79,12 @@ impl CompiledPredicate {
             kind: PredicateKind::Expr,
             span: 0..text.len(),
         });
+        let mut bare = Vec::new();
+        collect_bare(&tree, text, &mut bare);
         Self {
             text: text.to_string(),
             tree,
+            bare,
         }
     }
 
@@ -80,61 +93,85 @@ impl CompiledPredicate {
         &self.text
     }
 
-    /// Whether `tuple`, drawn in `scope`, passes.
+    /// Whether `tuple`, drawn in `scope`, passes: the predicate's value
+    /// is true. A predicate whose value is None keeps no tuple.
     pub fn keeps(&self, tuple: &RuntimeTuple, scope: &dyn Lookup) -> Result<bool, RuntimeError> {
         self.eval(&self.tree, tuple, scope)
-            .and_then(|v| truth(&v))
+            .and_then(|v| v.map_or(Ok(false), |v| truth(&v)))
             .map_err(|message| RuntimeError::FilterEval {
                 predicate: self.text.clone(),
                 message,
             })
     }
 
+    /// The value of `node` over `tuple`, `None` when it is None.
     fn eval(
         &self,
         node: &Predicate,
         tuple: &RuntimeTuple,
         scope: &dyn Lookup,
-    ) -> Result<Scalar, String> {
-        Ok(match &node.kind {
+    ) -> Result<Option<Scalar>, String> {
+        Ok(Some(match &node.kind {
             PredicateKind::Or(parts) => {
                 for part in parts {
-                    if truth(&self.eval(part, tuple, scope)?)? {
-                        return Ok(Scalar::Bool(true));
+                    let Some(value) = self.eval(part, tuple, scope)? else {
+                        return Ok(None);
+                    };
+                    if truth(&value)? {
+                        return Ok(Some(Scalar::Bool(true)));
                     }
                 }
                 Scalar::Bool(false)
             }
             PredicateKind::And(parts) => {
                 for part in parts {
-                    if !truth(&self.eval(part, tuple, scope)?)? {
-                        return Ok(Scalar::Bool(false));
+                    let Some(value) = self.eval(part, tuple, scope)? else {
+                        return Ok(None);
+                    };
+                    if !truth(&value)? {
+                        return Ok(Some(Scalar::Bool(false)));
                     }
                 }
                 Scalar::Bool(true)
             }
-            PredicateKind::Not(inner) => Scalar::Bool(!truth(&self.eval(inner, tuple, scope)?)?),
+            PredicateKind::Not(inner) => {
+                let Some(value) = self.eval(inner, tuple, scope)? else {
+                    return Ok(None);
+                };
+                Scalar::Bool(!truth(&value)?)
+            }
             PredicateKind::Compare(op, a, b) => {
-                let a = self.eval(a, tuple, scope)?;
-                let b = self.eval(b, tuple, scope)?;
+                let Some(a) = self.eval(a, tuple, scope)? else {
+                    return Ok(None);
+                };
+                let Some(b) = self.eval(b, tuple, scope)? else {
+                    return Ok(None);
+                };
                 Scalar::Bool(compare(*op, &a, &b)?)
             }
             PredicateKind::In(needle, items) => {
-                let needle = self.eval(needle, tuple, scope)?;
+                let Some(needle) = self.eval(needle, tuple, scope)? else {
+                    return Ok(None);
+                };
                 let mut hit = false;
                 for item in items {
-                    hit |= scalar_eq(&needle, &self.eval(item, tuple, scope)?);
+                    let Some(item) = self.eval(item, tuple, scope)? else {
+                        return Ok(None);
+                    };
+                    hit |= scalar_eq(&needle, &item);
                 }
                 Scalar::Bool(hit)
             }
             PredicateKind::Element(name) => {
                 let value = match tuple.iter().find(|(n, _)| n == name) {
-                    Some((_, v)) => v.clone(),
-                    None => scope
-                        .lookup(name)
-                        .ok_or_else(|| format!("`{{{name}}}` is not bound"))?,
+                    Some((_, v)) => Some(v.clone()),
+                    None => scope.lookup(name),
                 };
-                scalar(&value).ok_or_else(|| format!("`{{{name}}}` is {value:?}, not a scalar"))?
+                match value {
+                    None | Some(Value::None) => return Ok(None),
+                    Some(value) => scalar(&value)
+                        .ok_or_else(|| format!("`{{{name}}}` is {value:?}, not a scalar"))?,
+                }
             }
             PredicateKind::Literal(literal) => match literal {
                 PredicateLiteral::Int(n) => Scalar::Int(*n),
@@ -143,39 +180,65 @@ impl CompiledPredicate {
                 PredicateLiteral::Bool(b) => Scalar::Bool(*b),
             },
             PredicateKind::Arith(..) | PredicateKind::Expr => {
+                if self.bare.contains(&node.span) {
+                    return Ok(None);
+                }
                 let text = node.text(&self.text);
                 let layered = Layered {
                     prefix: tuple,
                     inner: scope,
                 };
+                // Interpolating None yields None (Rule 1).
+                let none = std::cell::Cell::new(false);
                 let interpolated =
-                    interpolate_via_kernel(text, &layered).map_err(|e| e.to_string())?;
-                let value = eval_const_expr_for(&interpolated, scope.ledger()).map_err(|e| {
-                    if looks_like_a_bare_word(text) {
-                        format!(
-                            "{e}; `{text}` is a name, not a string: a string in a \
-                                 predicate is quoted, as in `\"{text}\"`"
-                        )
-                    } else {
-                        e.to_string()
-                    }
-                })?;
+                    interpolate_with_lookup(text, |name| match layered.lookup(name) {
+                        None | Some(Value::None) => {
+                            none.set(true);
+                            None
+                        }
+                        Some(value) => Some(value.to_display_string()),
+                    });
+                if none.get() {
+                    return Ok(None);
+                }
+                let value = eval_const_expr_for(&interpolated?, scope.ledger())
+                    .map_err(|e| e.to_string())?;
+                if matches!(value, Value::None) {
+                    return Ok(None);
+                }
                 scalar(&value).ok_or_else(|| format!("`{text}` is {value:?}, not a scalar"))?
             }
-        })
+        }))
     }
 }
 
-/// Whether `text` reads as words joined by hyphens (`us-east`, `s0`):
-/// a string written without its quotes, which the language reads as a
-/// name, or as a subtraction of names.
-fn looks_like_a_bare_word(text: &str) -> bool {
-    text.split('-').all(|word| {
-        word.chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-            && word.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-    })
+/// The spans of the expressions under `node` that the evaluator hands to
+/// the language and that read a bare word.
+fn collect_bare(node: &Predicate, text: &str, out: &mut Vec<std::ops::Range<usize>>) {
+    match &node.kind {
+        PredicateKind::Or(parts) | PredicateKind::And(parts) => {
+            for part in parts {
+                collect_bare(part, text, out);
+            }
+        }
+        PredicateKind::Not(inner) => collect_bare(inner, text, out),
+        PredicateKind::Compare(_, a, b) => {
+            collect_bare(a, text, out);
+            collect_bare(b, text, out);
+        }
+        PredicateKind::In(needle, items) => {
+            collect_bare(needle, text, out);
+            for item in items {
+                collect_bare(item, text, out);
+            }
+        }
+        PredicateKind::Element(_) | PredicateKind::Literal(_) => {}
+        PredicateKind::Arith(..) | PredicateKind::Expr => {
+            if !predicate_reads(node.text(text)).bare.is_empty() {
+                out.push(node.span.clone());
+            }
+        }
+    }
 }
 
 /// The kind every value of an element has, as its source declares it.
@@ -536,36 +599,28 @@ mod tests {
         }
     }
 
-    /// A string is quoted. A bare word is a name, which a predicate
-    /// cannot resolve, and the error shows the word quoted; a hyphenated
-    /// one reads as a subtraction of names and fails the same way.
+    /// A string is quoted. A bare word is a name, which nothing binds, so
+    /// it reads None and the predicate keeps no tuple, a hyphenated one
+    /// (a subtraction of names) included. An unknown function is still
+    /// an error.
     #[test]
-    fn a_bare_word_is_a_name_and_the_error_quotes_it() {
+    fn a_bare_word_is_a_name_that_reads_none() {
         let t = tuple(&[("region", Value::Str(Arc::from("us-east")))]);
         assert!(keeps("{region} == \"us-east\"", &t));
-        for (predicate, word) in [
-            ("{region} == us-east", "us-east"),
-            ("{region} in [us-west, \"us-east\"]", "us-west"),
-            ("{region} != eu", "eu"),
+        for predicate in [
+            "{region} == us-east",
+            "{region} in [us-west, \"us-east\"]",
+            "{region} != eu",
+            "!({region} != eu)",
+            "u64_add(1, width) > 0",
         ] {
-            let error = CompiledPredicate::new(predicate)
-                .keeps(&t, &NoScope::new())
-                .unwrap_err()
-                .to_string();
-            assert!(
-                error.contains(&format!(
-                    "`{word}` is a name, not a string: a string in a predicate is quoted, \
-                     as in `\"{word}\"`"
-                )),
-                "{predicate}: {error}"
-            );
+            assert!(!keeps(predicate, &t), "{predicate}");
         }
-        // An expression that is not a bare word fails without the hint.
         let error = CompiledPredicate::new("nosuch({region}) > 1")
             .keeps(&t, &NoScope::new())
             .unwrap_err()
             .to_string();
-        assert!(!error.contains("is a name, not a string"), "{error}");
+        assert!(error.contains("nosuch"), "{error}");
     }
 
     /// Values of different kinds are unequal, and ordering them is an
@@ -598,11 +653,32 @@ mod tests {
         assert!(keeps("!(u64_add({a}, {b}) > 8)", &t));
     }
 
+    /// An element nothing binds and an element bound to None read None
+    /// (none_semantics.md Rule 1): every operator over None is None, and
+    /// a predicate whose value is None keeps no tuple. `&&` and `||`
+    /// stop at the first operand that decides them, so an operand after
+    /// it is not read, and at an operand that is None.
     #[test]
-    fn an_unbound_name_is_an_error() {
-        let error = CompiledPredicate::new("{z} > 1")
-            .keeps(&tuple(&[]), &NoScope::new())
-            .unwrap_err();
-        assert!(error.to_string().contains("`{z}` is not bound"), "{error}");
+    fn none_propagates_and_keeps_no_tuple() {
+        let unbound = tuple(&[("k", Value::U64(1))]);
+        let bound_none = tuple(&[("k", Value::U64(1)), ("z", Value::None)]);
+        for t in [&unbound, &bound_none] {
+            for predicate in [
+                "{z} > 1",
+                "{z} != 1",
+                "!({z} == 1)",
+                "{z} in [1, 2]",
+                "{k} in [{z}, 1]",
+                "{z} + 1 > 0",
+                "u64_add({z}, 1) > 0",
+                "{z} > 1 || {k} == 1",
+                "{k} == 1 && {z} != 1",
+                "{k} == 1 && !({z} > 1)",
+            ] {
+                assert!(!keeps(predicate, t), "{predicate} over {t:?}");
+            }
+            assert!(keeps("{k} == 1 || {z} > 1", t));
+            assert!(!keeps("{k} == 2 && {z} > 1", t));
+        }
     }
 }
