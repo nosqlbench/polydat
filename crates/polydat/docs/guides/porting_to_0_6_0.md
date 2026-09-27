@@ -53,7 +53,7 @@ The release makes three things true that a host builds on:
 | `Strategy` requires `select`, which returns a `Selection` of positions; `apply` and `apply_seeded` are provided | a host's own `Strategy` implementation | implement `select` from the input's `IndexFn`, count, truncation, and seed ([comprehension_forms.md](../design/comprehension_forms.md) §3.6) |
 | `KernelProgram` requires `create_uninitialized`; `create_kernel` is provided and initializes | a host's own `KernelProgram` implementation | implement `create_uninitialized`, returning the kernel without calling `init` |
 | `Op::OrderMaterialize` gains `input` and `Op::Zip` gains `operands` | a pattern or literal naming every field of either | end the pattern with `..`; `OrderMaterialize` now holds its input and pops nothing from the stack |
-| New variants: `KernelError::ConstInit`, `AssemblyError::ConstInit`, `AssemblyError::NativeCone`, `WriteError::ConstSlot`, `WriteError::FromParent`, `ContractViolation::Bind`, `RuntimeError::ZipLengthMismatch`, `ValidationError::PredicateContextRequired`, `InputKind::Const`, `polydat_grammar::LiteralValue::UInt` | an exhaustive `match` on any of these enums (E0004) | add the arm or a wildcard |
+| New variants: `KernelError::ConstInit`, `AssemblyError::ConstInit`, `AssemblyError::NativeCone`, `WriteError::ConstSlot`, `WriteError::FromParent`, `ContractViolation::Bind`, `RuntimeError::ZipLengthMismatch`, `ValidationError::PredicateContextRequired`, `ValidationWarning::UnresolvedNames`, `InputKind::Const`, `polydat_grammar::LiteralValue::UInt` | an exhaustive `match` on any of these enums (E0004) | add the arm or a wildcard |
 | The node types `SessionStartMillis` and `ElapsedMillis` are removed | code that named them | a const capture; see the next table |
 | `polydat_grammar::PragmaSet` loses its `parent` field, `attach_to`, and `PragmaConflict` | code that chained pragma sets by hand | `PragmaSet::nested` builds a nested scope's set from its enclosing one ([polydat_grammar.md](../design/polydat_grammar.md) §14.1) |
 | `NodeBuildFn` takes a `&BuildContext` first: `fn(&BuildContext, &str, &[WireRef], &[PortType], &[ConstArg])`, and `build_node` takes it first too | a host factory function or a direct `build_node` call | add the parameter; read the enclosing binding from `ctx.binding()` (or `ctx.bindings()`, outermost first) and host resources from `ctx.resources()` ([library_catalog.md](../design/library_catalog.md), "Host-registered nodes") |
@@ -122,11 +122,11 @@ returns it again on every later `advance`.
 | A const that reads a coordinate is refused on all four engines | such a const; the compiled engines accepted it before | read an extern or another const, or drop `const` ([evaluation_model.md](../design/evaluation_model.md), "Compilation of a const") |
 | `session_start_millis()` and `elapsed_millis()` are removed | a call to either (unknown function) | `const session_start := current_epoch_millis()` in the root scope, read in children through `extern session_start: u64`; elapsed time is `current_epoch_millis() - session_start` in a volatile binding |
 | `is_stable` takes a window: `is_stable(samples: vec_f64, margin, min_samples)` | the 0.5.0 form `is_stable(value, margin, min_samples, horizon)` | keep the recent samples in the host and pass them, for example as JSON through `str_to_vec_f64` ([evaluation_model.md](../design/evaluation_model.md), "Non-Deterministic Nodes") |
-| A predicate compiled without a scope may name only what its tuples bind | a coordinate stream whose `where` names an enclosing wire, now `ValidationError::PredicateContextRequired` (a name nothing provides is V3, below) | traverse it with `for`, which captures those names when it opens, or build the stream with `from_ast_in` naming the scope's names |
+| A predicate compiled without a scope may name only what its tuples bind | a coordinate stream whose `where` names an enclosing wire, now `ValidationError::PredicateContextRequired` (a name nothing provides reads None, Part 2, and is refused under `pragma strict`, below) | traverse it with `for`, which captures those names when it opens, or build the stream with `from_ast_in` naming the scope's names |
 | `order reverse_lex` over a filter is refused on streams, as it was on traversals | a stream of such an order (V4) | order before filtering, or use `lex` ([comprehension_forms.md](../design/comprehension_forms.md) §5, V4) |
 | A non-Lex order over a truncated `lex` of a filter or a dependent cartesian is refused at compile | such an order, which was accepted before; that prefix streams and holds no positions to select from | apply the non-Lex order first, or truncate after it ([comprehension_forms.md](../design/comprehension_forms.md) §5, V4) |
 | A named generator refuses what it used to clamp or accept, and a call with constant arguments is checked at compile | `fib(n)` past 93, `pow2(n)` past 64, and `binomial(n)` past 67 (which saturated or were cut short); `geometric` with a factor that is not positive and finite; `geometric_until` with a factor at most 1 (which yielded nothing); a constant-argument call that used to fail only when its stream opened | pass an argument within the limit the error names (`fib(94): term 94 is past u64::MAX; fib.n is at most 93`); a call whose arguments come from inputs or externs is still checked when it opens ([comprehension_forms.md](../design/comprehension_forms.md) §3.1.3) |
-| A name that nothing binds is refused at compile (V3) | a clause source or predicate naming something that neither the comprehension nor, for a traversal, the program provides; a bare word in a predicate, which is a name and never resolves | bind or declare the name, or quote the text; the error `ValidationError::V3UnresolvedNames { reads }` names each unresolved name and where it is read ([comprehension_forms.md](../design/comprehension_forms.md) §5, V3) |
+| Under `pragma strict`, a name that nothing binds is refused at compile (V3) | a program whose scope declares `pragma strict` and whose clause source or predicate names something that neither the comprehension nor the scope provides; a bare word in a predicate, which is a name and never resolves. `strict` is now a pragma of its own, which checks names besides implying `strict_values` and `strict_types`; neither of those checks names | bind or declare the name, or quote the text; the error `ValidationError::V3UnresolvedNames { reads }` names each unresolved name and where it is read ([comprehension_forms.md](../design/comprehension_forms.md) §5, V3; [polydat_grammar.md](../design/polydat_grammar.md) §14) |
 | V6's bound check reads every zip operand, including one inside a wrapper | a zip whose unbounded operand was hidden by a rewrite and accepted | bound the operand, or use a cycle zip ([comprehension_forms.md](../design/comprehension_forms.md) §5, V6) |
 | Under `pragma strict_values`, a constant that violates the constraint of the port it feeds fails the build | a program such as `mod_wire(cycle, 0)`, which compiled before because a constant source was skipped unchecked | pass a value the constraint accepts; the error names the port, the constraint, and the constant ([graph_compiler.md](../design/graph_compiler.md) §2.3) |
 
@@ -283,10 +283,26 @@ a rule the specifications now state and every engine follows.
   ([polydat_grammar.md](../design/polydat_grammar.md) §6.3, §7).
 - **A bare word in a predicate is a name.** Predicates follow the rest of
   the language: text is quoted. `{region} == us-east` parses as
-  `us - east`, and the error for the unresolved names suggests quoting
-  it: `{region} == "us-east"`. A bare word without a hyphen, such as
+  `us - east`, two names nothing binds, and the V3 warning for them (the
+  error under `pragma strict`) suggests quoting it:
+  `{region} == "us-east"`. A bare word without a hyphen, such as
   `load`, is a name too, and no longer compares as text
   ([polydat_grammar.md](../design/polydat_grammar.md) §16.2).
+- **A name that nothing binds compiles with a warning and reads None.**
+  Outside `pragma strict`, a clause source or predicate that names
+  something neither the comprehension nor the scope provides compiles,
+  on every surface, and the compile records a V3 warning naming each
+  such name and where it is read: on the program's `CompileLedger`
+  (`unresolved_names`) and as a warning event for a program, and as
+  `ValidationWarning::UnresolvedNames` in a stream compile's report. At
+  run time the name reads None: a source reading it yields nothing, and
+  a predicate that reads it for a tuple keeps it not. A scope name that
+  holds None, such as an extern with no default, reads the same way; in
+  0.5.0 a None element failed the predicate, and a source interpolated
+  it as text. A host that wants the refusal declares `pragma strict`, or
+  compiles a stream with `Mode::Strict`
+  ([comprehension_forms.md](../design/comprehension_forms.md) §5, V3,
+  §10.9.1).
 - **A stream evaluates predicates and orders as a traversal does.**
   `"s0" != 2` holds on a stream, a predicate that calls a function
   filters instead of passing every tuple, and an order over a continuous
@@ -380,6 +396,13 @@ a rule the specifications now state and every engine follows.
   program or loaded from a library; a tile body follows the pragmas of
   the scope it is written in, as a `for` body does
   ([module_system.md](../design/module_system.md) §7).
+- **`strict` is a pragma of its own.** It implies `strict_values` and
+  `strict_types` as the alias did, and it also checks names: a
+  comprehension read in its scope that names something nothing binds is
+  refused (Part 1). Name checking follows the same scopes as the other
+  pragmas, so a strict module refuses its own producers' unbound names
+  under a lax host, and a lax module warns about them under a strict
+  host ([polydat_grammar.md](../design/polydat_grammar.md) §14).
 - **The type round-trip lint follows the same scopes.** Whether a lossy
   round trip is an error or a warning is decided by the pragmas of the
   scope the converting node is written in, not by the program's set, so
@@ -459,12 +482,14 @@ a rule the specifications now state and every engine follows.
   wrong argument count says `arguments` for every generator.
   `NamedGenerator` also gives `of_call`, `yields_integers`, and
   `largest_valid_argument`.
-- **Name checking for comprehensions:** `validate::check_names` with a
-  `Surface` reports every name a comprehension reads that its surface
-  cannot supply (`NameRead`, `ReadSite`, `outer_reads`), and
-  `from_ast_in` and `StreamerValue::outer` give a stream the enclosing
-  scope's names ([comprehension_forms.md](../design/comprehension_forms.md)
-  §5, V3).
+- **Name checking for comprehensions:** `validate::unresolved_names`
+  and `validate::check_names` with a `Surface` report every name a
+  comprehension reads that its surface cannot supply (`NameRead`,
+  `ReadSite`, `outer_reads`), `CompileLedger::unresolved_names` lists
+  the statements a program compiled with such names
+  (`UnresolvedNameWarning`), and `from_ast_in` and
+  `StreamerValue::outer` give a stream the enclosing scope's names
+  ([comprehension_forms.md](../design/comprehension_forms.md) §5, V3).
 - **`TileProgram::from_json_for(json, &dyn Kernel)`** loads a tile
   skeleton into a kernel's tree: its bodies see the resources installed
   on that tree and record their compile events on its ledger
