@@ -254,8 +254,16 @@ pub fn validate_simd_variant(
 
     let wires = vec![crate::compile::assembly::WireRef::input("__simd_probe"); scalar_inputs.len()];
     let wire_types = vec![shape.register; scalar_inputs.len()];
-    let vector = crate::dsl::factory::build_node(variant.vector_node, &wires, &wire_types, &[])
-        .map_err(|e| SimdVariantError::VectorNodeUnavailable(e.to_string()))?;
+    // A vector variant is pure by contract (checked below), so it reads
+    // no binding and no host resource.
+    let vector = crate::dsl::factory::build_node(
+        &crate::dsl::factory::BuildContext::default(),
+        variant.vector_node,
+        &wires,
+        &wire_types,
+        &[],
+    )
+    .map_err(|e| SimdVariantError::VectorNodeUnavailable(e.to_string()))?;
     if vector.purity() != Purity::Pure {
         return Err(SimdVariantError::VectorNodeNotPure);
     }

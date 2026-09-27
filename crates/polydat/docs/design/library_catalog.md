@@ -253,6 +253,77 @@ nodes nondeterministic so the constant-folder leaves them in place (their value 
 pull by definition). A read-side projection is a context node; a writable value is a
 control — neither is a template / env-var / global.
 
+A host that needs more than `#[polydat_node]` offers registers a builder of its own:
+a `NodeRegistration` whose `build` function
+(`polydat::dsl::registry::NodeBuildFn`) receives the node's name, wires, wire types,
+and constant arguments, and first of all its **build context**.
+
+#### Build context
+
+The build context (`polydat::dsl::factory::BuildContext`) is what the compiler tells a
+factory about the node it is building. It is a value handed to each call, so what it
+says is exact however compiles nest and whichever thread runs them. It carries two
+things.
+
+- **The binding chain**, `bindings()`: every binding under construction when the
+  node was built, outermost first. Each entry is the name of a node in the compiled
+  graph. An argument that is itself a call compiles as an intermediate binding named
+  after its enclosing one (`<binding>__anon_<n>`), and a module body's binding
+  compiles under the call's prefix (`__<module>_<n>_<binding>`) beneath the binding
+  that called the module. `binding()` is the innermost entry, the binding whose
+  construction built the node, and is `None` for a node built outside any binding.
+- **The resource scope**, `resources()`: the program tree's slot for the host's
+  resource accessor, described below.
+
+A factory that records attribution reads the chain when it builds the node:
+
+| Source | `binding()` | `bindings()` |
+|---|---|---|
+| `rate_adj := control_set("rate", t)` | `rate_adj` | `[rate_adj]` |
+| `x := f(control_set("rate", t))` | `x__anon_<n>` | `[x, x__anon_<n>]` |
+| `y := m(t: cycle)`, where `m`'s body binds `adj := control_set("rate", t)` | `__m_<n>_adj` | `[y, __m_<n>_adj]` |
+
+The counter in a compiler-given name belongs to the compile and changes when the
+program does; the first entry of the chain is always a binding the author wrote. A
+caller that builds a node directly with `build_node` passes a context of its own;
+`BuildContext::default()` has no bindings and an empty resource scope.
+
+#### Resources
+
+A host node sometimes reads a live, host-owned resource, such as a database session,
+addressed by the fingerprint of its configuration. The host implements
+`polydat::ResourceAccessor`, whose one method looks a payload up by key; polydat
+names no host type, so the payload is an `Arc<dyn Any + Send + Sync>` the node
+downcasts to its own handle type.
+
+The accessor belongs to a **program tree**, not to the process. A tree is a root
+compile and everything built on its behalf: its `for` bodies on every engine,
+subscopes built under any of its kernels, and every kernel created from or forked off
+one of its programs. One `polydat::ResourceScope` serves the whole tree.
+
+- The host hands the scope to the compile in `CompileOptions::resources`, with or
+  without an accessor installed; a compile given none starts a tree with an empty
+  scope.
+- The host reaches the scope later through `Kernel::resources()` or
+  `KernelProgram::resources()` and installs an accessor with `install`. A tree has
+  one accessor for its life; a second `install` is refused and returns the accessor
+  it was given.
+- A node keeps a clone of `BuildContext::resources()` and calls `lookup(key)` when it
+  evaluates. The lookup is synchronous and never blocks or connects; it returns
+  `None` when the tree has no accessor or the accessor holds nothing under `key`.
+
+Two trees in one process have two scopes, so each sees its own accessor:
+
+```rust
+let a = CompileOptions { resources: Some(ResourceScope::with_accessor(pool_a)), ..Default::default() };
+let b = CompileOptions { resources: Some(ResourceScope::with_accessor(pool_b)), ..Default::default() };
+// A node in a kernel compiled with `a` reads pool_a; one compiled with `b` reads pool_b.
+```
+
+A node that reads a resource declares `Purity::Nondeterministic`, so the
+constant-folder does not evaluate it at build, before the host has installed its
+accessor.
+
 ### Parameter resolution and validation
 
 The predicates (`is_positive`, `in_range`, `matches`, `is_one_of`)

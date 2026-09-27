@@ -12,8 +12,19 @@ use std::time::Instant;
 use polydat::ast::{PortType, SlotType, Value};
 use polydat::compile::assembly::WireRef;
 use polydat::compile::jit::{JitOp, classify_node, compile_jit_raw};
-use polydat::dsl::factory::{ConstArg, build_node};
+use polydat::dsl::factory::{BuildContext, ConstArg};
 use polydat::dsl::registry::registry;
+
+/// Build a library node outside any binding, as the benchmark measures
+/// nodes on their own.
+fn build_node(
+    func: &str,
+    wires: &[WireRef],
+    wire_types: &[PortType],
+    consts: &[ConstArg],
+) -> Result<Box<dyn polydat::ast::PolydatNode>, String> {
+    polydat::dsl::factory::build_node(&BuildContext::default(), func, wires, wire_types, consts)
+}
 
 /// One category row of the benchmark table: P1, P2, and P3 latency
 /// (min, median, max) in nanoseconds per pull.

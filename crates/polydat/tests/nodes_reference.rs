@@ -188,7 +188,13 @@ fn every_registered_node_has_a_closure_form() {
             .iter()
             .filter_map(|&t| {
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    build_node(sig.name, &wires, &vec![t; n], &consts)
+                    build_node(
+                        &polydat::dsl::factory::BuildContext::default(),
+                        sig.name,
+                        &wires,
+                        &vec![t; n],
+                        &consts,
+                    )
                 }))
                 .ok()
                 .and_then(Result::ok)

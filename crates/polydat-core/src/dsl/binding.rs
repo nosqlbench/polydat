@@ -287,7 +287,20 @@ impl Compiler {
         // compile_binding) keep the outer binding visible.
         let prior_binding = self.current_binding.take();
         self.current_binding = targets.first().cloned().or(prior_binding.clone());
+        // The binding joins the chain every factory's build context
+        // carries; a desugar that re-enters with the same target does
+        // not add it twice.
+        let pushed = match targets.first() {
+            Some(t) if self.binding_chain.last() != Some(t) => {
+                self.binding_chain.push(t.clone());
+                true
+            }
+            _ => false,
+        };
         let result = self.compile_binding_inner(asm, targets, value);
+        if pushed {
+            self.binding_chain.pop();
+        }
         self.current_binding = prior_binding;
         result
     }
@@ -552,13 +565,6 @@ impl Compiler {
                     }
                 }
 
-                // Install the enclosing binding's name as attribution for
-                // any node that records it (e.g. `control_set`).
-                // The scope guard clears on Drop so nested
-                // compilation never leaks an outer attribution.
-                let _binding_scope = targets
-                    .first()
-                    .map(|n| crate::dsl::factory::compile_ctx::scoped_binding(n));
                 let wire_types: Vec<PortType> = wire_refs
                     .iter()
                     .map(|w| asm.wire_type(w).unwrap_or(PortType::U64))
@@ -571,7 +577,12 @@ impl Compiler {
                 {
                     return Ok(());
                 }
-                let node = match build_node(&call.func, &wire_refs, &wire_types, &const_args) {
+                // The build context names the binding under construction
+                // (and its enclosing ones) for any node that records it,
+                // such as a host's `control_set`.
+                let ctx = self.build_context();
+                let node = match build_node(&ctx, &call.func, &wire_refs, &wire_types, &const_args)
+                {
                     Ok(n) => n,
                     Err(e) if e.contains("unknown function") => {
                         // Try module resolution before giving up
@@ -791,7 +802,13 @@ impl Compiler {
                         .iter()
                         .map(|w| asm.wire_type(w).unwrap_or(PortType::U64))
                         .collect();
-                    let node = build_node("str_concat", &wire_refs, &wire_types, &[])?;
+                    let node = build_node(
+                        &self.build_context(),
+                        "str_concat",
+                        &wire_refs,
+                        &wire_types,
+                        &[],
+                    )?;
                     let name = &targets[0];
                     asm.add_node(name, node, wire_refs);
                     self.all_names.push(name.clone());
@@ -822,6 +839,7 @@ impl Compiler {
                         "u64_or"
                     };
                     let node = build_node(
+                        &self.build_context(),
                         func,
                         &[wa.clone(), wb.clone()],
                         &[PortType::U64, PortType::U64],
@@ -997,7 +1015,13 @@ impl Compiler {
                     .iter()
                     .map(|w| asm.wire_type(w).unwrap_or(PortType::U64))
                     .collect();
-                let node = build_node(func_name, &wire_refs, &wire_types, &[])?;
+                let node = build_node(
+                    &self.build_context(),
+                    func_name,
+                    &wire_refs,
+                    &wire_types,
+                    &[],
+                )?;
                 let name = &targets[0];
                 asm.add_node(name, node, wire_refs);
                 self.all_names.push(name.clone());
@@ -1015,7 +1039,13 @@ impl Compiler {
                     .iter()
                     .map(|w| asm.wire_type(w).unwrap_or(PortType::U64))
                     .collect();
-                let node = build_node("f64_sub", &wire_refs, &wire_types, &[])?;
+                let node = build_node(
+                    &self.build_context(),
+                    "f64_sub",
+                    &wire_refs,
+                    &wire_types,
+                    &[],
+                )?;
                 let name = &targets[0];
                 asm.add_node(name, node, wire_refs);
                 self.all_names.push(name.clone());
@@ -1030,7 +1060,13 @@ impl Compiler {
                     .iter()
                     .map(|w| asm.wire_type(w).unwrap_or(PortType::U64))
                     .collect();
-                let node = build_node("u64_not", &wire_refs, &wire_types, &[])?;
+                let node = build_node(
+                    &self.build_context(),
+                    "u64_not",
+                    &wire_refs,
+                    &wire_types,
+                    &[],
+                )?;
                 let name = &targets[0];
                 asm.add_node(name, node, wire_refs);
                 self.all_names.push(name.clone());

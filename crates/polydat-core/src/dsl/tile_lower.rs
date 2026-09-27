@@ -105,7 +105,11 @@ impl Compiler {
                     .unwrap_or(crate::ast::PortType::Str)
             })
             .collect();
+        let mut bindings = self.binding_chain.clone();
+        bindings.push(tile.name.clone());
+        let ctx = super::factory::BuildContext::new(bindings, self.resources.clone());
         let node = super::factory::build_node(
+            &ctx,
             "tile_render",
             &wires,
             &wire_types,

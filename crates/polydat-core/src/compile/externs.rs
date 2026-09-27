@@ -221,6 +221,9 @@ pub(crate) struct Externs {
     /// to, recorded in at build: what the compiled engines keep of
     /// the program tree's identity.
     ledger: std::sync::Arc<crate::kernel::CompileLedger>,
+    /// The resource scope of the tree this kernel's program belongs to,
+    /// shared by every clone.
+    resources: crate::resource::ResourceScope,
 }
 
 /// Everything a clone carries but the broadcast cells, which it does
@@ -260,6 +263,7 @@ impl Clone for Externs {
             broadcasting: std::sync::atomic::AtomicBool::new(false),
             changed: self.changed.clone(),
             ledger: self.ledger.clone(),
+            resources: self.resources.clone(),
         }
     }
 }
@@ -325,6 +329,7 @@ impl Externs {
             broadcasting: std::sync::atomic::AtomicBool::new(false),
             changed: Vec::new(),
             ledger,
+            resources: crate::resource::ResourceScope::new(),
         };
         externs.scope.origins = input_defs.iter().map(|d| d.type_origin).collect();
         for name in shared {
@@ -362,6 +367,17 @@ impl Externs {
     /// The compile ledger of the tree this kernel's program belongs to.
     pub(crate) fn ledger(&self) -> &std::sync::Arc<crate::kernel::CompileLedger> {
         &self.ledger
+    }
+
+    /// The resource scope of the tree this kernel's program belongs to.
+    pub(crate) fn resources(&self) -> &crate::resource::ResourceScope {
+        &self.resources
+    }
+
+    /// Record the resource scope of the tree this kernel's program
+    /// belongs to, once, at build.
+    pub(crate) fn set_resources(&mut self, resources: crate::resource::ResourceScope) {
+        self.resources = resources;
     }
 
     /// The broadcast cell for the output at `slot`, made on the first

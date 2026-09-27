@@ -281,6 +281,9 @@ pub(crate) struct ResolvedDag {
     pub(crate) cursor_schemas: Vec<crate::iteration::source::SourceSchema>,
     /// The compile ledger every program built from this graph records in.
     pub(crate) ledger: std::sync::Arc<crate::kernel::CompileLedger>,
+    /// The resource scope of the tree every program built from this
+    /// graph belongs to.
+    pub(crate) resources: crate::resource::ResourceScope,
 }
 
 impl ResolvedDag {
@@ -629,6 +632,10 @@ pub struct PolydatAssembler {
     /// records in: a fresh one unless the compiler hands down the
     /// tree's.
     pub(crate) ledger: std::sync::Arc<crate::kernel::CompileLedger>,
+    /// The resource scope of the tree every kernel built from this
+    /// assembler belongs to: a fresh one unless the compiler hands down
+    /// the tree's, or a caller sets it with [`Self::set_resources`].
+    pub(crate) resources: crate::resource::ResourceScope,
     /// The cursors the program declares (engines.md §3.5), set
     /// by the DSL compiler so every kernel built from this assembler
     /// knows them.
@@ -698,7 +705,17 @@ impl PolydatAssembler {
             jit_mode: None,
             cursor_schemas: Vec::new(),
             ledger: crate::kernel::CompileLedger::new(),
+            resources: crate::resource::ResourceScope::new(),
         }
+    }
+
+    /// The resource scope every kernel built from this assembler reports
+    /// through [`Kernel::resources`](crate::Kernel::resources). A caller
+    /// that builds nodes itself hands each factory a
+    /// [`BuildContext`](crate::dsl::factory::BuildContext) over the same
+    /// scope, so the nodes and the kernel see one accessor.
+    pub fn set_resources(&mut self, resources: crate::resource::ResourceScope) {
+        self.resources = resources;
     }
 
     /// Record the cursors the program declares, with the partitions the
@@ -1223,6 +1240,7 @@ impl PolydatAssembler {
             strict,
             resolved.ledger.clone(),
         )?;
+        kernel.set_resources(resolved.resources.clone());
         if !cursors.is_empty() {
             kernel.set_cursor_schemas(cursors);
         }
@@ -1327,6 +1345,7 @@ impl PolydatAssembler {
             &shared_outputs_of(resolved),
             resolved.ledger.clone(),
         )?;
+        extras.externs.set_resources(resolved.resources.clone());
         extras.externs.set_output_names(&resolved.output_order);
         extras
             .externs
@@ -1564,6 +1583,7 @@ impl PolydatAssembler {
             &shared_outputs_of(resolved),
             resolved.ledger.clone(),
         )?;
+        externs.set_resources(resolved.resources.clone());
         externs.set_output_names(&resolved.output_order);
         externs.set_output_modifiers(&resolved.output_modifiers);
         externs.set_const_inits(&resolved.const_inits);
@@ -2525,6 +2545,7 @@ impl PolydatAssembler {
                 const_inits: self.const_inits,
                 cursor_schemas: self.cursor_schemas,
                 ledger: self.ledger,
+                resources: self.resources,
             };
             Self::log_forms(&resolved_view, log);
             return Ok(resolved_view);
@@ -2543,6 +2564,7 @@ impl PolydatAssembler {
             const_inits: self.const_inits,
             cursor_schemas: self.cursor_schemas,
             ledger: self.ledger,
+            resources: self.resources,
         })
     }
 }

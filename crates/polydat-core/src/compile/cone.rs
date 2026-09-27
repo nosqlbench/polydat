@@ -912,6 +912,7 @@ mod jit_impl {
             // tree's ledger already, not a program of its own: its
             // kernel is recorded nowhere.
             ledger: crate::kernel::CompileLedger::new(),
+            resources: dag.resources.clone(),
         };
 
         let restore = |sub_nodes: Vec<Box<dyn PolydatNode>>,

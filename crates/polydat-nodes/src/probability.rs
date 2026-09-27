@@ -446,8 +446,14 @@ mod tests {
             .map(|i| WireRef::input(format!("w{i}")))
             .collect();
         let types: Vec<PortType> = vec![PortType::U64; wires];
-        polydat::dsl::factory::build_node(name, &refs, &types, &[polydat::dsl::ConstArg::Float(c)])
-            .map(|_| ())
+        polydat::dsl::factory::build_node(
+            &polydat::dsl::factory::BuildContext::default(),
+            name,
+            &refs,
+            &types,
+            &[polydat::dsl::ConstArg::Float(c)],
+        )
+        .map(|_| ())
     }
 
     // --- FairCoin ---

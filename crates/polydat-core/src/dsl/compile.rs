@@ -475,6 +475,11 @@ pub struct CompileOptions {
     /// holds one charges the compile to it; `None` mints a fresh one,
     /// read back through the kernel's `ledger()`.
     pub ledger: Option<std::sync::Arc<crate::kernel::CompileLedger>>,
+    /// The resource scope of the program tree: a host that holds one,
+    /// with or without an accessor installed, hands it here; `None`
+    /// gives the tree a fresh, empty one, read back through the
+    /// kernel's `resources()` and installable there.
+    pub resources: Option<crate::resource::ResourceScope>,
     /// The engine to build on. Defaults to [`Engine::default`](crate::Engine::default), the
     /// most native form this build has; see the type's documentation
     /// for when to set it and what happens when it cannot be realized.
@@ -1322,6 +1327,12 @@ pub(super) struct Compiler {
     /// errors point at the user-level binding (`overscan__anon_3`)
     /// instead of an opaque counter (`__anon_14`).
     pub(super) current_binding: Option<String>,
+    /// The bindings under construction, outermost first: what every
+    /// node factory receives as its build context's binding chain.
+    pub(super) binding_chain: Vec<String>,
+    /// The resource scope of the tree being compiled: the root's,
+    /// handed to every body compiler and every node factory.
+    pub(super) resources: crate::resource::ResourceScope,
     /// Tiles lowered so far in this compile, in order, so later tiles
     /// can splice earlier ones (polytile.md §5.5).
     pub(super) tiles: Vec<super::ast::TileDef>,
@@ -1378,6 +1389,13 @@ impl Compiler {
         crate::kernel::interp::NoScope::charged_to(self.ledger.clone())
     }
 
+    /// The build context a node factory receives at this point of the
+    /// compile: the bindings under construction and the tree's
+    /// resource scope.
+    pub(super) fn build_context(&self) -> super::factory::BuildContext {
+        super::factory::BuildContext::new(self.binding_chain.clone(), self.resources.clone())
+    }
+
     pub(super) fn with_lib_paths(
         source_dir: Option<PathBuf>,
         polydat_lib_paths: Vec<PathBuf>,
@@ -1400,6 +1418,8 @@ impl Compiler {
             inferred_externs: Vec::new(),
             pragmas: super::pragmas::PragmaSet::default(),
             current_binding: None,
+            binding_chain: Vec::new(),
+            resources: crate::resource::ResourceScope::new(),
             tiles: Vec::new(),
             producers_seen: Vec::new(),
             pending_events: Vec::new(),
@@ -1901,6 +1921,7 @@ impl Compiler {
         );
         probe_compiler.source_text = src.clone();
         probe_compiler.context_label = format!("{} (element probe)", self.context_label);
+        probe_compiler.resources = self.resources.clone();
         probe_compiler.module_cache = self.module_cache.clone();
         // Assembly answers this: the assembler knows an output's
         // declared port type as soon as the node is registered, so the
@@ -1951,6 +1972,7 @@ impl Compiler {
             child_compiler.module_cache = self.module_cache.clone();
             // The body's program is one of the tree's.
             child_compiler.ledger = self.ledger.clone();
+            child_compiler.resources = self.resources.clone();
             child_compiler.source_text = super::pprint::pp_file(&child);
             child_compiler.context_label = format!(
                 "{} :: for {} (line {}, col {})",
@@ -1990,6 +2012,7 @@ impl Compiler {
                 modules: self.module_cache.clone(),
                 programs: std::sync::Mutex::new(std::collections::HashMap::new()),
                 ledger: self.ledger.clone(),
+                resources: self.resources.clone(),
             };
             out.push(Traversal {
                 span: f.span,
@@ -2031,6 +2054,7 @@ impl Compiler {
             pragmas,
             self.module_cache.clone(),
             self.ledger.clone(),
+            self.resources.clone(),
         ))
     }
 
@@ -2051,6 +2075,7 @@ impl Compiler {
         compiler.pragmas = body.pragmas.clone();
         compiler.module_cache = body.modules.clone();
         compiler.ledger = body.ledger.clone();
+        compiler.resources = body.resources.clone();
         compiler.template = true;
         compile_file_on_engine(&mut compiler, &body.file, None, engine, None)
     }
@@ -2128,6 +2153,7 @@ impl Compiler {
 
         let mut asm = PolydatAssembler::new(self.input_names.clone());
         asm.ledger = self.ledger.clone();
+        asm.resources = self.resources.clone();
         asm.template = self.template;
         for (name, ty) in declared_input_types(file) {
             asm.set_input_type(&name, ty);
@@ -2595,6 +2621,9 @@ impl Prepared {
         compiler.pragmas = pragmas;
         if let Some(ledger) = &options.ledger {
             compiler.ledger = ledger.clone();
+        }
+        if let Some(resources) = &options.resources {
+            compiler.resources = resources.clone();
         }
         Prepared {
             compiler,

@@ -4687,6 +4687,7 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
             fn signatures() -> &'static [polydat::dsl::registry::FuncSig] { SIGS }
 
             fn build(
+                _ctx: &polydat::dsl::factory::BuildContext,
                 name: &str,
                 _wires: &[polydat::compile::assembly::WireRef],
                 _wire_types: &[polydat::ast::PortType],

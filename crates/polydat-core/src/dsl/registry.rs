@@ -20,10 +20,13 @@
 pub use crate::ast::CompileLevel;
 use crate::compile::assembly::WireRef;
 
-/// Builder for a node module: `(name, wires, resolved wire port
-/// types, const args) -> Some(Ok(node)) / Some(Err(msg))`, or
-/// `None` when the name isn't handled by this module.
+/// Builder for a node module: `(build context, name, wires, resolved
+/// wire port types, const args) -> Some(Ok(node)) / Some(Err(msg))`,
+/// or `None` when the name isn't handled by this module. The build
+/// context carries the bindings under construction and the program
+/// tree's resource scope ([`crate::dsl::factory::BuildContext`]).
 pub type NodeBuildFn = fn(
+    &crate::dsl::factory::BuildContext,
     &str,
     &[WireRef],
     &[crate::ast::PortType],

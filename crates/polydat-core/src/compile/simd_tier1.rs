@@ -846,9 +846,16 @@ pub(crate) fn compile_tier1_ordinal(
             }
         }
         let wire_types = vec![shape.register; wires.len()];
-        let vector_node =
-            crate::dsl::factory::build_node(validated.vector_node, &wires, &wire_types, &[])
-                .map_err(|error| Tier1SimdError::VectorGraphBuild(error.to_string()))?;
+        // Vector variants are pure: they read no binding and no host
+        // resource.
+        let vector_node = crate::dsl::factory::build_node(
+            &crate::dsl::factory::BuildContext::default(),
+            validated.vector_node,
+            &wires,
+            &wire_types,
+            &[],
+        )
+        .map_err(|error| Tier1SimdError::VectorGraphBuild(error.to_string()))?;
         let name = format!("__simd_node_{node_idx}");
         vector_assembler.add_node(&name, vector_node, wires);
         vector_node_names.insert(node_idx, name);

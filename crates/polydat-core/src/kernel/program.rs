@@ -351,6 +351,9 @@ pub struct PolydatProgram {
     /// The ledger this program was recorded in: the root's, shared by
     /// every program of the tree.
     ledger: Arc<CompileLedger>,
+    /// The resource scope of the tree this program belongs to: the
+    /// root's, shared by every program of the tree.
+    resources: crate::resource::ResourceScope,
 }
 
 unsafe impl Send for PolydatProgram {}
@@ -413,6 +416,7 @@ impl PolydatProgram {
             write_throughs: Vec::new(),
             ast: None,
             ledger,
+            resources: crate::resource::ResourceScope::new(),
         }
     }
 
@@ -461,6 +465,17 @@ impl PolydatProgram {
     /// The compile ledger of the tree this program belongs to.
     pub fn ledger(&self) -> &Arc<CompileLedger> {
         &self.ledger
+    }
+
+    /// The resource scope of the tree this program belongs to.
+    pub fn resources(&self) -> &crate::resource::ResourceScope {
+        &self.resources
+    }
+
+    /// Record the resource scope of the tree, before the program is
+    /// shared.
+    pub(crate) fn set_resources(&mut self, resources: crate::resource::ResourceScope) {
+        self.resources = resources;
     }
 
     /// Find the `Statement` that defines binding `name` in this

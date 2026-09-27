@@ -78,6 +78,7 @@ impl Construction for PolydatKernel {
                     input_variance: s.options.input_variance,
                     inferred_externs: Vec::new(),
                     ledger: None,
+                    resources: None,
                     engine: crate::Engine::default(),
                 };
                 crate::dsl::compile::compile_polydat_interpreter_with_options(
@@ -107,6 +108,7 @@ impl Construction for PolydatKernel {
                     input_variance: s.options.input_variance,
                     inferred_externs: Vec::new(),
                     ledger: None,
+                    resources: None,
                     engine: crate::Engine::default(),
                 };
                 crate::dsl::compile::compile_ast_interpreter_with_options(&file, "", &options, None)
@@ -291,6 +293,9 @@ impl crate::kernel::Kernel for PolydatKernel {
     fn ledger(&self) -> &std::sync::Arc<crate::kernel::CompileLedger> {
         self.program().ledger()
     }
+    fn resources(&self) -> &crate::resource::ResourceScope {
+        self.program().resources()
+    }
     fn coord_count(&self) -> usize {
         self.program().coord_count()
     }
@@ -382,6 +387,9 @@ impl crate::kernel::KernelProgram for crate::kernel::PolydatProgram {
     }
     fn ledger(&self) -> &std::sync::Arc<crate::kernel::CompileLedger> {
         crate::kernel::PolydatProgram::ledger(self)
+    }
+    fn resources(&self) -> &crate::resource::ResourceScope {
+        crate::kernel::PolydatProgram::resources(self)
     }
     fn program_id(&self) -> crate::kernel::ProgramId {
         crate::kernel::ProgramId(self as *const Self as *const () as usize)

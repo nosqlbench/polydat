@@ -279,6 +279,7 @@ fn macro_const_node_constructed_via_runtime_factory_with_const_value() {
     let _ = reg; // ensure registry call works
     for entry in inventory::iter::<polydat::dsl::registry::NodeRegistration>() {
         if let Some(result) = (entry.build)(
+            &polydat::dsl::factory::BuildContext::default(),
             "macro_pilot_shift",
             &[],
             &[] as &[PortType],
@@ -300,6 +301,7 @@ fn macro_const_str_node_uses_captured_value_at_eval_time() {
     use polydat::dsl::factory::ConstArg;
     for entry in inventory::iter::<polydat::dsl::registry::NodeRegistration>() {
         if let Some(result) = (entry.build)(
+            &polydat::dsl::factory::BuildContext::default(),
             "macro_pilot_prefix",
             &[],
             &[] as &[PortType],
@@ -321,6 +323,7 @@ fn macro_poly_default_fallback_used_when_const_absent() {
     use polydat::dsl::factory::ConstArg;
     for entry in inventory::iter::<polydat::dsl::registry::NodeRegistration>() {
         if let Some(result) = (entry.build)(
+            &polydat::dsl::factory::BuildContext::default(),
             "macro_pilot_affine",
             &[],
             &[] as &[PortType],
@@ -342,6 +345,7 @@ fn macro_poly_default_overridden_when_const_supplied() {
     use polydat::dsl::factory::ConstArg;
     for entry in inventory::iter::<polydat::dsl::registry::NodeRegistration>() {
         if let Some(result) = (entry.build)(
+            &polydat::dsl::factory::BuildContext::default(),
             "macro_pilot_affine",
             &[],
             &[] as &[PortType],
@@ -362,6 +366,7 @@ fn macro_missing_required_const_returns_error() {
     use polydat::ast::PortType;
     for entry in inventory::iter::<polydat::dsl::registry::NodeRegistration>() {
         if let Some(result) = (entry.build)(
+            &polydat::dsl::factory::BuildContext::default(),
             "macro_pilot_shift",
             &[],
             &[] as &[PortType],
@@ -387,6 +392,7 @@ fn macro_mixed_const_types_evaluate_correctly() {
     use polydat::dsl::factory::ConstArg;
     for entry in inventory::iter::<polydat::dsl::registry::NodeRegistration>() {
         if let Some(result) = (entry.build)(
+            &polydat::dsl::factory::BuildContext::default(),
             "macro_pilot_scale_or_zero",
             &[],
             &[] as &[PortType],
@@ -885,7 +891,13 @@ fn macro_variadic_constructs_via_runtime_factory_with_wires_slice() {
         WireRef::input("c"),
     ];
     for entry in inventory::iter::<polydat::dsl::registry::NodeRegistration>() {
-        if let Some(result) = (entry.build)("macro_pilot_sum", &wires, &[PortType::U64; 3], &[]) {
+        if let Some(result) = (entry.build)(
+            &polydat::dsl::factory::BuildContext::default(),
+            "macro_pilot_sum",
+            &wires,
+            &[PortType::U64; 3],
+            &[],
+        ) {
             let node = result.expect("build succeeds with 3 wires");
             assert_eq!(node.meta().ins.len(), 3);
             return;
@@ -1007,6 +1019,7 @@ fn macro_polywire_constructs_via_runtime_factory_with_wire_types() {
     use polydat::ast::PortType;
     for entry in inventory::iter::<polydat::dsl::registry::NodeRegistration>() {
         if let Some(result) = (entry.build)(
+            &polydat::dsl::factory::BuildContext::default(),
             "macro_pilot_polywire_passthrough",
             &[],
             &[PortType::Bool], // assembler-resolved upstream wire type
@@ -1293,6 +1306,7 @@ fn macro_setup_computed_once_at_construction_and_borrowed_at_eval() {
     use polydat::dsl::factory::ConstArg;
     for entry in inventory::iter::<polydat::dsl::registry::NodeRegistration>() {
         if let Some(result) = (entry.build)(
+            &polydat::dsl::factory::BuildContext::default(),
             "macro_pilot_setup",
             &[],
             &[] as &[PortType],
@@ -1318,6 +1332,7 @@ fn macro_const_bool_false_takes_disable_branch() {
     use polydat::dsl::factory::ConstArg;
     for entry in inventory::iter::<polydat::dsl::registry::NodeRegistration>() {
         if let Some(result) = (entry.build)(
+            &polydat::dsl::factory::BuildContext::default(),
             "macro_pilot_scale_or_zero",
             &[],
             &[] as &[PortType],

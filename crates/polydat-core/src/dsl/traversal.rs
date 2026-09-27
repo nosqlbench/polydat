@@ -79,6 +79,9 @@ pub struct BodySource {
     /// The compile ledger of the tree, for the body's programs on every
     /// engine.
     pub(crate) ledger: Arc<crate::kernel::CompileLedger>,
+    /// The resource scope of the tree, which the body's nodes reach on
+    /// every engine.
+    pub(crate) resources: crate::resource::ResourceScope,
 }
 
 impl BodySource {
@@ -126,6 +129,7 @@ impl BodySource {
         pragmas: super::pragmas::PragmaSet,
         modules: HashMap<String, super::modules::ResolvedModule>,
         ledger: Arc<crate::kernel::CompileLedger>,
+        resources: crate::resource::ResourceScope,
     ) -> Self {
         BodySource {
             file,
@@ -139,6 +143,7 @@ impl BodySource {
             modules,
             programs: Mutex::new(HashMap::new()),
             ledger,
+            resources,
         }
     }
 
@@ -163,6 +168,7 @@ impl BodySource {
             modules: HashMap::new(),
             programs: Mutex::new(HashMap::new()),
             ledger: Arc::new(crate::kernel::CompileLedger::default()),
+            resources: crate::resource::ResourceScope::new(),
         })
     }
 }

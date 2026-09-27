@@ -92,6 +92,7 @@ pub struct ParentView {
     input_names: Vec<String>,
     output_modifiers: std::collections::HashMap<String, crate::dsl::ast::BindingModifier>,
     ledger: Arc<crate::kernel::CompileLedger>,
+    resources: crate::resource::ResourceScope,
     shared_cells: Vec<SharedCellInScope>,
 }
 
@@ -109,6 +110,7 @@ impl ParentView {
             input_names: parent.input_names(),
             output_modifiers,
             ledger: crate::kernel::Kernel::ledger(parent).clone(),
+            resources: crate::kernel::Kernel::resources(parent).clone(),
             shared_cells: Self::cells_of(parent.cells_in_scope()),
         }
     }
@@ -142,6 +144,12 @@ impl ParentView {
     /// program of the parent's tree.
     pub fn ledger(&self) -> &Arc<crate::kernel::CompileLedger> {
         &self.ledger
+    }
+
+    /// The resource scope the child's nodes reach: a subscope is a
+    /// program of the parent's tree and sees the parent's accessor.
+    pub fn resources(&self) -> &crate::resource::ResourceScope {
+        &self.resources
     }
 
     fn cells_of(entries: Vec<crate::kernel::SharedCellEntry>) -> Vec<SharedCellInScope> {
@@ -663,6 +671,7 @@ impl<P> SubcontextBuilder<P> {
             input_variance: compile_options.input_variance,
             inferred_externs: synthesized.clone(),
             ledger: Some(ledger.clone()),
+            resources: Some(parent.resources().clone()),
             engine: crate::Engine::default(),
         };
         let mut kernel = if compile_options.is_default() {
@@ -673,6 +682,7 @@ impl<P> SubcontextBuilder<P> {
                 "",
                 &DslOptions {
                     ledger: Some(ledger),
+                    resources: Some(parent.resources().clone()),
                     ..DslOptions::default()
                 },
                 None,

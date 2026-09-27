@@ -316,12 +316,6 @@ fn no_thread_local_value_storage_tripwire() {
             "polydat-core/src/compile/jit/codegen.rs",
             "native panic return target",
         ),
-        // The binding name a node is built under, for attribution
-        // during one synchronous build call.
-        (
-            "polydat-core/src/dsl/factory.rs",
-            "build-time attribution context",
-        ),
         // A flag that a node eval runs under the enrichment catch, so
         // the panic hook stays quiet.
         ("polydat-core/src/kernel/engines.rs", "panic-capture flag"),

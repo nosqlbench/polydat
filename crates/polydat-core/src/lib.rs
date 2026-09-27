@@ -275,10 +275,11 @@ pub use inventory;
 /// resolves inside this crate too).
 pub use half;
 
-/// The resource-accessor bridge at the crate root so the host
-/// installs via `polydat::RESOURCE_ACCESSOR` and nodes resolve via
-/// `polydat::resource_lookup`, without reaching a deep module path.
-pub use resource::{RESOURCE_ACCESSOR, ResourceAccessor, resource_lookup};
+/// The resource-accessor bridge at the crate root: the host implements
+/// `polydat::ResourceAccessor` and installs it into a program tree's
+/// `polydat::ResourceScope`, which nodes reach through their build
+/// context.
+pub use resource::{ResourceAccessor, ResourceScope};
 
 /// Host-log sink bridge — the sanctioned public path for installing
 /// a leveled log sink into the kernel (`set_log_fn`) and for emitting

@@ -105,53 +105,69 @@ impl ConstArg {
     }
 }
 
-/// Source-binding attribution, set by the compiler before each
-/// `build_node` call and read by factories that want to record
-/// which DSL binding caused the node to exist. The
-/// `control_set` factory is the canonical consumer:
-/// `rate_adj := control_set("rate", target)` calls the factory
-/// with `current_binding()` returning `"rate_adj"`, which the
-/// node stores for runtime attribution in
-/// `ControlOrigin::Polydat { binding }`.
-pub mod compile_ctx {
-    use std::cell::RefCell;
-    thread_local! {
-        static BINDING: RefCell<Option<String>> = const { RefCell::new(None) };
-    }
+/// What the compiler tells a node factory about the node it is building:
+/// the bindings under construction when the node was asked for, and the
+/// program tree's resource scope.
+///
+/// Every factory receives one ([`crate::dsl::registry::NodeBuildFn`]).
+/// A factory that records attribution reads [`Self::binding`]:
+/// `rate_adj := control_set("rate", target)` builds `control_set` with
+/// `binding()` equal to `Some("rate_adj")`. A node built inside another
+/// binding's construction sees the whole chain in [`Self::bindings`],
+/// outermost first: an argument that is itself a call compiles as an
+/// intermediate binding the compiler names after its enclosing one
+/// (`x := f(control_set("r", t))` builds `control_set` under
+/// `["x", "x__anon_0"]`), and a module body's bindings compile under the
+/// binding that called the module. The context is a value the compiler
+/// hands down, so attribution is exact under nesting and on any thread.
+///
+/// A node that looks up a host resource when it evaluates keeps a clone
+/// of [`Self::resources`] (resource.rs).
+#[derive(Clone, Debug, Default)]
+pub struct BuildContext {
+    bindings: Vec<String>,
+    resources: crate::resource::ResourceScope,
+}
 
-    /// Install the current binding name for the duration of a
-    /// single `build_node` call. Returns a guard that clears
-    /// the thread-local on drop so nested compilation can't
-    /// leak attribution across callers.
-    pub fn scoped_binding(name: &str) -> BindingScope {
-        BINDING.with(|b| *b.borrow_mut() = Some(name.to_string()));
-        BindingScope(())
-    }
-
-    /// Read the current binding attribution. Returns `None`
-    /// when called outside a [`scoped_binding`] scope (e.g.
-    /// ad-hoc tests that call [`super::build_node`] directly).
-    pub fn current_binding() -> Option<String> {
-        BINDING.with(|b| b.borrow().clone())
-    }
-
-    /// RAII guard that clears the binding slot on drop.
-    pub struct BindingScope(());
-    impl Drop for BindingScope {
-        fn drop(&mut self) {
-            BINDING.with(|b| *b.borrow_mut() = None);
+impl BuildContext {
+    /// A context for a node built under `bindings` (outermost first) in
+    /// the program tree whose resource scope is `resources`.
+    pub fn new(bindings: Vec<String>, resources: crate::resource::ResourceScope) -> Self {
+        Self {
+            bindings,
+            resources,
         }
+    }
+
+    /// The binding whose construction built the node: the innermost of
+    /// [`Self::bindings`]. `None` for a node built outside any binding,
+    /// such as one a caller builds directly with [`build_node`].
+    pub fn binding(&self) -> Option<&str> {
+        self.bindings.last().map(String::as_str)
+    }
+
+    /// Every binding under construction when the node was built,
+    /// outermost first.
+    pub fn bindings(&self) -> &[String] {
+        &self.bindings
+    }
+
+    /// The resource scope of the program tree the node belongs to.
+    pub fn resources(&self) -> &crate::resource::ResourceScope {
+        &self.resources
     }
 }
 
 /// Build the node `func` takes for the given wires, their types, and
 /// constant arguments, through the registry; an unknown function or a
-/// mismatched signature is an error naming it.
+/// mismatched signature is an error naming it. `ctx` reaches every
+/// factory unchanged.
 ///
 /// Dispatch order: inventory registrations (constraint checks, then
 /// the module validator, then `build`), then the registry's variadic
 /// fallback.
 pub fn build_node(
+    ctx: &BuildContext,
     func: &str,
     wires: &[WireRef],
     wire_types: &[crate::ast::PortType],
@@ -191,7 +207,7 @@ pub fn build_node(
             return Err(format!("bad constant {func}: {reason}"));
         }
 
-        if let Some(result) = (reg.build)(func, wires, wire_types, consts) {
+        if let Some(result) = (reg.build)(ctx, func, wires, wire_types, consts) {
             return result;
         }
     }

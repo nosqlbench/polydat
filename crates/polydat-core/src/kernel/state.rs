@@ -595,6 +595,14 @@ impl PolydatKernel {
             .set_cursor_schemas(schemas);
     }
 
+    /// Record the resource scope of the tree the program belongs to,
+    /// before the program is shared.
+    pub(crate) fn set_resources(&mut self, resources: crate::resource::ResourceScope) {
+        Arc::get_mut(&mut self.program)
+            .expect("set_resources must be called before program is shared")
+            .set_resources(resources);
+    }
+
     /// Record the const bindings, before the program is shared.
     pub(crate) fn set_const_inits(&mut self, inits: Vec<crate::kernel::ConstInit>) {
         Arc::get_mut(&mut self.program)

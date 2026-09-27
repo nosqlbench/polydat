@@ -650,6 +650,15 @@ pub trait Kernel: Send + Sync + internals::KernelInternals {
     /// what compiling it and everything opened from it has built.
     fn ledger(&self) -> &std::sync::Arc<crate::kernel::CompileLedger>;
 
+    /// The resource scope of the program tree this kernel belongs to:
+    /// the slot for the host's [`ResourceAccessor`](crate::ResourceAccessor)
+    /// that every node of the tree looks resources up through. A host
+    /// that did not hand one to the compile
+    /// (`CompileOptions::resources`) installs its accessor here, once;
+    /// kernels created from or forked off this one, subscopes built
+    /// under it, and its traversal bodies share the scope.
+    fn resources(&self) -> &crate::resource::ResourceScope;
+
     // ── The per-cycle scope-tree surface (native_scope_trees.md §3) ──
     //
     // Index arguments are positions in `input_names`, coordinates
@@ -834,6 +843,11 @@ pub trait KernelProgram: Send + Sync {
     /// The compile ledger of the program tree this program belongs to.
     fn ledger(&self) -> &std::sync::Arc<crate::kernel::CompileLedger>;
 
+    /// The resource scope of the program tree this program belongs to,
+    /// the one [`Kernel::resources`] reports for every kernel created
+    /// from it.
+    fn resources(&self) -> &crate::resource::ResourceScope;
+
     /// This program's identity, equal to [`Kernel::program_id`] of every
     /// kernel created from it.
     fn program_id(&self) -> ProgramId;
@@ -859,6 +873,9 @@ impl<K: Kernel + Clone + Send + Sync + 'static> KernelProgram for SharedKernel<K
     }
     fn ledger(&self) -> &std::sync::Arc<crate::kernel::CompileLedger> {
         self.0.ledger()
+    }
+    fn resources(&self) -> &crate::resource::ResourceScope {
+        self.0.resources()
     }
     fn program_id(&self) -> ProgramId {
         self.0.program_id()

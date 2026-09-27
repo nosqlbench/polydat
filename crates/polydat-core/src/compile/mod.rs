@@ -686,6 +686,9 @@ macro_rules! impl_kernel_trait {
             fn ledger(&self) -> &std::sync::Arc<crate::kernel::CompileLedger> {
                 self.core.externs.ledger()
             }
+            fn resources(&self) -> &crate::resource::ResourceScope {
+                self.core.externs.resources()
+            }
             fn coord_count(&self) -> usize {
                 self.core.externs.coordinate_count()
             }

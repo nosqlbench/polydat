@@ -73,7 +73,13 @@ mod tests {
             let wires = vec![WireRef::Input("cycle".to_string()); sig.wire_input_count().max(1)];
             let wire_types = vec![PortType::U64; wires.len()];
 
-            let node_res = build_node(sig.name, &wires, &wire_types, &consts);
+            let node_res = build_node(
+                &crate::dsl::factory::BuildContext::default(),
+                sig.name,
+                &wires,
+                &wire_types,
+                &consts,
+            );
             if let Ok(node) = node_res {
                 // Every compiled form, not only the scalar one: a node
                 // whose form is a slot kit belongs in the P2 column.

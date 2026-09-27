@@ -116,7 +116,9 @@ fn a_hand_built_assembler_compiles_on_every_engine() {
     fn build() -> PolydatAssembler {
         let mut asm = PolydatAssembler::new(vec!["cycle".into()]);
         use polydat::ast::PortType;
+        let ctx = polydat::dsl::factory::BuildContext::default();
         let hash = polydat::dsl::factory::build_node(
+            &ctx,
             "hash",
             &[WireRef::input("cycle")],
             &[PortType::U64],
@@ -125,6 +127,7 @@ fn a_hand_built_assembler_compiles_on_every_engine() {
         .unwrap();
         asm.add_node("h", hash, vec![WireRef::input("cycle")]);
         let m = polydat::dsl::factory::build_node(
+            &ctx,
             "mod",
             &[WireRef::node("h")],
             &[PortType::U64],
