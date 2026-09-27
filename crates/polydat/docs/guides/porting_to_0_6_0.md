@@ -607,6 +607,42 @@ a rule the specifications now state and every engine follows.
   `bool` externs now default to their own zero, and other types have no
   default.
 
+## Fixed in 0.6.1
+
+The 0.6.1 patch release corrects two forms that 0.5.4 evaluated and
+0.6.0 read as None. In 0.6.0 a source was held to yield nothing when a
+name in its text, uncomposed, was unbound, so both forms yielded nothing
+on every engine. The rule is now applied to the names a source reads
+when it is evaluated
+([comprehension_forms.md](../design/comprehension_forms.md) §5, V3).
+
+- **A composed source name reads what it composes to.** `k in
+  {k_values}, limit in {k_{k}_limits}`, and the bare-prior `k in
+  k_values, limit in {k_{k}_limits}`, yield a `limit` for each `k` from
+  `k_1_limits`, `k_10_limits`, and so on. V3 checks the leaf `k`, which
+  the first clause binds, so a strict name check accepts the form; a
+  composition that nothing binds yields nothing for the tuples that
+  compose it.
+- **`all(<cursor>)` reads the cursor's extent.** `xval in all(row)`
+  under `cursor row = range(0, 50)` yields the 50 ordinals; V3 and a
+  strict name check look for the cursor's extent, not a value named
+  `row`.
+- **A clause's yield names what it read as None.** `ClauseYield` gains
+  `reads_none: Vec<NoneRead>`: each name whose read made an evaluation
+  of the clause's source yield nothing, as read after composition, with
+  whether it was unbound or bound to None. A host that holds an unbound
+  `{name}` in a source as an error reads it there instead of deriving
+  it from the source text. polydat constructs every `ClauseYield`; a
+  host that builds one with a struct literal adds the field.
+- **The index-addressed evaluator sees a composed dependency.** A
+  cartesian whose later clause composes a name over an earlier clause
+  is a dependent product for `evaluate_indexed` and
+  `evaluate_for_iteration_reported`, as it is for the materialized
+  evaluator.
+- **`evaluate_spec` reads a name bound to None as None.** A spec that
+  reads a name bound to None yields no values instead of the value
+  `None` or its display text; a name nothing binds is still its error.
+
 ## Known issues
 
 - **The known issue of 0.5.0 is resolved.** The scope binder no longer

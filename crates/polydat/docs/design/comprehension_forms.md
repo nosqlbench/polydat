@@ -719,6 +719,25 @@ What the comprehension binds where a name is read:
   predicate is a name (§10.9.1) that nothing binds or supplies: a
   predicate reads its scope only through `{name}`.
 
+The names a source reads are the names its evaluation reads
+(`Source::names_read`), which differ from the text of two forms:
+
+- **A composed name** `{k_{k}_limits}` reads its leaves, here `k`, and
+  then the name they compose to, here `k_1_limits` when `k` is 1. The
+  composed name is known only once its leaves are bound, so V3 at
+  compile checks the leaves, and the composed name is read when the
+  source is evaluated, under the rule below. `k in {k_values}, limit in
+  {k_{k}_limits}` and `k in k_values, limit in {k_{k}_limits}` read
+  `k_values` and `k`, which the first clause binds for the second.
+- **The cursor form** `all(<cursor>)` reads the cursor's extent, the
+  outputs `__cursor_extent_<cursor>_start` and `_end` that a `cursor`
+  declaration compiles to, not a value named after the cursor. A scope
+  that declares the cursor supplies its extent; the V3 diagnostic names
+  a missing one as the extent of the cursor.
+
+A `for` statement's source accepts neither form; both are comprehension
+text that a host evaluates against a scope (`evaluate_for_iteration`).
+
 What each surface supplies (§9.5):
 
 - A coordinate stream and a scoped-kernel stream supply no name.
@@ -763,7 +782,21 @@ At run time a name bound nowhere reads None, and None propagates
 surface and every engine:
 
 - A clause source that reads None yields nothing, so every cartesian it
-  takes part in yields nothing.
+  takes part in yields nothing. The decision comes out of the
+  evaluation: a source yields nothing when a name it reads after
+  composition, a composed name, a placeholder, a bare reference, a list
+  element, a call argument, or a cursor's extent, is bound nowhere or
+  bound to None, and every other failure of the evaluation is the
+  comprehension's error (`RuntimeError::SourceEval`). A composed name
+  whose composition nothing binds yields nothing for the tuples that
+  compose it, under strictness too, because no compile can know it.
+- The traversal evaluators report each such read on the clause's
+  `ClauseYield::reads_none`, the name as read with whether it was
+  unbound (`NoneRead::Unbound`) or bound to None (`NoneRead::BoundNone`),
+  once each over all the clause's evaluations
+  (`evaluate_for_iteration_reported`). A host that holds a read of an
+  unbound name as an error reads it there; polydat's own evaluation
+  yields nothing.
 - A predicate that reads None for a tuple is None and keeps no tuple
   (§10.9.1). `&&` and `||` stop at the first operand that decides them,
   so a tuple a predicate decides before it reads the name is kept or
@@ -3060,7 +3093,9 @@ same way (`predicate::CompiledPredicate`), per tuple:
 - **None.** None propagates ([None Semantics](none_semantics.md)
   Rule 1). A comparison, a membership test, a negation, arithmetic, a
   call, or a cast that reads None is None; an expression the evaluator
-  interpolates is None when it interpolates None. The predicate's
+  interpolates is None when it interpolates None, including the name a
+  composed placeholder composes to, which is read after its leaves are
+  written in (§5 V3). The predicate's
   value is None when the operand that decides it is None, and a
   predicate whose value is None keeps no tuple.
 - **Connectives.** `&&` and `||` evaluate their operands left to
