@@ -1,8 +1,8 @@
 ---
 type: specification
 title: Cursor Partitions
-timestamp: 2026-09-25
-description: Partition values, the partition-spec language, resolution and rounding, ordering, metadata wires, and cursor narrowing with over.
+timestamp: 2026-09-27
+description: Partition values, the partition-spec language, resolution and rounding, ordering, metadata wires, cursor narrowing with over, and the source factories that hand a cursor's ordinals to fibers.
 tags: [iteration]
 ---
 
@@ -10,13 +10,14 @@ tags: [iteration]
 
 This document specifies Polydat cursor-partition values, the partition-spec
 language, how a spec is resolved to ordinal ranges and rounded, partition
-ordering, narrowing a cursor to one partition with `over`, and the partition
-metadata wires.
+ordering, narrowing a cursor to one partition with `over`, the partition
+metadata wires, and the source factories that hand a cursor's ordinals to
+fibers and rewind them between rounds.
 
 **Related specifications:** [Comprehension Forms](comprehension_forms.md),
 [Polydat Grammar](polydat_grammar.md#sec-fields-cursors),
 [Runtime Model](runtime_model.md), and the node reference
-([nodes.md](../reference/nodes.md)); §10 states what each covers.
+([nodes.md](../reference/nodes.md)); §11 states what each covers.
 
 ## 1. Purpose
 
@@ -316,7 +317,54 @@ Typed library nodes expose partition values without relying on field syntax:
 are in the node reference ([nodes.md](../reference/nodes.md), the
 `partition` section).
 
-## 8. Error policy
+## 8. Source factories
+
+This section owns the source-factory contract. It belongs with cursor
+partitions because a factory serves a cursor's ordinal domain, including the
+domain an `over` clause narrows (§7.2), to the fibers that run a scope. The
+replay contract each source reports is specified in
+[SIMD ISA Selection](simd_isa_autopromotion.md) §4.1 and is not repeated here.
+
+A **source factory** (`DataSourceFactory`,
+`polydat-core/src/iteration/source.rs`) holds the state every reader of one
+cursor shares: the cursor position and the end of the domain. `create_reader()`
+returns a per-fiber **reader** (`DataSource`). A reader's `reserve(stride)`
+claims the next `stride` ordinals as a half-open range, claims fewer at the end
+of the domain, and returns `None` when the domain is exhausted.
+
+A **round** is one pass over the factory's domain, from the factory's
+construction or a rewind until reservations return `None`. Within a round the
+readers of one factory never claim the same ordinal. `rewind_for_poll()`
+starts a new round:
+
+- It returns `false` when the factory cannot rewind and changes nothing. The
+  trait's default returns `false`. A host that re-runs a source between poll
+  rounds rejects a factory that returns `false` rather than completing
+  silently after the first round.
+- When it returns `true`, every reservation linearized after the call returns
+  belongs to the new round, and the new round hands out each of its ordinals
+  at most once. The rule is safe under any concurrency: readers may reserve
+  while the rewind runs, and a reservation that overlaps the rewind belongs to
+  either the old round or the new one.
+
+```text
+range(0, 4), stride 3:  reserve -> [0, 3)   reserve -> [3, 4)   reserve -> None
+rewind_for_poll() -> true
+                        reserve -> [0, 3)   reserve -> [3, 4)   reserve -> None
+```
+
+The built-in factories both rewind:
+
+| Factory | Rewind |
+|---|---|
+| `RangeSourceFactory`, for `range(a, b)` | The cursor returns to `a`, and the round serves `[a, b)` again. The cursor is the factory's only shared state and every reservation is one atomic add on it, so the rewind is a single atomic store in the same modification order as the reservations. |
+| `ExtendingRangeSourceFactory`, for the `until_*` constructors | The cursor returns to the start, and the end returns to the start plus the base chunk, capped by the partition bound `max_end` when `over` narrows the cursor. The extension policy grows the end again as the round reaches it. The rewind and every decision to extend or end the round run under the factory's round lock, and the rewind writes the end before the cursor, so no reader acts on a partly rewound pair. A reservation below the end takes no lock. |
+
+An extension policy reads the elapsed time from the factory's construction,
+and a rewind does not reset that baseline. A time-based policy whose time has
+run out therefore ends every later round at the base chunk.
+
+## 9. Error policy
 
 The parser and resolver fail with an explanatory diagnostic for at least:
 
@@ -332,7 +380,7 @@ The parser and resolver fail with an explanatory diagnostic for at least:
 Errors are not converted into empty partition lists. A spec that would silently
 schedule no useful work is rejected at its earliest authoritative boundary.
 
-## 9. Normative invariants
+## 10. Normative invariants
 
 **CP1 — Half-open ranges.** Every resolved partition denotes
 `[start_ord, end_ord)`.
@@ -362,7 +410,11 @@ scope activation.
 ordinary list-source contract. Cursor partitioning does not add a new
 comprehension operator.
 
-## 10. Related specifications
+**CP10 — Round exclusivity.** A source factory hands out each ordinal of a
+round at most once, and a reservation linearized after a rewind returns
+belongs to the new round, under any concurrency (§8).
+
+## 11. Related specifications
 
 - [Comprehension Forms](comprehension_forms.md) specifies list-source
   composition, traversal, filtering, ordering, and consumption surfaces.

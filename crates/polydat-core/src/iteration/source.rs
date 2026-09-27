@@ -375,18 +375,19 @@ pub trait DataSourceFactory: Send + Sync {
         SourceReplayContract::consumptive()
     }
 
-    /// Rewind the factory's shared cursor to the start so a
-    /// subsequent `create_reader()` produces a fresh stream
-    /// covering the same ordinal range: what a host that re-runs a
-    /// source between poll rounds calls after each round exhausts it.
+    /// Start a new round over the same ordinal domain, returning
+    /// `true`, or return `false` when the factory cannot rewind.
     ///
-    /// Default impl: returns `false` to signal the factory
-    /// doesn't support rewinding. Factories that DO support it
-    /// ([`RangeSourceFactory`], [`ExtendingRangeSourceFactory`])
-    /// override and reset their internal cursor / extent
-    /// state. A host that needs to rewind should reject a factory
-    /// that returns `false` with a clear diagnostic rather than
-    /// complete silently after the first round.
+    /// A factory that rewinds promises that every reservation
+    /// linearized after the call returns, from any reader of the
+    /// factory, belongs to the new round, and that the new round
+    /// hands out each of its ordinals at most once. This is safe
+    /// under any concurrency: readers may reserve while the rewind
+    /// runs, and a reservation that overlaps it belongs to one round
+    /// or the other. The default returns `false` and changes nothing.
+    /// A host that re-runs a source between poll rounds rejects a
+    /// factory that returns `false` rather than completing silently
+    /// after the first round (cursor_partitions.md §8).
     fn rewind_for_poll(&self) -> bool {
         false
     }
@@ -457,13 +458,13 @@ impl DataSourceFactory for RangeSourceFactory {
     }
 
     fn rewind_for_poll(&self) -> bool {
-        // Reset the shared atomic cursor back to the
-        // start-of-range. Phase-poll uses this between
-        // iterations: each iteration covers ordinals
-        // `[start, end)` afresh, so the workload's ops see the
-        // same cycle space per iteration. With concurrency=1
-        // (mandated by phase-poll), there's a single fiber
-        // and no race on the reset.
+        // The round's whole state is the one cursor atomic, and every
+        // reservation is a `fetch_add` on it. The store and the
+        // reservations share that location's single modification
+        // order, so each reservation reads either the old round's
+        // cursor or a value derived from this store, and no other
+        // memory is published with it. Relaxed is therefore the
+        // cheapest ordering that is correct under any concurrency.
         let start = self.end.saturating_sub(self.schema.extent.unwrap_or(0));
         self.cursor.store(start, Ordering::Relaxed);
         true
@@ -547,9 +548,9 @@ impl ExtensionContext {
 /// [`ExtensionContext`] — no internal state, no side effects.
 /// The source provides elapsed time and consumed counts; the
 /// policy returns `Some(delta)` to grow the extent or `None`
-/// to terminate. Cheap-and-possibly-duplicated call contract
-/// (concurrent fibers may invoke under racing end-reach; only
-/// one CAS-wins extension takes effect per round).
+/// to terminate. The source consults the policy under its round
+/// lock, so calls never overlap; a reader that finds the end
+/// reached after another reader's `None` consults it again.
 pub trait ExtensionPolicy: Send + Sync {
     /// Decide how to extend (if at all) given the current
     /// cursor context.
@@ -564,6 +565,11 @@ pub trait ExtensionPolicy: Send + Sync {
 pub struct ExtendingRangeSourceFactory {
     cursor: Arc<AtomicU64>,
     end: Arc<AtomicU64>,
+    /// Serializes the round's end decisions: a reader's extension
+    /// and a rewind each read and write the cursor and end pair
+    /// under it, so an extension never acts on a pair a rewind has
+    /// half replaced. Reservations below the end do not take it.
+    round: Arc<std::sync::Mutex<()>>,
     start: u64,
     /// Per-pass chunk size — also the default extension delta
     /// when the policy reports "continue". Exposed to the
@@ -601,6 +607,7 @@ impl ExtendingRangeSourceFactory {
         Self {
             cursor: Arc::new(AtomicU64::new(start)),
             end: Arc::new(AtomicU64::new(end)),
+            round: Arc::new(std::sync::Mutex::new(())),
             start,
             base: initial_extent,
             max_end: None,
@@ -636,6 +643,7 @@ impl DataSourceFactory for ExtendingRangeSourceFactory {
         Box::new(ExtendingRangeSource {
             cursor: self.cursor.clone(),
             end: self.end.clone(),
+            round: self.round.clone(),
             policy: self.policy.clone(),
             start: self.start,
             base: self.base,
@@ -661,15 +669,23 @@ impl DataSourceFactory for ExtendingRangeSourceFactory {
     }
 
     fn rewind_for_poll(&self) -> bool {
-        // A new round starts over: the cursor at the start and the end
-        // at the base chunk, which the policy grows again as it did
-        // the first time. A partition bound (`max_end`) still caps it.
-        self.cursor.store(self.start, Ordering::Release);
+        // A new round starts over: the end at the base chunk, capped by
+        // a partition bound (`max_end`), and the cursor at the start.
+        // Under the round lock no reader extends the end meanwhile. The
+        // end is written before the cursor, and the cursor with
+        // release, so a reader whose acquire load sees the new cursor
+        // also sees the new end; a reader that still sees the old
+        // cursor fails its claim or makes it in the old round.
+        let _round = self
+            .round
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut end = self.start.saturating_add(self.base);
         if let Some(cap) = self.max_end {
             end = end.min(cap);
         }
-        self.end.store(end, Ordering::Release);
+        self.end.store(end, Ordering::Relaxed);
+        self.cursor.store(self.start, Ordering::Release);
         true
     }
 
@@ -678,15 +694,18 @@ impl DataSourceFactory for ExtendingRangeSourceFactory {
     }
 }
 
-/// Per-fiber reader for an extending range source. Reservation
-/// uses CAS so concurrent fibers race cleanly without lock
-/// contention; on end-reach the policy is consulted (possibly
-/// duplicated under concurrent end-reach), and the end atomic
-/// is grown via a single CAS (only one extension takes effect
-/// per round; losers retry and see the new end).
+/// Per-fiber reader for an extending range source. A reservation
+/// below the end is one compare-and-swap on the shared cursor and
+/// takes no lock. At the end the reader takes the factory's round
+/// lock, re-reads the cursor and end, and consults the policy only
+/// if the end is still reached, so one reader extends the round and
+/// the others claim from the new end.
 struct ExtendingRangeSource {
     cursor: Arc<AtomicU64>,
     end: Arc<AtomicU64>,
+    /// The factory's round lock
+    /// ([`ExtendingRangeSourceFactory::round`]).
+    round: Arc<std::sync::Mutex<()>>,
     policy: Arc<dyn ExtensionPolicy>,
     start: u64,
     base: u64,
@@ -718,20 +737,30 @@ impl DataSource for ExtendingRangeSource {
                     Err(_) => continue, // raced; retry
                 }
             }
-            // A partition-bound cursor terminates the
-            // moment the partition is exhausted, whether or not
-            // the policy's time / pass / count target was
-            // reached — no policy consultation past the cap.
+            // The cursor has reached the end. Whether the round ends
+            // or grows is decided under the round lock over a fresh
+            // read of the pair, so the decision never acts on a pair a
+            // rewind has half replaced, and readers that reach the end
+            // together consult the policy one at a time: the first
+            // extends, and the others see the new end and claim.
+            let _round = self
+                .round
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let cur = self.cursor.load(Ordering::Acquire);
+            let end = self.end.load(Ordering::Acquire);
+            if cur < end {
+                continue;
+            }
+            // A partition-bound cursor terminates the moment the
+            // partition is exhausted, whether or not the policy's
+            // time / pass / count target was reached — no policy
+            // consultation past the cap.
             if let Some(max) = self.max_end
                 && end >= max
             {
                 return None;
             }
-            // Cursor has caught up to end. Consult policy with
-            // a snapshot of the current state. Each fiber that
-            // races to this point gets its own context read;
-            // duplicate consultations are idempotent for pure
-            // predicates.
             let ctx = ExtensionContext {
                 elapsed_ms: self.started.elapsed().as_millis() as u64,
                 consumed: end.saturating_sub(self.start),
@@ -739,12 +768,8 @@ impl DataSource for ExtendingRangeSource {
             };
             match self.policy.next_extension(&ctx) {
                 Some(delta) if delta > 0 => {
-                    // CAS the end forward, clamped at the
-                    // partition cap when one is set. If someone
-                    // else extended ahead of us, that's fine —
-                    // our duplicate policy consultation is
-                    // harmless and the new end is at least as
-                    // far as ours would have been.
+                    // Grow the end, clamped at the partition cap when
+                    // one is set.
                     let mut new_end = end.saturating_add(delta);
                     if let Some(max) = self.max_end {
                         new_end = new_end.min(max);
@@ -752,12 +777,7 @@ impl DataSource for ExtendingRangeSource {
                     if new_end == end {
                         return None;
                     }
-                    let _ = self.end.compare_exchange(
-                        end,
-                        new_end,
-                        Ordering::AcqRel,
-                        Ordering::Acquire,
-                    );
+                    self.end.store(new_end, Ordering::Release);
                     continue;
                 }
                 _ => return None,
@@ -1741,5 +1761,107 @@ mod rewind_tests {
         assert_eq!(drain(bounded.create_reader().as_mut()), vec![0, 1, 2, 3, 4]);
         assert!(bounded.rewind_for_poll());
         assert_eq!(drain(bounded.create_reader().as_mut()), vec![0, 1, 2, 3, 4]);
+    }
+
+    /// Readers reserve while the factory rewinds, over and over. Every
+    /// reservation lies in the round's domain. A reservation that
+    /// starts after a rewind returns and finishes before the next one
+    /// begins belongs to that round, and one round's such reservations
+    /// never overlap. After the readers stop, a rewind and one reader
+    /// drain the domain exactly once.
+    fn rewind_under_concurrent_readers(
+        factory: Arc<dyn DataSourceFactory>,
+        domain: std::ops::Range<u64>,
+        stride: usize,
+    ) {
+        use std::sync::atomic::{AtomicBool, AtomicU64};
+        const READERS: usize = 4;
+        const REWINDS: u64 = 300;
+        let begun = Arc::new(AtomicU64::new(0));
+        let returned = Arc::new(AtomicU64::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+        let readers: Vec<_> = (0..READERS)
+            .map(|_| {
+                let (factory, domain) = (factory.clone(), domain.clone());
+                let (begun, returned, stop) = (begun.clone(), returned.clone(), stop.clone());
+                std::thread::spawn(move || {
+                    let mut reader = factory.create_reader();
+                    let mut settled = Vec::new();
+                    while !stop.load(Ordering::SeqCst) {
+                        let round = returned.load(Ordering::SeqCst);
+                        let quiet = begun.load(Ordering::SeqCst) == round;
+                        let reserved = reader.reserve(stride);
+                        let still = begun.load(Ordering::SeqCst) == round;
+                        match reserved {
+                            Some(r) => {
+                                assert!(
+                                    domain.start <= r.start
+                                        && r.end <= domain.end
+                                        && r.start < r.end,
+                                    "{r:?} lies outside the round {domain:?}"
+                                );
+                                if quiet && still {
+                                    settled.push((round, r));
+                                }
+                            }
+                            None => std::thread::yield_now(),
+                        }
+                    }
+                    settled
+                })
+            })
+            .collect();
+        for _ in 0..REWINDS {
+            std::thread::yield_now();
+            begun.fetch_add(1, Ordering::SeqCst);
+            assert!(factory.rewind_for_poll());
+            returned.fetch_add(1, Ordering::SeqCst);
+        }
+        stop.store(true, Ordering::SeqCst);
+        let mut settled: Vec<(u64, std::ops::Range<u64>)> = readers
+            .into_iter()
+            .flat_map(|h| h.join().expect("a reader panicked"))
+            .collect();
+        settled.sort_by_key(|(round, r)| (*round, r.start));
+        for pair in settled.windows(2) {
+            let ((a_round, a), (b_round, b)) = (&pair[0], &pair[1]);
+            assert!(
+                a_round != b_round || a.end <= b.start,
+                "round {a_round} handed out {a:?} and {b:?}"
+            );
+        }
+        assert!(factory.rewind_for_poll());
+        let mut reader = factory.create_reader();
+        let mut all = Vec::new();
+        while let Some(r) = reader.reserve(stride) {
+            all.extend(r);
+        }
+        assert_eq!(all, domain.collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_range_rewind_is_safe_under_concurrent_readers() {
+        rewind_under_concurrent_readers(Arc::new(RangeSourceFactory::new(5, 505)), 5..505, 7);
+    }
+
+    #[test]
+    fn an_extending_rewind_is_safe_under_concurrent_readers() {
+        let policy = Arc::new(UntilCountPolicy {
+            min_count: 300,
+            delta: 100,
+        });
+        let factory = ExtendingRangeSourceFactory::new("rows", 5, 100, policy);
+        rewind_under_concurrent_readers(Arc::new(factory), 5..305, 7);
+        let bounded = ExtendingRangeSourceFactory::new(
+            "rows",
+            5,
+            100,
+            Arc::new(UntilCountPolicy {
+                min_count: 300,
+                delta: 100,
+            }),
+        )
+        .bounded(250);
+        rewind_under_concurrent_readers(Arc::new(bounded), 5..250, 7);
     }
 }
