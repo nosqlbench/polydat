@@ -745,18 +745,254 @@ impl PolydatAssembler {
         }
     }
 
-    /// Record how the `const` bindings are initialized, in dependency
-    /// order.
-    pub(crate) fn set_const_inits(&mut self, inits: Vec<crate::kernel::ConstInit>) {
-        self.const_inits = inits;
-    }
-
-    /// Mark an output as declared with the `const` keyword. Compile-
-    /// time and scope-activation checks (SRD 11 §"Init Binding
-    /// Contract") read this set to enforce const-like-constraint
-    /// semantics on the binding.
+    /// Mark an output as a `const`: a value fixed for the life of every
+    /// kernel built from this assembler. `name` is an output, or a node
+    /// when no output has the name.
+    ///
+    /// A const whose value is known at build (it reads no input and no
+    /// nondeterministic node) folds there. Any other const is captured
+    /// when a kernel is initialized ([`crate::Kernel::init`]), the same
+    /// way on every engine: its expression is evaluated once and every
+    /// reader of it reads the captured value. See
+    /// [`crate::kernel::ConstInit`].
     pub fn mark_const_output(&mut self, name: &str) {
         self.const_outputs.insert(name.to_string());
+    }
+
+    /// Rewrite the graph so every const whose value is not known at
+    /// build is captured when a kernel is initialized, and record how
+    /// ([`crate::kernel::ConstInit`]), in the order initialization
+    /// evaluates them: each after the consts it reads.
+    ///
+    /// For a captured const `x`: its expression becomes the output
+    /// `__init_x`; its value lives in the input slot `__const_x`, which
+    /// only initialization writes; and every reader of its wire, the
+    /// output `x` included, reads a passthrough of that slot, so nothing
+    /// re-evaluates it. A const whose expression reads an input also gets
+    /// an input of its own name when it has none, which a binder fills
+    /// with the enclosing scope's value: what the const falls back to
+    /// when its expression yields `None`.
+    ///
+    /// A const may not read a coordinate: a const is fixed for the
+    /// kernel's life, and a coordinate advances every cycle. Consts that
+    /// read each other in a cycle cannot be ordered. Both are errors.
+    fn capture_consts(&mut self) -> Result<(), AssemblyError> {
+        use crate::dsl::ast::BindingModifier;
+        use crate::kernel::{InputKind, TypeOrigin};
+
+        let node_of = |nodes: &[PendingNode], name: &str| nodes.iter().position(|n| n.name == name);
+        // What a wire's cone reaches, walking back from `start`: the
+        // inputs it reads, and whether a nondeterministic node, or
+        // `start` itself through a cycle, is in it.
+        let cone = |nodes: &[PendingNode], start: &str| -> (Vec<String>, bool) {
+            let by_name: HashMap<&str, usize> = nodes
+                .iter()
+                .enumerate()
+                .rev()
+                .map(|(i, n)| (n.name.as_str(), i))
+                .collect();
+            let mut inputs: Vec<String> = Vec::new();
+            let mut runtime = false;
+            let mut seen = vec![false; nodes.len()];
+            let first = by_name.get(start).copied();
+            let mut stack: Vec<usize> = first.into_iter().collect();
+            while let Some(i) = stack.pop() {
+                if std::mem::replace(&mut seen[i], true) {
+                    // The walk came back to where it started: the const
+                    // reads itself, which only a captured const can.
+                    if Some(i) == first {
+                        runtime = true;
+                    }
+                    continue;
+                }
+                if matches!(
+                    nodes[i].node.purity(),
+                    crate::ast::Purity::Nondeterministic { .. }
+                ) {
+                    runtime = true;
+                }
+                for wire in &nodes[i].inputs {
+                    match wire {
+                        WireRef::Input(name) => {
+                            if !inputs.contains(name) {
+                                inputs.push(name.clone());
+                            }
+                        }
+                        WireRef::Node(name, _) => stack.extend(by_name.get(name.as_str())),
+                    }
+                }
+            }
+            (inputs, runtime)
+        };
+
+        // The consts not known at build, in the order their producing
+        // nodes were added, each with its wire.
+        let mut captured: Vec<(usize, String, String, usize)> = Vec::new();
+        for name in &self.const_outputs {
+            let (node, port) = match self.outputs.get(name) {
+                Some(WireRef::Node(node, port)) => (node.clone(), *port),
+                Some(WireRef::Input(_)) => continue,
+                None if node_of(&self.nodes, name).is_some() => (name.clone(), 0),
+                None => continue,
+            };
+            let Some(order) = node_of(&self.nodes, &node) else {
+                continue;
+            };
+            let (inputs, runtime) = cone(&self.nodes, &node);
+            if inputs.is_empty() && !runtime {
+                continue;
+            }
+            captured.push((order, name.clone(), node, port));
+        }
+        captured.sort();
+
+        // Rewrite each: its expression under `__init_<name>`, its readers
+        // on a passthrough of its slot.
+        let mut records: Vec<(String, String, String, PortType)> = Vec::new();
+        for (_, name, node, port) in captured {
+            let Some(index) = node_of(&self.nodes, &node) else {
+                continue;
+            };
+            let Some(ty) = self.nodes[index].node.meta().outs.get(port).map(|p| p.typ) else {
+                return Err(AssemblyError::UnknownWire(format!("{node}[{port}]")));
+            };
+            let source = format!("__init_{name}");
+            let slot = format!("__const_{name}");
+            // The const's own node keeps its expression under the source
+            // name, so the const's name is the passthrough's.
+            let renamed = node == name;
+            let root = if renamed {
+                source.clone()
+            } else {
+                node.clone()
+            };
+            let passthrough = if renamed || node_of(&self.nodes, &name).is_none() {
+                name.clone()
+            } else {
+                slot.clone()
+            };
+            if renamed {
+                self.nodes[index].name = source.clone();
+            }
+            let redirect = |wire: &mut WireRef| {
+                if let WireRef::Node(n, p) = wire
+                    && *n == node
+                {
+                    if *p == port {
+                        *wire = WireRef::node(passthrough.clone());
+                    } else {
+                        *n = root.clone();
+                    }
+                }
+            };
+            for pending in &mut self.nodes {
+                pending.inputs.iter_mut().for_each(redirect);
+            }
+            self.outputs.values_mut().for_each(redirect);
+            self.add_input(&slot, crate::ast::Value::None, ty, InputKind::Const);
+            self.add_node(
+                &passthrough,
+                Box::new(crate::library::identity::PortPassthrough::new(&slot, ty)),
+                vec![WireRef::input(&slot)],
+            );
+            self.add_output(&source, WireRef::node_port(&root, port));
+            // The expression carries the const's modifier, so a
+            // nondeterministic read in it is acknowledged: the const
+            // takes one reading, at initialization.
+            let modifier = *self
+                .output_modifiers
+                .entry(name.clone())
+                .or_insert(BindingModifier::CONST);
+            self.set_output_modifier(&source, modifier);
+            records.push((name, slot, source, ty));
+        }
+
+        // What each captured const reads, now that every other captured
+        // const reads as its slot.
+        let slot_owner: HashMap<String, String> = records
+            .iter()
+            .map(|(name, slot, _, _)| (slot.clone(), name.clone()))
+            .collect();
+        let mut pending: Vec<(crate::kernel::ConstInit, Vec<String>)> = Vec::new();
+        for (name, slot, source, ty) in records {
+            let root = match self.outputs.get(&source) {
+                Some(WireRef::Node(n, _)) => n.clone(),
+                _ => unreachable!("the source output was just added over a node"),
+            };
+            let (inputs, _) = cone(&self.nodes, &root);
+            if let Some(coord) = inputs.iter().find(|i| {
+                self.input_defs
+                    .iter()
+                    .any(|d| &d.name == *i && d.kind == InputKind::Coordinate)
+            }) {
+                return Err(AssemblyError::Other(format!(
+                    "const '{name}' reads the coordinate '{coord}': a const is evaluated once \
+                     when the kernel is initialized, and a coordinate advances every cycle. Drop \
+                     `const`, or read an extern or another const instead."
+                )));
+            }
+            let deps: Vec<String> = inputs
+                .iter()
+                .filter_map(|i| slot_owner.get(i))
+                .filter(|owner| **owner != name)
+                .cloned()
+                .collect();
+            if !inputs.is_empty() && self.input_type(&name).is_none() {
+                self.add_input(
+                    &name,
+                    crate::ast::Value::None,
+                    ty,
+                    InputKind::IterationExtern,
+                );
+                self.set_input_origin(&name, TypeOrigin::Inferred);
+            }
+            let fallback = self.input_type(&name).is_some().then(|| name.clone());
+            pending.push((
+                crate::kernel::ConstInit {
+                    name,
+                    slot,
+                    source,
+                    fallback,
+                    slot_index: 0,
+                    source_index: 0,
+                    fallback_index: None,
+                },
+                deps,
+            ));
+        }
+
+        // Each after the consts it reads.
+        let mut ordered: Vec<crate::kernel::ConstInit> = Vec::with_capacity(pending.len());
+        while !pending.is_empty() {
+            let (ready, rest): (Vec<_>, Vec<_>) = pending.into_iter().partition(|(_, deps)| {
+                deps.iter().all(|d| {
+                    ordered
+                        .iter()
+                        .any(|c: &crate::kernel::ConstInit| &c.name == d)
+                })
+            });
+            if ready.is_empty() {
+                let names: Vec<&str> = rest.iter().map(|(c, _)| c.name.as_str()).collect();
+                return Err(AssemblyError::Other(format!(
+                    "the consts {names:?} read each other in a cycle, so none can be evaluated \
+                     first"
+                )));
+            }
+            ordered.extend(ready.into_iter().map(|(c, _)| c));
+            pending = rest;
+        }
+        let input_index = |name: &str| self.input_defs.iter().position(|d| d.name == name);
+        for c in &mut ordered {
+            c.slot_index = input_index(&c.slot).expect("the const's slot was just added");
+            c.source_index = self
+                .output_order
+                .iter()
+                .position(|n| n == &c.source)
+                .expect("the const's source output was just added");
+            c.fallback_index = c.fallback.as_deref().and_then(input_index);
+        }
+        self.const_inits = ordered;
+        Ok(())
     }
 
     /// How many nodes the graph holds so far.
@@ -1568,6 +1804,9 @@ impl PolydatAssembler {
         mut self,
         mut log: Option<&mut crate::dsl::events::CompileEventLog>,
     ) -> Result<ResolvedDag, AssemblyError> {
+        // Consts first: a captured const adds inputs, which the variance
+        // and extern passes below see like any other.
+        self.capture_consts()?;
         // Input variance (input_variance.md §4). An input whose type the
         // compiler inferred rather than the author declared is *open*:
         // by the host's setting it keeps its inferred type, stops the

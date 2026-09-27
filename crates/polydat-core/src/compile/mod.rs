@@ -796,9 +796,22 @@ macro_rules! impl_kernel_trait {
             /// Only for an output fixed for the kernel's life, a const or
             /// a value folded at build: a computed output's slot holds its
             /// last evaluated value, which is not the scope's.
+            ///
+            /// A `const` captured at initialization answers from its slot,
+            /// which initialization writes, so its value is there before
+            /// anything evaluates its output.
             fn folded_value(&self, name: &str) -> Option<crate::ast::Value> {
                 if !self.core.externs.is_fixed_output(name) {
                     return None;
+                }
+                if let Some(c) = self
+                    .core
+                    .externs
+                    .const_inits()
+                    .iter()
+                    .find(|c| c.name == name)
+                {
+                    return crate::kernel::Kernel::input_value_at(self, c.slot_index);
                 }
                 let slot = *self.core.output_map.get(name)?;
                 let ty = *self.core.output_types.get(name)?;

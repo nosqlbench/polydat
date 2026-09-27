@@ -124,6 +124,10 @@ pub enum InputKind {
 /// input, the value a binder copied from the enclosing scope, so a const
 /// that yields nothing leaves the outer binding visible. Nothing
 /// re-evaluates the const afterwards; `Kernel::init` does it again.
+///
+/// The assembler writes these records when it resolves a graph, for
+/// every const whose value is not known at build, and resolves each
+/// name to its index then, so initialization looks nothing up.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConstInit {
     /// The const's name, and the output that reads it.
@@ -135,6 +139,12 @@ pub struct ConstInit {
     /// The input holding the enclosing scope's value, when the const's
     /// expression references names.
     pub fallback: Option<String>,
+    /// `slot`'s index among the kernel's inputs.
+    pub(crate) slot_index: usize,
+    /// `source`'s index among the kernel's outputs.
+    pub(crate) source_index: usize,
+    /// `fallback`'s index among the kernel's inputs.
+    pub(crate) fallback_index: Option<usize>,
 }
 
 /// The text of a caught panic: its `String` or `&str` payload.

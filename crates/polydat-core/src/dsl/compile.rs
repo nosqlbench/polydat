@@ -18,7 +18,7 @@ use crate::kernel::PolydatKernel;
 use crate::dsl::error::DiagnosticReport;
 use crate::dsl::validate::{collect_references, validate_ast};
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use super::modules::ResolvedModule;
 
@@ -413,106 +413,6 @@ fn extend_required_with_const_bindings(
         }
     }
     out
-}
-
-/// Whether a const's right-hand side is a literal, which folds at build
-/// and needs no initialization: a number, a string, `true`/`false`, a
-/// negated or cast literal, or a list of literals.
-fn is_literal_rhs(expr: &crate::dsl::ast::Expr) -> bool {
-    use crate::dsl::ast::Expr;
-    match expr {
-        Expr::IntLit(..) | Expr::FloatLit(..) | Expr::StringLit(..) => true,
-        Expr::Ident(name, _) => name == "true" || name == "false",
-        Expr::UnaryNeg(inner, _) | Expr::Cast(inner, _, _) => is_literal_rhs(inner),
-        Expr::ArrayLit(items, _) => items.iter().all(is_literal_rhs),
-        _ => false,
-    }
-}
-
-/// The const inits in the order a kernel evaluates them, each after the
-/// consts it reads, directly or through plain bindings.
-///
-/// A const may not read a coordinate: a const is fixed for the kernel's
-/// life, and a coordinate advances every cycle. Consts that read each
-/// other in a cycle cannot be ordered. Both are compile errors.
-fn order_const_inits(
-    file: &crate::dsl::ast::PolydatFile,
-    inits: Vec<crate::kernel::ConstInit>,
-    coordinates: &HashSet<String>,
-) -> Result<Vec<crate::kernel::ConstInit>, String> {
-    use crate::dsl::ast::Statement;
-    // Each binding target's direct references.
-    let mut refs_of: HashMap<String, HashSet<String>> = HashMap::new();
-    for stmt in &file.statements {
-        if let Statement::Binding(b) = stmt {
-            let mut refs = HashSet::new();
-            crate::dsl::validate::collect_references(&b.value, &mut refs);
-            for t in &b.targets {
-                refs_of.insert(t.clone(), refs.clone());
-            }
-        }
-    }
-    let const_names: HashSet<String> = inits.iter().map(|c| c.name.clone()).collect();
-    // What a const's expression reaches, walking through plain bindings
-    // and stopping at other consts, which are fixed values to it.
-    let reach = |name: &str| -> HashSet<String> {
-        let mut seen: HashSet<String> = HashSet::new();
-        let mut stack: Vec<String> = refs_of
-            .get(name)
-            .map(|r| r.iter().cloned().collect())
-            .unwrap_or_default();
-        while let Some(n) = stack.pop() {
-            if !seen.insert(n.clone()) {
-                continue;
-            }
-            if const_names.contains(&n) {
-                continue;
-            }
-            if let Some(r) = refs_of.get(&n) {
-                stack.extend(r.iter().cloned());
-            }
-        }
-        seen
-    };
-    let mut deps: HashMap<String, Vec<String>> = HashMap::new();
-    for c in &inits {
-        let reached = reach(&c.name);
-        if let Some(coord) = reached.iter().find(|n| coordinates.contains(*n)) {
-            return Err(format!(
-                "const '{}' reads the coordinate '{coord}': a const is evaluated once when the \
-                 kernel is initialized, and a coordinate advances every cycle. Drop `const`, or \
-                 read an extern or another const instead.",
-                c.name
-            ));
-        }
-        deps.insert(
-            c.name.clone(),
-            reached
-                .into_iter()
-                .filter(|n| const_names.contains(n) && n != &c.name)
-                .collect(),
-        );
-    }
-    let mut ordered: Vec<crate::kernel::ConstInit> = Vec::with_capacity(inits.len());
-    let mut done: HashSet<String> = HashSet::new();
-    let mut pending = inits;
-    while !pending.is_empty() {
-        let (ready, rest): (Vec<_>, Vec<_>) = pending
-            .into_iter()
-            .partition(|c| deps[&c.name].iter().all(|d| done.contains(d)));
-        if ready.is_empty() {
-            let names: Vec<&str> = rest.iter().map(|c| c.name.as_str()).collect();
-            return Err(format!(
-                "the consts {names:?} read each other in a cycle, so none can be evaluated first"
-            ));
-        }
-        for c in ready {
-            done.insert(c.name.clone());
-            ordered.push(c);
-        }
-        pending = rest;
-    }
-    Ok(ordered)
 }
 
 /// RAII guard that sets the data-file base directory (see
@@ -2230,10 +2130,6 @@ impl Compiler {
         let mut asm = PolydatAssembler::new(self.input_names.clone());
         asm.ledger = self.ledger.clone();
         asm.template = self.template;
-        // The coordinates: what a const may not read, since a const is
-        // fixed for the kernel's life and a coordinate advances per cycle.
-        let coordinates: HashSet<String> = self.input_names.iter().cloned().collect();
-        let mut const_inits: Vec<crate::kernel::ConstInit> = Vec::new();
         for (name, ty) in declared_input_types(file) {
             asm.set_input_type(&name, ty);
         }
@@ -2315,25 +2211,11 @@ impl Compiler {
                         asm.set_output_modifier(name, BindingModifier::SHARED);
                         continue;
                     }
-                    // A `const` whose right-hand side is not a literal is
-                    // captured when the kernel is initialized (ConstInit):
-                    // its expression compiles as the output `__init_<name>`,
-                    // its value lives in the input slot `__const_<name>`,
-                    // and `<name>` is a passthrough of that slot, so every
-                    // reader sees the captured value and nothing
-                    // re-evaluates it. A literal const folds at build as
-                    // before.
-                    let cut = b.modifier.is_const() && !is_literal_rhs(&b.value);
-                    let compiled_targets: Vec<String> = if cut {
-                        b.targets.iter().map(|t| format!("__init_{t}")).collect()
-                    } else {
-                        b.targets.clone()
-                    };
-                    self.compile_binding(&mut asm, &compiled_targets, &b.value)?;
+                    self.compile_binding(&mut asm, &b.targets, &b.value)?;
                     // Every target that now names a node reports what it
                     // resolved to: a call, an operator, or a literal alike.
-                    for (target, compiled) in b.targets.iter().zip(&compiled_targets) {
-                        if let Some(node_type) = asm.node_type_of(compiled) {
+                    for target in &b.targets {
+                        if let Some(node_type) = asm.node_type_of(target) {
                             self.pending_events.push(
                                 super::events::CompileEvent::BindingResolved {
                                     name: target.clone(),
@@ -2346,72 +2228,13 @@ impl Compiler {
                         for target in &b.targets {
                             asm.set_output_modifier(target, b.modifier);
                         }
-                        // A captured const's expression carries the same
-                        // modifier, so a nondeterministic read in it is
-                        // acknowledged: the const takes one reading, at
-                        // initialization.
-                        if cut {
-                            for compiled in &compiled_targets {
-                                asm.set_output_modifier(compiled, b.modifier);
-                            }
-                        }
                     }
+                    // A const is marked, and the assembler decides how it
+                    // is fixed: a value known at build folds there, and any
+                    // other is captured when the kernel is initialized.
                     if b.modifier.is_const() {
-                        // SRD-74 P2: a const whose RHS references a name
-                        // gets an input slot of its own name, which the
-                        // binder fills with the enclosing scope's value:
-                        // the conditional shadow a `None` falls back to.
-                        let rhs_has_refs = {
-                            let mut refs = std::collections::HashSet::new();
-                            crate::dsl::validate::collect_references(&b.value, &mut refs);
-                            !refs.is_empty()
-                        };
-                        for (target, compiled) in b.targets.iter().zip(&compiled_targets) {
+                        for target in &b.targets {
                             asm.mark_const_output(target);
-                            if !cut {
-                                continue;
-                            }
-                            let Some(ty) = asm.output_type(compiled.as_str()) else {
-                                return Err(format!(
-                                    "internal error: the const binding `{target}` was just \
-                                     compiled, so the assembler should carry its output type"
-                                ));
-                            };
-                            if rhs_has_refs && !asm.input_names().contains(&target.as_str()) {
-                                asm.add_input(
-                                    target.as_str(),
-                                    crate::ast::Value::None,
-                                    ty,
-                                    crate::kernel::InputKind::IterationExtern,
-                                );
-                                asm.set_input_origin(
-                                    target.as_str(),
-                                    crate::kernel::TypeOrigin::Inferred,
-                                );
-                            }
-                            let fallback = asm
-                                .input_names()
-                                .contains(&target.as_str())
-                                .then(|| target.clone());
-                            let slot = format!("__const_{target}");
-                            asm.add_input(
-                                &slot,
-                                crate::ast::Value::None,
-                                ty,
-                                crate::kernel::InputKind::Const,
-                            );
-                            asm.add_node(
-                                target,
-                                Box::new(crate::library::identity::PortPassthrough::new(&slot, ty)),
-                                vec![WireRef::input(&slot)],
-                            );
-                            self.all_names.push(target.clone());
-                            const_inits.push(crate::kernel::ConstInit {
-                                name: target.clone(),
-                                slot,
-                                source: compiled.clone(),
-                                fallback,
-                            });
                         }
                     }
                 }
@@ -2480,9 +2303,6 @@ impl Compiler {
             }
         }
 
-        let const_inits = order_const_inits(file, const_inits, &coordinates)?;
-        asm.set_const_inits(const_inits.clone());
-
         // Unused binding check: defer to kernel-level check in fold_init_constants_impl.
         // The kernel has the full wiring graph and can accurately determine which
         // nodes have no downstream consumers. The compiler can't do this reliably
@@ -2517,13 +2337,17 @@ impl Compiler {
                         }
                     }
                 }
-                // A const's expression is evaluated by every kernel's
-                // initialization, so it stays whatever the caller asked
-                // for.
-                for c in &const_inits {
-                    for name in [&c.name, &c.source] {
-                        if !required_owned.iter().any(|n| n == name) {
-                            required_owned.push(name.clone());
+                // A const stays an output whatever the caller asked for:
+                // the assembler captures it from its output, and a binder
+                // reads it from there.
+                for stmt in &file.statements {
+                    if let crate::dsl::ast::Statement::Binding(b) = stmt
+                        && b.modifier.is_const()
+                    {
+                        for t in &b.targets {
+                            if !required_owned.iter().any(|n| n == t) {
+                                required_owned.push(t.clone());
+                            }
                         }
                     }
                 }

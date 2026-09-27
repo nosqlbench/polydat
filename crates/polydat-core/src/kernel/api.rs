@@ -464,19 +464,20 @@ pub trait Kernel: Send + Sync + internals::KernelInternals {
     /// visible. A const whose expression fails makes initialization
     /// fail, naming the const; a slow one makes initialization slow.
     fn init(&mut self) -> Result<(), crate::KernelError> {
-        let inits = self.const_inits().to_vec();
-        for c in &inits {
+        for i in 0..self.const_inits().len() {
+            let (source, slot, fallback) = {
+                let c = &self.const_inits()[i];
+                (c.source_index, c.slot_index, c.fallback_index)
+            };
             let own =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.pull(&c.source)))
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.pull_at(source)))
                     .map_err(|payload| crate::KernelError::ConstInit {
-                        name: c.name.clone(),
+                        name: self.const_inits()[i].name.clone(),
                         reason: crate::kernel::panic_message(&payload),
                     })?;
             let value = match own {
-                Value::None => c
-                    .fallback
-                    .as_deref()
-                    .and_then(|f| self.input_value(f))
+                Value::None => fallback
+                    .and_then(|f| self.input_value_at(f))
                     .unwrap_or(Value::None),
                 v => v,
             };
@@ -489,18 +490,12 @@ pub trait Kernel: Send + Sync + internals::KernelInternals {
                     reason: format!(
                         "the const '{}' has no value, and pure native code cannot carry a \
                          `None`; give it a value or run this program on `native`",
-                        c.name
+                        self.const_inits()[i].name
                     ),
                 });
             }
-            let index = self
-                .input_index(&c.slot)
-                .expect("a const's slot is an input of its own program");
-            self.init_input_at(index, value)
+            self.init_input_at(slot, value)
                 .map_err(crate::KernelError::Write)?;
-            // Bring the const's output up to date now, so a reader of its
-            // buffer (a binder's lookup) sees the captured value.
-            let _ = self.pull(&c.name);
         }
         Ok(())
     }

@@ -863,9 +863,18 @@ impl PolydatKernel {
     /// returns `None` for auto-passthrough outputs (where the
     /// value lives in the input slot) and for cycle-dependent
     /// outputs that haven't been pulled.
+    ///
+    /// A `const` captured at initialization answers from its slot, which
+    /// initialization writes, so its value is there before anything
+    /// pulls its output.
     pub fn get_constant(&self, name: &str) -> Option<&Value> {
-        let (node_idx, port_idx) = self.program.output_map.get(name)?;
-        let val = &self.state.core.buffers[*node_idx][*port_idx];
+        let val = match self.program.const_inits().iter().find(|c| c.name == name) {
+            Some(c) => self.state.core.inputs.get(c.slot_index)?,
+            None => {
+                let (node_idx, port_idx) = self.program.output_map.get(name)?;
+                &self.state.core.buffers[*node_idx][*port_idx]
+            }
+        };
         if matches!(val, Value::None) {
             None
         } else {

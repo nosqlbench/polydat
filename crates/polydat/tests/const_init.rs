@@ -76,6 +76,60 @@ fn a_child_sees_its_parents_capture() {
     }
 }
 
+/// A const a host marks on an assembler it built is captured at
+/// initialization as a const written in source is, on every engine:
+/// every reader of its wire reads the captured value, a write to what it
+/// reads changes nothing until `init`, and the capture is listed.
+#[test]
+fn a_programmatically_marked_const_is_captured_at_init() {
+    use polydat::compile::assembly::{PolydatAssembler, WireRef};
+    use polydat::library::arithmetic::Mod;
+    use polydat::library::hash::Hash;
+    for engine in every_engine() {
+        let mut asm = PolydatAssembler::new(vec!["cycle".into()]);
+        asm.add_input(
+            "n",
+            Value::U64(7),
+            polydat::ast::PortType::U64,
+            polydat::kernel::InputKind::ExternalWrite,
+        );
+        asm.add_node("h", Box::new(Hash::new()), vec![WireRef::input("n")]);
+        asm.add_node("m", Box::new(Mod::new(1000)), vec![WireRef::node("h")]);
+        asm.add_output("x", WireRef::node("h"));
+        asm.add_output("y", WireRef::node("m"));
+        asm.mark_const_output("x");
+        let mut k = asm
+            .compile_with(engine)
+            .unwrap_or_else(|e| panic!("{engine}: {e}"));
+        assert_eq!(
+            k.const_inits()
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect::<Vec<_>>(),
+            ["x"],
+            "{engine}"
+        );
+        k.set_inputs(&[0]);
+        let captured = k.pull("x").as_u64();
+        assert_eq!(k.pull("y").as_u64(), captured % 1000, "{engine}");
+        k.set_input("n", Value::U64(8)).unwrap();
+        assert_eq!(
+            k.pull("x").as_u64(),
+            captured,
+            "{engine}: a write does not change it"
+        );
+        assert_eq!(
+            k.pull("y").as_u64(),
+            captured % 1000,
+            "{engine}: a reader of its wire reads the capture"
+        );
+        k.init().unwrap();
+        let recaptured = k.pull("x").as_u64();
+        assert_ne!(recaptured, captured, "{engine}: init captures again");
+        assert_eq!(k.pull("y").as_u64(), recaptured % 1000, "{engine}");
+    }
+}
+
 /// Each `for` activation initializes its body, so a const over a tuple
 /// element holds that element's value.
 #[test]
