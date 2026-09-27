@@ -1348,6 +1348,100 @@ fn a_total_predicate_never_fails() {
     }
 }
 
+/// A non-`Lex` order over a filter (comprehension_forms.md §5 V5): the
+/// strategy ranks only the survivors, by their positions in the
+/// filter's input, and keeps its truncation's worth of them. `extrema/1`
+/// is the most extreme stratum any survivor is in, and `halton/n` is `n`
+/// survivors when at least `n` exist. The traversal, the stream, and a
+/// `for` statement agree, and the metadata counts at most the
+/// truncation.
+#[test]
+fn an_order_over_a_filter_ranks_the_survivors() {
+    use polydat::iteration::comprehension::CardinalityClass;
+    let scope = scope();
+    let grid = || Comprehension::cartesian(vec![range("a", 0, 3, 1), range("b", 0, 3, 1)]);
+    let pairs = |c: &Comprehension| -> Vec<(u64, u64)> {
+        evaluate_indexed(c, &scope)
+            .unwrap()
+            .iter()
+            .map(|t| (t[0].1.as_u64(), t[1].1.as_u64()))
+            .collect()
+    };
+    // No corner survives: the edges are the most extreme stratum left.
+    let edges = Comprehension::order(
+        Comprehension::filter(grid(), "{a} == 1 || {b} == 1"),
+        StrategyName::Extrema,
+        Some(1),
+    );
+    assert_eq!(pairs(&edges), vec![(0, 1), (1, 0), (1, 2), (2, 1)]);
+    // One corner filtered out: the other three.
+    let corners = Comprehension::order(
+        Comprehension::filter(grid(), "{a} != 0 || {b} != 0"),
+        StrategyName::Extrema,
+        Some(1),
+    );
+    assert_eq!(pairs(&corners), vec![(0, 2), (2, 0), (2, 2)]);
+    // Four of the five survivors, in Halton's order over the grid.
+    let sampled = Comprehension::order(
+        Comprehension::filter(grid(), "{a} == 1 || {b} == 1"),
+        StrategyName::Halton,
+        Some(4),
+    );
+    let kept = pairs(&sampled);
+    assert_eq!(kept.len(), 4);
+    assert!(kept.iter().all(|(a, b)| *a == 1 || *b == 1), "{kept:?}");
+    // Every survivor, whatever the strategy, when none is cut.
+    for strategy in STRATEGIES {
+        for truncation in [None, Some(2), Some(100)] {
+            let shape = Comprehension::order(
+                Comprehension::filter(grid(), "{a} == 1 || {b} == 1"),
+                strategy,
+                truncation,
+            );
+            let yielded = assert_equivalent(&shape, &scope);
+            let expected = match (strategy, truncation) {
+                (_, None) | (_, Some(100)) => 5,
+                (StrategyName::Extrema, Some(2)) => 5,
+                (_, Some(n)) => n as usize,
+            };
+            assert_eq!(yielded, expected, "{strategy:?} {truncation:?}");
+            assert!(
+                matches!(
+                    shape.metadata().cardinality,
+                    CardinalityClass::BoundedAtMost(_)
+                ),
+                "{strategy:?}"
+            );
+            assert!(streamed(&shape).is_some(), "{strategy:?}");
+        }
+    }
+    // Every tuple surviving selects what the order selects unfiltered.
+    for strategy in STRATEGIES {
+        let unfiltered = Comprehension::order(grid(), strategy, Some(3));
+        let filtered =
+            Comprehension::order(Comprehension::filter(grid(), "{a} < 9"), strategy, Some(3));
+        assert_eq!(pairs(&filtered), pairs(&unfiltered), "{strategy:?}");
+    }
+
+    // The same order written in the language.
+    let text = "a in 0..3, b in 0..3 where {a} == 1 || {b} == 1 order extrema/1";
+    let src = format!(
+        "input cycle: u64\nsweep := for {text}\nfor {text} {{\n    s := u64_add(a, b)\n}}\n"
+    );
+    let mut kernel = polydat::dsl::compile_polydat_interpreter(&src).unwrap();
+    kernel.set_inputs(&[0]);
+    let sweep = kernel.pull_ref("sweep").clone();
+    let streamer = sweep.as_streamer().unwrap();
+    assert_eq!(streamer.coordinate_stream().unwrap().count(), 4);
+    let mut stream = kernel.traverse(0).unwrap();
+    assert_eq!(stream.len(), 4);
+    let mut sums = Vec::new();
+    while let Some(mut activation) = stream.advance().unwrap() {
+        sums.push(activation.cycle(0).pull("s").as_u64());
+    }
+    assert_eq!(sums, vec![1, 1, 3, 3]);
+}
+
 /// An order over an untruncated order (comprehension_forms.md §7.4
 /// O1): a strategy that selects from the shape chooses what it chooses
 /// over the shape beneath the inner order, which has no effect, and a

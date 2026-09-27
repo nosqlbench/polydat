@@ -27,7 +27,10 @@
 //! `halton/N` / `sobol/N` for count subsampling, `shells/N` for
 //! concentric-shell depth). See `take_n_strata`.
 
-use super::{MultiIndex, Selection, Strategy, capped, index_fn_dim, index_fn_supports_lookup};
+use super::{
+    MultiIndex, Selection, Strategy, capped, index_fn_dim, index_fn_supports_lookup,
+    multi_index_to_flat,
+};
 use crate::iteration::comprehension::metadata::{IndexFn, cycle_length};
 use crate::iteration::comprehension::strategy::StrategyName;
 
@@ -83,6 +86,37 @@ impl Strategy for Extrema {
             Selection::Positions(naive_extrema_positions(cardinality, truncation))
         }
     }
+
+    /// The strata of the whole index space with only the survivors kept
+    /// in each; a stratum no survivor is in is dropped, and the
+    /// truncation keeps the first `n` strata that remain. `extrema/1`
+    /// over a filter is the most extreme stratum any survivor is in,
+    /// never empty while anything survives.
+    fn select_surviving(
+        &self,
+        index_fn: &IndexFn,
+        cardinality: u64,
+        truncation: Option<u64>,
+        seed: Option<u64>,
+        survivors: &[u64],
+    ) -> Selection {
+        if !index_fn_supports_lookup(index_fn) || index_fn_dim(index_fn) == 0 {
+            return super::surviving_in_rank(
+                &|count| self.select(index_fn, cardinality, count, seed),
+                cardinality,
+                truncation,
+                survivors,
+            );
+        }
+        let kept: Vec<(u64, MultiIndex)> = extrema_scored(&extrema_axis_sizes(index_fn))
+            .into_iter()
+            .filter(|(_, mi)| {
+                multi_index_to_flat(index_fn, mi)
+                    .is_some_and(|p| survivors.binary_search(&(p as u64)).is_ok())
+            })
+            .collect();
+        Selection::from_multi_indices(index_fn, take_n_strata(kept, truncation), cardinality)
+    }
 }
 
 /// The first and last of `0..total`, then the positions between.
@@ -124,14 +158,16 @@ pub(crate) fn extrema_multi_indices(idx: &IndexFn, truncation: Option<u64>) -> V
     if index_fn_dim(idx) == 0 {
         return Vec::new();
     }
+    extrema_strata(&extrema_axis_sizes(idx), truncation)
+}
 
-    // Reduce every supported index shape to a list of per-axis sizes.
-    // The 1-D-like forms (Lockstep / Modular / Concatenation) are a
-    // single axis of `length`, over which `multi_index_to_flat` maps
-    // `[i] -> i`. Continuous / Hybrid give each continuous axis its 2
-    // endpoints, so those axes are always at an extreme (interior
-    // count 0 — corners).
-    let axis_sizes: Vec<u64> = match idx {
+/// Every supported index shape as a list of per-axis sizes. The 1-D-like
+/// forms (Lockstep / Modular / Concatenation) are a single axis of
+/// `length`, over which `multi_index_to_flat` maps `[i] -> i`.
+/// Continuous / Hybrid give each continuous axis its 2 endpoints, so
+/// those axes are always at an extreme (interior count 0 — corners).
+fn extrema_axis_sizes(idx: &IndexFn) -> Vec<u64> {
+    match idx {
         IndexFn::Lattice { axis_sizes } => axis_sizes.clone(),
         IndexFn::Continuous { intervals, .. } => vec![2u64; intervals.len()],
         IndexFn::Hybrid {
@@ -149,9 +185,7 @@ pub(crate) fn extrema_multi_indices(idx: &IndexFn, truncation: Option<u64>) -> V
         IndexFn::Concatenation { segment_sizes } => {
             vec![segment_sizes.iter().copied().sum()]
         }
-    };
-
-    extrema_strata(&axis_sizes, truncation)
+    }
 }
 
 /// Interior count of `mi`: the number of axes whose position is
@@ -181,6 +215,12 @@ fn interior_count(mi: &[u64], axis_sizes: &[u64]) -> u64 {
 /// materialization. (A by-stratum generator that emits only the
 /// outer k-faces would be `O(2^N)` for `extrema/1`; deferred.)
 fn extrema_strata(axis_sizes: &[u64], truncation: Option<u64>) -> Vec<MultiIndex> {
+    take_n_strata(extrema_scored(axis_sizes), truncation)
+}
+
+/// Every multi-index of `axis_sizes` with its interior count, sorted
+/// corners-first with a Lex tiebreak.
+fn extrema_scored(axis_sizes: &[u64]) -> Vec<(u64, MultiIndex)> {
     let total: u64 = axis_sizes.iter().product();
     if total == 0 {
         return Vec::new();
@@ -201,7 +241,7 @@ fn extrema_strata(axis_sizes: &[u64], truncation: Option<u64>) -> Vec<MultiIndex
         }
     }
     scored.sort_by(|(ia, a), (ib, b)| ia.cmp(ib).then_with(|| a.cmp(b)));
-    take_n_strata(scored, truncation)
+    scored
 }
 
 /// Keep the first `n` complete strata of `scored` (pairs of

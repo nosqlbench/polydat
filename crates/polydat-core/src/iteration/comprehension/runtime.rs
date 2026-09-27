@@ -233,7 +233,9 @@ pub fn evaluate_for_iteration_reported(
 /// form over its operands holds its tuples: a filter's survivors, a
 /// cartesian whose sources reference an earlier axis, and an order
 /// that samples a continuous space. `order halton/100` over a large
-/// product therefore holds the product's axes and 100 positions.
+/// product therefore holds the product's axes and 100 positions, and
+/// over a filter of that product it holds the axes and the positions of
+/// the survivors it keeps.
 ///
 /// The tuples are exactly those [`evaluate_for_iteration_materialized`]
 /// produces, in the same order, and the clause yields it reports are
@@ -563,6 +565,35 @@ impl EvalState<'_> {
                 // (spec §10.2 R2).
                 if has_continuous_axis(child) {
                     return self.sample_space(child, prefix, *strategy, *truncation, *seed);
+                }
+                // A non-`Lex` order over a filter ranks the survivors by
+                // their positions in the filter's input (§5 V5).
+                if let (Comprehension::Filter { child, predicate }, false) =
+                    (child, *strategy == StrategyName::Lex)
+                {
+                    let inner = self.evaluate_node(child, prefix)?;
+                    let predicate = CompiledPredicate::new(predicate);
+                    let mut survivors = Vec::new();
+                    for (p, tuple) in inner.tuples.iter().enumerate() {
+                        if predicate.keeps(tuple, self.scope)? {
+                            survivors.push(p as u64);
+                        }
+                    }
+                    let selection = surviving_selection(
+                        *strategy,
+                        inner.index_fn.as_ref(),
+                        inner.tuples.len() as u64,
+                        *truncation,
+                        *seed,
+                        &survivors,
+                    )?;
+                    return Ok(EvaluatedNode {
+                        tuples: selection
+                            .iter()
+                            .map(|p| inner.tuples[p as usize].clone())
+                            .collect(),
+                        index_fn: None,
+                    });
                 }
                 let inner = self.evaluate_node(child, prefix)?;
                 self.apply_order(inner, *strategy, *truncation, *seed)
@@ -1094,6 +1125,40 @@ impl EvalState<'_> {
                         self.sample_space(child, prefix, *strategy, *truncation, *seed)?;
                     return Ok((Indexed::Tuples(sampled.tuples), sampled.index_fn));
                 }
+                // A non-`Lex` order over a filter holds the filter's
+                // input and the survivors' positions in it, which the
+                // strategy ranks by those positions (§5 V5): a barrier
+                // sized by the survivors.
+                if let (Comprehension::Filter { child, predicate }, false) =
+                    (child, *strategy == StrategyName::Lex)
+                {
+                    let (inner, index_fn) = self.index_node(child, prefix)?;
+                    let predicate = CompiledPredicate::new(predicate);
+                    let mut survivors = Vec::new();
+                    let mut tuple = RuntimeTuple::new();
+                    for p in 0..inner.len() {
+                        tuple.clear();
+                        inner.append_at(p, &mut tuple);
+                        if predicate.keeps(&tuple, self.scope)? {
+                            survivors.push(p);
+                        }
+                    }
+                    let selection = surviving_selection(
+                        *strategy,
+                        index_fn.as_ref(),
+                        inner.len(),
+                        *truncation,
+                        *seed,
+                        &survivors,
+                    )?;
+                    return Ok((
+                        Indexed::Select {
+                            child: Box::new(inner),
+                            selection,
+                        },
+                        None,
+                    ));
+                }
                 let (inner, index_fn) = self.index_node(child, prefix)?;
                 let selection = order_selection(
                     *strategy,
@@ -1337,11 +1402,12 @@ fn collect_clause_names(c: &Comprehension, out: &mut std::collections::BTreeSet<
 }
 
 /// The positions `strategy` selects over an input of `cardinality`
-/// tuples addressed by `index_fn`, after V4 (spec §10.7.8). An input
-/// the walker could not address (a filter's output, a dependent
-/// cartesian whose axes vary) is ordered as a one-axis lattice of its
-/// tuples: V4 admits only `Lex` over one, and `Lex` reads nothing but
-/// the count.
+/// tuples addressed by `index_fn`, after V4 (comprehension_forms.md
+/// §10.7.8). An input the walker could not address (a dependent
+/// cartesian, a truncated order) is ordered as a one-axis lattice of
+/// its tuples: V4 admits only `Lex` over one, and `Lex` reads nothing
+/// but the count. A non-`Lex` order over a filter selects through
+/// [`surviving_selection`] instead.
 fn order_selection(
     strategy: StrategyName,
     index_fn: Option<&IndexFn>,
@@ -1367,6 +1433,28 @@ fn order_selection(
         }
     };
     Ok(dispatch.select(index_fn, cardinality, truncation, seed))
+}
+
+/// The positions `strategy` selects among `survivors`, the positions of
+/// a filter's input its predicate keeps, ranked by their positions in
+/// that input of `cardinality` tuples addressed by `index_fn`, after V4
+/// against that input (comprehension_forms.md §5 V5).
+fn surviving_selection(
+    strategy: StrategyName,
+    index_fn: Option<&IndexFn>,
+    cardinality: u64,
+    truncation: Option<u64>,
+    seed: Option<u64>,
+    survivors: &[u64],
+) -> Result<Selection, RuntimeError> {
+    let dispatch = crate::iteration::comprehension::strategies::for_name(strategy);
+    let Some(index_fn) = index_fn.filter(|idx| dispatch.accepts_input(Some(idx))) else {
+        return Err(RuntimeError::StrategyRejectsInput {
+            strategy,
+            index_fn: index_fn.cloned(),
+        });
+    };
+    Ok(dispatch.select_surviving(index_fn, cardinality, truncation, seed, survivors))
 }
 
 /// How many times a sampled order redraws, doubling the count each

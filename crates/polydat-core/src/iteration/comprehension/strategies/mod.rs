@@ -248,6 +248,38 @@ pub trait Strategy {
         seed: Option<u64>,
     ) -> Selection;
 
+    /// The positions this strategy emits over an input of which only
+    /// the positions in `survivors` (ascending) pass a filter
+    /// (comprehension_forms.md §5 V5): the strategy selects from the
+    /// input's whole index space, keeps the survivors in the order it
+    /// emits them, and applies its truncation to them. The positions
+    /// are the survivors' original positions in the input, so
+    /// `order(filter(c, p), halton, n)` yields `n` survivors whenever
+    /// at least `n` exist, and when every tuple survives the selection
+    /// is [`select`](Strategy::select)'s.
+    ///
+    /// Under a truncation `n` the strategy selects `n` positions, then
+    /// twice as many, and so on up to the whole input, until `n`
+    /// survivors are among them; at the whole input, survivors it does
+    /// not reach follow in ascending order. Without a truncation every
+    /// survivor is kept. A strategy whose truncation counts something
+    /// other than positions (`Extrema`'s strata) overrides this.
+    fn select_surviving(
+        &self,
+        index_fn: &IndexFn,
+        cardinality: u64,
+        truncation: Option<u64>,
+        seed: Option<u64>,
+        survivors: &[u64],
+    ) -> Selection {
+        surviving_in_rank(
+            &|count| self.select(index_fn, cardinality, count, seed),
+            cardinality,
+            truncation,
+            survivors,
+        )
+    }
+
     /// Apply this strategy to the given input: its
     /// [`select`](Strategy::select)ion looked up against
     /// `input.tuples`.
@@ -270,6 +302,46 @@ pub trait Strategy {
             .iter()
             .filter_map(|p| input.tuples.get(p as usize).cloned())
             .collect()
+    }
+}
+
+/// The first `truncation` of `survivors` (ascending positions) in the
+/// order `select` emits them, as [`Strategy::select_surviving`]
+/// describes: `select(Some(k))` for `k` from the truncation doubling up
+/// to `cardinality`, or `select(None)` without a truncation, followed at
+/// the whole input by the survivors it does not reach.
+pub(crate) fn surviving_in_rank(
+    select: &dyn Fn(Option<u64>) -> Selection,
+    cardinality: u64,
+    truncation: Option<u64>,
+    survivors: &[u64],
+) -> Selection {
+    let want = capped(truncation, survivors.len() as u64) as usize;
+    if want == 0 {
+        return Selection::Positions(Vec::new());
+    }
+    let mut count = truncation.map(|t| t.min(cardinality));
+    loop {
+        let whole = count.is_none_or(|k| k >= cardinality);
+        let selected = select(count);
+        let reached = selected
+            .iter()
+            .filter(|p| survivors.binary_search(p).is_ok());
+        let rest = survivors.iter().copied().filter(|_| whole);
+        let mut taken = std::collections::HashSet::with_capacity(want);
+        let mut out = Vec::with_capacity(want);
+        for p in reached.chain(rest) {
+            if out.len() == want {
+                break;
+            }
+            if taken.insert(p) {
+                out.push(p);
+            }
+        }
+        if out.len() == want || whole {
+            return Selection::Positions(out);
+        }
+        count = count.map(|k| k.saturating_mul(2).min(cardinality));
     }
 }
 

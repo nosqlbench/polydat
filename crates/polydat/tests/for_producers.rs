@@ -142,15 +142,15 @@ fn derivations_chain_and_each_wire_is_distinct() {
 }
 
 /// A producer's stream orders and filters as a traversal of the same
-/// comprehension does: over a filter's survivors, which have no
-/// position in an index space, only `lex` orders (V4), and the stream
-/// fails with the traversal's refusal.
+/// comprehension does: an order over a filter ranks the survivors by
+/// their positions in the filter's input (comprehension_forms.md §5
+/// V5), so `reverse_lex` reverses them.
 #[test]
 fn a_producer_orders_a_filter_as_a_traversal_does() {
-    let mut k = compile(
-        "input cycle: u64\nbase := for k in 1..4, limit in 10,20,30\nedges := for base where {k} != 2\n\
-         first := for edges order lex/2\ntail := for edges order reverse_lex\n",
-    );
+    let src = "input cycle: u64\nbase := for k in 1..4, limit in 10,20,30\nedges := for base where {k} != 2\n\
+               first := for edges order lex/2\ntail := for edges order reverse_lex\n\
+               for edges order reverse_lex {\n    s := u64_add(k, limit)\n}\n";
+    let mut k = compile(src);
     k.set_inputs(&[0]);
     let mut stream = |name: &str| {
         k.pull_ref(name)
@@ -161,13 +161,26 @@ fn a_producer_orders_a_filter_as_a_traversal_does() {
             .unwrap()
     };
     assert_eq!(tuples(stream("first")), vec![vec![1, 10], vec![1, 20]]);
-    let error = stream("tail").next().unwrap().unwrap_err();
-    assert!(
-        matches!(
-            error,
-            polydat::iteration::comprehension::runtime::RuntimeError::StrategyRejectsInput { .. }
-        ),
-        "{error}"
+    let reversed = vec![
+        vec![3, 30],
+        vec![3, 20],
+        vec![3, 10],
+        vec![1, 30],
+        vec![1, 20],
+        vec![1, 10],
+    ];
+    assert_eq!(tuples(stream("tail")), reversed);
+    let mut traversal = k.traverse(0).unwrap();
+    let mut sums = Vec::new();
+    while let Some(mut activation) = traversal.advance().unwrap() {
+        sums.push(activation.cycle(0).pull("s").as_u64());
+    }
+    assert_eq!(
+        sums,
+        reversed
+            .iter()
+            .map(|t| (t[0] + t[1]) as u64)
+            .collect::<Vec<_>>()
     );
 }
 

@@ -64,6 +64,8 @@
 
 use super::ast::Comprehension;
 use super::predicate::CoordSet;
+use super::strategies::for_name;
+use super::strategy::StrategyName;
 use crate::iteration::comprehension::metadata::Metadata;
 
 pub mod finding;
@@ -120,23 +122,69 @@ pub fn optimize(ast: Comprehension) -> Comprehension {
 /// order. Returns the first non-empty finding; returns
 /// the empty finding when no rule fires.
 pub fn analyze_reducibility(ast: &Comprehension) -> ReducibilityFinding {
+    analyze_at(ast, Place::Free)
+}
+
+/// Where a node sits relative to the orders above it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Place {
+    /// No non-`Lex` order ranks this node's tuples by position.
+    Free,
+    /// A non-`Lex` order ranks this node's tuples by their positions in
+    /// its input (comprehension_forms.md §5 V5): a filter here keeps
+    /// its input's shape, so R4 and R5, which reshape that input, do
+    /// not fire. `through_orders` holds when the ranking order selects
+    /// from the shape and so reads through an untruncated order here
+    /// (§7.4 O1).
+    Ranked { through_orders: bool },
+}
+
+impl Place {
+    /// The place of a child of `node`, which sits at `self`.
+    fn of_child(self, node: &Comprehension) -> Place {
+        let Comprehension::Order {
+            strategy,
+            truncation,
+            ..
+        } = node
+        else {
+            return Place::Free;
+        };
+        let inherited = truncation.is_none()
+            && self
+                == Place::Ranked {
+                    through_orders: true,
+                };
+        if *strategy != StrategyName::Lex {
+            Place::Ranked {
+                through_orders: inherited || for_name(*strategy).selects_from_shape(),
+            }
+        } else if inherited {
+            self
+        } else {
+            Place::Free
+        }
+    }
+}
+
+fn analyze_at(ast: &Comprehension, place: Place) -> ReducibilityFinding {
     // Bottom-up: try to rewrite each child first.
     // Rewriting a child returns a new parent that wraps the
     // rewritten child; subsequent rule attempts then see the
     // updated subtree on the next outer-loop iteration.
-    if let Some(finding) = try_rewrite_child_first(ast) {
+    if let Some(finding) = try_rewrite_child_first(ast, place) {
         return finding;
     }
     // No rewrite in a child — try rules at this node.
-    try_rules_at_node(ast)
+    try_rules_at_node(ast, place)
 }
 
 /// Attempt to rewrite a child; return a finding that wraps
 /// the rewritten subtree in this node's variant.
-fn try_rewrite_child_first(ast: &Comprehension) -> Option<ReducibilityFinding> {
+fn try_rewrite_child_first(ast: &Comprehension, place: Place) -> Option<ReducibilityFinding> {
     let children: Vec<Comprehension> = ast.children().cloned().collect();
     for (i, child) in children.iter().enumerate() {
-        let child_finding = analyze_reducibility(child);
+        let child_finding = analyze_at(child, place.of_child(ast));
         let rewritten = match child_finding.reduction {
             Some(Reduction::Rewrite { witness, .. }) => witness,
             Some(Reduction::Replace { with }) => with,
@@ -158,7 +206,8 @@ fn try_rewrite_child_first(ast: &Comprehension) -> Option<ReducibilityFinding> {
 
 /// Try every R-rule at this node in priority order.
 /// First fire wins.
-fn try_rules_at_node(ast: &Comprehension) -> ReducibilityFinding {
+fn try_rules_at_node(ast: &Comprehension, place: Place) -> ReducibilityFinding {
+    let reshapes = place == Place::Free;
     // R0a — identity elimination
     if let Some(witness) = r0a_identity::apply(ast) {
         return ReducibilityFinding {
@@ -193,7 +242,7 @@ fn try_rules_at_node(ast: &Comprehension) -> ReducibilityFinding {
         };
     }
     // R4 — filter distributes over union
-    if let Some(witness) = r4_distribute::apply(ast) {
+    if let Some(witness) = r4_distribute::apply(ast).filter(|_| reshapes) {
         return ReducibilityFinding {
             reduction: Some(Reduction::Rewrite {
                 rule: RuleId::R4,
@@ -204,7 +253,9 @@ fn try_rules_at_node(ast: &Comprehension) -> ReducibilityFinding {
         };
     }
     // R5 — per-axis filter pushdown
-    if let Some(witness) = r5_factorize::apply(ast, &|p, c| super::predicate::analyze(p, c)) {
+    if let Some(witness) =
+        r5_factorize::apply(ast, &|p, c| super::predicate::analyze(p, c)).filter(|_| reshapes)
+    {
         return ReducibilityFinding {
             reduction: Some(Reduction::Rewrite {
                 rule: RuleId::R5,
