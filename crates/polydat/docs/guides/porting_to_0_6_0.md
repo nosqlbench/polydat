@@ -53,7 +53,7 @@ The release makes three things true that a host builds on:
 | `Strategy` requires `select`, which returns a `Selection` of positions; `apply` and `apply_seeded` are provided | a host's own `Strategy` implementation | implement `select` from the input's `IndexFn`, count, truncation, and seed ([comprehension_forms.md](../design/comprehension_forms.md) §3.6) |
 | `KernelProgram` requires `create_uninitialized`; `create_kernel` is provided and initializes | a host's own `KernelProgram` implementation | implement `create_uninitialized`, returning the kernel without calling `init` |
 | `Op::OrderMaterialize` gains `input` and `Op::Zip` gains `operands` | a pattern or literal naming every field of either | end the pattern with `..`; `OrderMaterialize` now holds its input and pops nothing from the stack |
-| New variants: `KernelError::ConstInit`, `AssemblyError::ConstInit`, `WriteError::ConstSlot`, `WriteError::FromParent`, `ContractViolation::Bind`, `RuntimeError::ZipLengthMismatch`, `ValidationError::PredicateContextRequired`, `InputKind::Const` | an exhaustive `match` on any of these enums (E0004) | add the arm or a wildcard |
+| New variants: `KernelError::ConstInit`, `AssemblyError::ConstInit`, `AssemblyError::NativeCone`, `WriteError::ConstSlot`, `WriteError::FromParent`, `ContractViolation::Bind`, `RuntimeError::ZipLengthMismatch`, `ValidationError::PredicateContextRequired`, `InputKind::Const` | an exhaustive `match` on any of these enums (E0004) | add the arm or a wildcard |
 | The node types `SessionStartMillis` and `ElapsedMillis` are removed | code that named them | a const capture; see the next table |
 
 A healing write becomes a conversion the host asks for:
@@ -226,6 +226,18 @@ a rule the specifications now state and every engine follows.
   profile enumerators, `profile_partitions`,
   `matching_profile_name_at`) panicked on one. Every accessor now gives
   the same answer on either handle.
+- **A cone that cannot be built natively is recorded.** Under
+  `JitMode::Auto`, a cone whose native code fails to build stays on the
+  interpreter, as before, and the program's `CompileLedger` now records
+  it (`cone_fallbacks()`: the members, the outputs they produce, the
+  input count, and the error). Under `JitMode::Force` the compile fails
+  with `AssemblyError::NativeCone` instead of falling back
+  ([engines.md](../design/engines.md) §2.1).
+- **A cone reading more than 64 inputs runs natively in pieces.** Such a
+  cone was left interpreted; it is now cut into convex pieces of at
+  most 64 inputs, each compiled natively. A single node reading more
+  than 64 inputs stays interpreted and is recorded on the ledger
+  ([engines.md](../design/engines.md) §2.2).
 
 ### Comprehensions and traversals
 
@@ -347,10 +359,6 @@ when its change lands.
 - Optimizer rules: O1 restricted, validation before rewrite, R5 pushdown
   only for total predicates, and an order over a filter ranks the
   survivors.
-- A cone whose native build fails is recorded on the `CompileLedger`,
-  and `JitMode::Force` fails the compile instead of falling back.
-- A cone reading more than 64 inputs is split into pieces rather than
-  left interpreted.
 - `strict_values` checks constant sources at build.
 - The `strict_types` pragma is documented as having no effect.
 - Pragmas are lexically scoped, so a module's pragmas stop applying to
