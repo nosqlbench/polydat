@@ -115,7 +115,7 @@ is run.
 | Bind | `dsl::compile::assemble_parent` | One lowering for every entry point: bindings become assembler nodes; every referenced name not defined locally becomes an input slot (the conditional-shadow rule of [none_semantics.md](none_semantics.md)); tiles are typed. `for` statements are lifted out first and their bodies compiled as traversals. |
 | Const capture | `compile::assembly::resolve_with_log` (`capture_consts`), first | Every output marked `const`, whether written in source or marked through `PolydatAssembler::mark_const_output`, is classified by its cone. A const whose cone reads no input and no nondeterministic node stays in the graph and folds at build. Any other const is rewritten into a capture: its expression becomes the output `__init_<name>`, its value the `InputKind::Const` slot `__const_<name>`, and a `ConstInit` record orders it for `Kernel::init` ([evaluation_model.md](evaluation_model.md), "Const Binding Contract"). A `shared` register's computed starting value gets a `ConstInit` record here too. A capture that reads a coordinate, or consts that read each other in a cycle, fail the build. The pass runs once, before every other resolve step, so the result is the same on all four engines. |
 | Wire resolution + adapter insertion | `compile::assembly::resolve_with_log` | Arity is checked. Each wire's producer type is compared with the consumer's declared input type; a mismatch is either healed through `auto_adapter` (the adapter node is inserted and `TypeAdapterInserted` logged) or fails as `AssemblyError::TypeMismatch`. Strict mode refuses the implicit conversion instead. |
-| Strict-wire assertions | same pass | Under `strict_values`, an `AssertValue` node is inserted in front of every constrained sink port whose source is not already proven (`AssertionInserted` / `AssertionSkipped`). |
+| Strict-wire checks | same pass | Under `strict_values`, every constrained wire input is checked (§2.3): a compile-time constant source at build, where a violation fails the build, and any other source through an inserted `AssertValue` node (`AssertionInserted` / `AssertionSkipped`). |
 | Node Fusion | same pass, `compile::fusion::apply_fusions` | `fusion::default_rules` (every rule the linked node crates register, in priority order) applied to a fixpoint; `FusionApplied` logged. |
 | Dead-code elimination | same pass | Nodes not reachable from a declared output are dropped; the side-channel `log_*` nodes are always kept. |
 | Topological sort | same pass | Kahn's algorithm over the live nodes; a cycle is `CycleDetected`. |
@@ -196,6 +196,70 @@ that a value was converted to `Str` on its way into an
 interpolation. Recording each one as an event keeps implicit
 conversions inspectable, and lets strict mode refuse whole
 classes of them without a second mechanism.
+
+<a id="sec-strict-wires"></a>
+### 2.3 Strict-wire checks
+
+A node trusts its inputs: its evaluation does not check them, and a
+value outside its domain panics at cycle time. An input port may
+declare a **value constraint** (`Port::constraint`, in the
+`ConstConstraint` vocabulary the constant-parameter validator uses) to
+name that domain. `mod_wire`'s `divisor` port declares `NonZeroU64`,
+for example. The **strict-wire checks** enforce these constraints. They
+are on for a node when `pragma strict_values` (or its alias `strict`)
+is in force in the scope the node is written in
+([polydat_grammar.md §14](polydat_grammar.md#sec-pragmas)).
+
+The pass runs per wire, after adapter insertion, and decides by the
+wire's source:
+
+| Source | Result |
+|---|---|
+| A **compile-time constant**: a node with no wire inputs that is not nondeterministic | The node is evaluated at build and its value checked. A value that satisfies the constraint needs no guard. A `None` value needs none either, because the sink is never evaluated on `None` ([none_semantics.md](none_semantics.md) Rule 1). A value that fails the constraint fails the build. |
+| The guard this pass inserted for an equal constraint | No second guard is inserted. |
+| Anything else: an input slot, a node with wire inputs, or a nondeterministic node | An `AssertValue` node is inserted in front of the sink. It passes the value through, and it panics with the constraint's message when the value fails, with the same message on every engine. |
+
+A node is **nondeterministic** when it declares
+`Purity::Nondeterministic` or a `volatile` binding names it. Its value at
+build says nothing about its value at cycle time: `counter()` yields 0
+on its first evaluation and 1 on its second. Such a node therefore gets
+a runtime guard, even though it has no wire inputs. A guard counts as
+proof only when this pass inserted it for the same constraint. An
+assertion node is recognised by that mark and never by its name, and
+assertion nodes are not callable from Polydat source.
+
+Only the source node itself is evaluated. A computed source is guarded
+even when its inputs are constants, as in `mod_wire(cycle, 3 - 3)`. The
+compile-constant fold then evaluates that guard at build, so such a
+program fails the build as well, reported as a fold failure of
+`assert_u64_nonzero`. A `const` binding captured at kernel
+initialization reaches its readers through an input slot, so its
+readers are guarded too.
+
+A constant that fails is reported with the port, the node, the
+constraint, and the value:
+
+```text
+pragma strict_values
+input cycle: u64
+b := mod_wire(cycle, 0)
+```
+
+```text
+strict_values: port 'divisor' of 'b' (mod_wire) must be non-zero, but its source is the constant 0
+```
+
+Each wire that gets no guard is logged as `AssertionSkipped` with the
+reason, and each inserted guard as `AssertionInserted`. The round-trip
+lint (§2) is an error rather than a warning when the program's own
+pragmas, or a `for` body's, turn `strict_values` on.
+
+`pragma strict_types` is accepted and acknowledged
+(`PragmaAcknowledged`), and it has no effect on the graph. Wires are
+statically typed. Wire resolution makes every wire's type the sink
+port's declared type, through an adapter or a `TypeMismatch` refusal,
+so a runtime type assertion would have nothing to catch. The `strict`
+alias turns on both pragmas, so its effect is that of `strict_values`.
 
 ---
 

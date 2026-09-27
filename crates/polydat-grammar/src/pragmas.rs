@@ -1,13 +1,12 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Module-level pragmas for Polydat source.
+//! Pragmas for Polydat source.
 //!
-//! Pragmas are first-class Polydat statements the module author places at
-//! the head of a `.polydat` file or module body to opt into compile-time
-//! graph transforms (polydat_grammar.md §14). They cover
-//! assertion-injection modes that complement the const-constraint
-//! metadata (graph_compiler.md §2):
+//! Pragmas are first-class Polydat statements that opt a scope into
+//! compile-time checks (polydat_grammar.md §14). They cover the
+//! strict-wire modes that complement the const-constraint metadata
+//! (graph_compiler.md §2):
 //!
 //! ```polydat
 //! pragma strict_values
@@ -19,35 +18,37 @@
 //!
 //! `pragma` is a reserved keyword in the Polydat grammar; pragmas are
 //! [`Statement::Pragma`] in the AST and walked by the compiler the
-//! same way other statements are. They're not comments — distinct
-//! syntactic construct, distinguishable from `//`/`#` line comments.
+//! same way other statements are. They are a distinct syntactic
+//! construct, not comments.
 //!
 //! [`Statement::Pragma`]: crate::ast::Statement::Pragma
 //!
 //! ## Recognised pragma names
 //!
-//! - `strict_types` — auto-insert type assertion nodes on wires
-//!   whose source can't be statically proven to deliver the right
-//!   `PortType`.
-//! - `strict_values` — auto-insert value assertion nodes on wires
-//!   whose downstream node declares a value constraint the source
-//!   can't satisfy at compile time.
-//! - `strict` — alias for both `strict_types` + `strict_values`.
+//! - `strict_values` — check every wire into a port that declares a
+//!   value constraint: a compile-time constant source is checked at
+//!   build, and any other source gets a value assertion node.
+//! - `strict_types` — accepted and acknowledged, with no effect on the
+//!   graph. Wires are statically typed and a resolved wire's type is
+//!   the sink port's type, so a runtime type assertion has nothing to
+//!   catch.
+//! - `strict` — alias for both `strict_types` and `strict_values`.
 //!
-//! Unknown pragmas are recorded but warned about, not errored:
+//! Unknown pragmas are recorded and warned about, not errored:
 //! pragmas are forward-compatible by design so old binaries can
 //! parse modules that opt into newer features they don't
 //! support.
 //!
 //! ## Scoping
 //!
-//! Each Polydat program has its own [`PragmaSet`], collected once at
-//! the root by [`collect_from_ast`]. Inner contexts inherit the outer
-//! scope's pragmas: a `for` body compiles under a clone of its
-//! parent's set, so an enclosing `strict_values` applies to every
-//! nested body. [`PragmaSet::attach_to`] and [`PragmaConflict`]
-//! model a parent chain with outer-wins conflict resolution; the
-//! compiler does not use them.
+//! Scoping is lexical. A pragma applies to the scope it is written in
+//! and to every scope nested in it: a program, a `for` body, and a
+//! module body are scopes. A nested scope compiles under
+//! [`PragmaSet::nested`], its enclosing set plus the pragmas its own
+//! statements declare. Pragmas are presence-only, so a nested scope
+//! can add to the set and never conflicts with it.
+
+use crate::ast::Statement;
 
 /// One pragma entry parsed from the source.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,142 +61,73 @@ pub struct Pragma {
     pub line: usize,
 }
 
-/// All pragmas declared in one Polydat scope. Multiple `PragmaSet`s
-/// chain through their `parent` field, set by
-/// [`PragmaSet::attach_to`], to model nested scopes
-/// (program → `for` body). Each scope is its own `PragmaSet`, the chain is walked at lookup time, and
-/// outer scopes win on conflict.
+/// The pragmas in force in one Polydat scope: those the scope declares
+/// and those of every scope enclosing it.
 #[derive(Debug, Clone, Default)]
 pub struct PragmaSet {
-    /// The pragmas declared in this scope, in order.
+    /// The pragmas in force, the enclosing scopes' first, in order.
     pub entries: Vec<Pragma>,
-    /// Outer scope, if any. Lookups walk this chain after their
-    /// own entries miss; conflicts are detected at attach time
-    /// via [`PragmaSet::attach_to`]. The `Arc` keeps the outer
-    /// scope cheap to share across many child scopes (e.g. one
-    /// workload scope feeding a fan-out of phase scopes).
-    pub parent: Option<std::sync::Arc<PragmaSet>>,
 }
 
 impl PragmaSet {
-    /// Returns true if the named pragma is present in this scope
-    /// or any enclosing scope.
+    /// Returns true if the named pragma is in force.
     pub fn contains(&self, name: &str) -> bool {
-        if self.entries.iter().any(|p| p.name == name) {
-            return true;
-        }
-        match &self.parent {
-            Some(p) => p.contains(name),
-            None => false,
-        }
+        self.entries.iter().any(|p| p.name == name)
     }
 
     /// Returns true if either `strict_types` or the `strict` alias
-    /// is set in this scope or any enclosing scope.
+    /// is in force.
     pub fn strict_types(&self) -> bool {
         self.contains("strict_types") || self.contains("strict")
     }
 
     /// Returns true if either `strict_values` or the `strict`
-    /// alias is set in this scope or any enclosing scope.
+    /// alias is in force.
     pub fn strict_values(&self) -> bool {
         self.contains("strict_values") || self.contains("strict")
     }
 
-    /// Iterate pragmas this scope declares that the compiler
-    /// doesn't recognise. Local-only — does not walk parents (the
-    /// outer scope already reported its own unknowns at its own
-    /// compile time).
+    /// Iterate the pragmas in force that the compiler doesn't
+    /// recognise.
     pub fn unknown(&self) -> impl Iterator<Item = &Pragma> {
         self.entries.iter().filter(|p| !is_known(&p.name))
     }
 
-    /// Attach this `PragmaSet` to an outer scope, returning
-    /// `(attached, conflicts)`. Conflicts arise when this scope
-    /// declares a pragma whose effective value (its `args`)
-    /// differs from a same-named declaration in the
-    /// outer chain. Outer wins; the conflict is returned for
-    /// diagnostic reporting.
-    ///
-    /// The caller decides what to do with conflicts:
-    /// - non-strict: emit warning event(s)
-    /// - strict: turn each conflict into a compile error
-    ///
-    /// The pragma vocabulary is presence-only, so `args` is
-    /// always empty and conflicts are degenerate; the mechanism
-    /// serves value-bearing pragmas. The compiler does not call
-    /// this: a `for` body inherits a clone of its parent's set.
-    pub fn attach_to(self, outer: std::sync::Arc<PragmaSet>) -> (PragmaSet, Vec<PragmaConflict>) {
-        let mut conflicts = Vec::new();
-        for entry in &self.entries {
-            // Walk the outer chain looking for a same-named
-            // declaration with disagreeing args.
-            let mut cursor: &PragmaSet = outer.as_ref();
-            loop {
-                if let Some(existing) = cursor.entries.iter().find(|p| p.name == entry.name)
-                    && existing.args != entry.args
-                {
-                    conflicts.push(PragmaConflict {
-                        name: entry.name.clone(),
-                        outer_line: existing.line,
-                        inner_line: entry.line,
-                    });
-                    break;
-                }
-                match &cursor.parent {
-                    Some(p) => cursor = p.as_ref(),
-                    None => break,
-                }
-            }
-        }
-        let attached = PragmaSet {
-            entries: self.entries,
-            parent: Some(outer),
-        };
-        (attached, conflicts)
+    /// The set a scope nested in this one compiles under: every pragma
+    /// in force here, then the pragmas `statements` (the nested
+    /// scope's own) declare. Pragmas in scopes nested inside
+    /// `statements` are not collected; each applies when its own scope
+    /// compiles.
+    pub fn nested(&self, statements: &[Statement]) -> PragmaSet {
+        let mut entries = self.entries.clone();
+        entries.extend(declared_in(statements));
+        PragmaSet { entries }
     }
 }
 
 /// Recognised pragma names. Add new names here as features land.
-fn is_known(name: &str) -> bool {
+pub fn is_known(name: &str) -> bool {
     matches!(name, "strict_types" | "strict_values" | "strict")
 }
 
-/// Walk a parsed AST and collect every `Statement::Pragma` into a
-/// [`PragmaSet`]. This is the canonical extraction path — pragmas
-/// are first-class grammar (the `pragma` keyword) and the parser
-/// produces them as proper statements.
-pub fn collect_from_ast(file: &crate::ast::PolydatFile) -> PragmaSet {
-    use crate::ast::Statement;
-    let mut entries = Vec::new();
-    for stmt in &file.statements {
-        if let Statement::Pragma { name, span } = stmt {
-            entries.push(Pragma {
-                name: name.clone(),
-                args: Vec::new(),
-                line: span.line,
-            });
-        }
-    }
-    PragmaSet {
-        entries,
-        parent: None,
-    }
+/// The pragmas `statements` declare at their own level.
+pub fn declared_in(statements: &[Statement]) -> impl Iterator<Item = Pragma> + '_ {
+    statements.iter().filter_map(|stmt| match stmt {
+        Statement::Pragma { name, span } => Some(Pragma {
+            name: name.clone(),
+            args: Vec::new(),
+            line: span.line,
+        }),
+        _ => None,
+    })
 }
 
-/// A pragma that disagreed across nested scopes. Used by
-/// [`PragmaSet::attach_to`] to surface conflicts up to the caller
-/// for either advisory logging (non-strict) or hard error (strict).
-/// The outer scope's value wins; the conflict report is for
-/// diagnostics, not for resolution.
-#[derive(Debug, Clone)]
-pub struct PragmaConflict {
-    /// The pragma's name.
-    pub name: String,
-    /// The line the outer scope declares it on.
-    pub outer_line: usize,
-    /// The line the inner scope declares it on.
-    pub inner_line: usize,
+/// Walk a parsed program and collect the pragmas it declares at its
+/// top level into a [`PragmaSet`]: the set the program's own bindings
+/// compile under. Pragmas inside a `for` body or a module body belong
+/// to that scope.
+pub fn collect_from_ast(file: &crate::ast::PolydatFile) -> PragmaSet {
+    PragmaSet::default().nested(&file.statements)
 }
 
 #[cfg(test)]
@@ -208,6 +140,10 @@ mod tests {
         let tokens = lex(src).expect("lex");
         let ast = parse(tokens).expect("parse");
         collect_from_ast(&ast)
+    }
+
+    fn statements(src: &str) -> Vec<Statement> {
+        parse(lex(src).expect("lex")).expect("parse").statements
     }
 
     #[test]
@@ -234,75 +170,17 @@ mod tests {
     }
 
     #[test]
-    fn attached_inherits_outer_pragmas() {
-        let outer = std::sync::Arc::new(PragmaSet {
-            entries: vec![Pragma {
-                name: "strict_values".into(),
-                args: vec![],
-                line: 1,
-            }],
-            parent: None,
-        });
-        let inner = PragmaSet::default();
-        let (attached, conflicts) = inner.attach_to(outer);
-        assert!(
-            attached.strict_values(),
-            "inner should see outer's strict_values via parent walk"
-        );
-        assert!(conflicts.is_empty());
+    fn nested_scope_inherits_the_enclosing_set() {
+        let outer = pragmas_from("pragma strict_values\nid := cycle\n");
+        let inner = outer.nested(&statements("x := cycle\n"));
+        assert!(inner.strict_values());
     }
 
     #[test]
-    fn attached_local_pragma_wins_for_unrelated_names() {
-        // Outer says strict_types, inner adds strict_values. No
-        // conflict — both apply via the chain walk.
-        let outer = std::sync::Arc::new(PragmaSet {
-            entries: vec![Pragma {
-                name: "strict_types".into(),
-                args: vec![],
-                line: 1,
-            }],
-            parent: None,
-        });
-        let inner = PragmaSet {
-            entries: vec![Pragma {
-                name: "strict_values".into(),
-                args: vec![],
-                line: 5,
-            }],
-            parent: None,
-        };
-        let (attached, conflicts) = inner.attach_to(outer);
-        assert!(attached.strict_types());
-        assert!(attached.strict_values());
-        assert!(conflicts.is_empty());
-    }
-
-    #[test]
-    fn attached_records_arg_conflict() {
-        // A value-bearing pragma like `assert_for(name)` that
-        // disagrees across scopes. The keyword grammar does not
-        // accept args, so the test builds the PragmaSet by hand. Outer wins; conflict is reported.
-        let outer = std::sync::Arc::new(PragmaSet {
-            entries: vec![Pragma {
-                name: "assert_for".into(),
-                args: vec!["alpha".into()],
-                line: 1,
-            }],
-            parent: None,
-        });
-        let inner = PragmaSet {
-            entries: vec![Pragma {
-                name: "assert_for".into(),
-                args: vec!["beta".into()],
-                line: 5,
-            }],
-            parent: None,
-        };
-        let (_attached, conflicts) = inner.attach_to(outer);
-        assert_eq!(conflicts.len(), 1);
-        assert_eq!(conflicts[0].name, "assert_for");
-        assert_eq!(conflicts[0].outer_line, 1);
-        assert_eq!(conflicts[0].inner_line, 5);
+    fn nested_scope_adds_without_changing_the_enclosing_set() {
+        let outer = pragmas_from("pragma strict_types\nid := cycle\n");
+        let inner = outer.nested(&statements("pragma strict_values\nx := cycle\n"));
+        assert!(inner.strict_types() && inner.strict_values());
+        assert!(!outer.strict_values());
     }
 }

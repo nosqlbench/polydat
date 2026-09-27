@@ -952,9 +952,9 @@ fn strict_values_inserts_nonzero_assertion_on_mod_wire() {
     );
 }
 
-/// When the divisor source is a constant (already validated at
-/// assembly time), strict_values mode skips the assertion — it's
-/// provably redundant (graph_compiler.md §2, strict-wire assertions).
+/// When the divisor source is a constant that satisfies the port's
+/// constraint, strict_values mode checks it at build and inserts no
+/// assertion (graph_compiler.md §2, strict-wire assertions).
 #[test]
 fn strict_values_skips_assertion_when_source_is_constant() {
     use polydat::dsl::events::CompileEvent;
@@ -984,6 +984,117 @@ fn strict_values_skips_assertion_when_source_is_constant() {
         "expected an AssertionSkipped event for constant source; events: {:?}",
         log.events(),
     );
+}
+
+/// A constant source that fails the sink port's constraint is a
+/// compile error under strict_values, naming the port, the
+/// constraint, and the value; without the pragma the program builds.
+#[test]
+fn strict_values_rejects_a_constant_that_fails_the_constraint() {
+    let err = compile_polydat_interpreter("pragma strict_values\nb := mod_wire(cycle, 0)\n")
+        .expect_err("a constant zero divisor must not build under strict_values");
+    let text = err.to_string();
+    assert!(
+        text.contains("strict_values")
+            && text.contains("'divisor'")
+            && text.contains("non-zero")
+            && text.contains("constant 0"),
+        "{text}"
+    );
+    compile_polydat_interpreter("b := mod_wire(cycle, 0)\n").expect("builds without the pragma");
+}
+
+/// A nondeterministic zero-input node is never a constant: `counter()`
+/// yields 0 on its first evaluation, and its wire gets a runtime guard
+/// rather than a build-time verdict. A `volatile` binding is the same.
+#[test]
+fn strict_values_guards_a_nondeterministic_source() {
+    for source in [
+        "pragma strict_values\nd := counter()\nb := mod_wire(cycle, d)\n",
+        "pragma strict_values\nvolatile d := 0\nb := mod_wire(cycle, d)\n",
+    ] {
+        let mut log = CompileEventLog::new();
+        compile_polydat_interpreter_with_log(source, &mut log)
+            .unwrap_or_else(|e| panic!("{source}: {e}"));
+        let inserted = log
+            .events()
+            .iter()
+            .filter(|e| matches!(e, CompileEvent::AssertionInserted { .. }))
+            .count();
+        assert_eq!(inserted, 1, "{source}: {:?}", log.events());
+    }
+}
+
+/// A pragma in a `for` body applies to that body: its constant zero
+/// divisor fails the build, while the same divisor in the program
+/// around it, outside the pragma's scope, builds.
+#[test]
+fn a_for_body_pragma_applies_to_the_body_only() {
+    let err = compile_polydat_interpreter(
+        "input cycle: u64\n\
+         for k in 1..3 {\n\
+             pragma strict_values\n\
+             c := mod_wire(k, 0)\n\
+         }\n",
+    )
+    .expect_err("the body's pragma must check the body");
+    assert!(err.to_string().contains("strict_values"), "{err}");
+    compile_polydat_interpreter(
+        "input cycle: u64\n\
+         b := mod_wire(cycle, 0)\n\
+         for k in 1..3 {\n\
+             pragma strict_values\n\
+             c := mod_wire(k, 7)\n\
+         }\n",
+    )
+    .expect("the body's pragma must not reach the program");
+}
+
+/// A nested scope inherits the enclosing scope's pragmas: a program's
+/// pragma checks a `for` body, and a body's pragma checks a `for`
+/// nested in it.
+#[test]
+fn a_nested_scope_inherits_the_enclosing_pragmas() {
+    for source in [
+        "pragma strict_values\n\
+         input cycle: u64\n\
+         for k in 1..3 {\n\
+             c := mod_wire(k, 0)\n\
+         }\n",
+        "input cycle: u64\n\
+         for k in 1..3 {\n\
+             pragma strict_values\n\
+             for j in 1..3 {\n\
+                 c := mod_wire(j, 0)\n\
+             }\n\
+         }\n",
+    ] {
+        let err = compile_polydat_interpreter(source)
+            .expect_err("the enclosing pragma must check the nested body");
+        assert!(err.to_string().contains("strict_values"), "{source}: {err}");
+    }
+}
+
+/// A module's pragma applies to the module's own bindings and never to
+/// its host.
+#[test]
+fn a_module_pragma_does_not_reach_its_host() {
+    let module = |body: &str| {
+        format!(
+            "input cycle: u64\n\
+             checked(a: u64) -> (out: u64) := {{\n\
+                 pragma strict_values\n\
+                 out := {body}\n\
+             }}\n\
+             s := checked(cycle)\n\
+             b := mod_wire(cycle, 0)\n"
+        )
+    };
+    compile_polydat_interpreter(&module("mod_wire(a, 7)"))
+        .expect("the module's pragma must not check the host's divisor");
+    let err = compile_polydat_interpreter(&module("mod_wire(a, 0)"))
+        .expect_err("the module's pragma must check the module's divisor");
+    assert!(err.to_string().contains("strict_values"), "{err}");
 }
 
 /// Pragma directives at the source head are recognised and recorded

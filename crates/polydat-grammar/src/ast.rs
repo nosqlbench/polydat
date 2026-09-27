@@ -60,8 +60,9 @@ pub enum Statement {
     ExternPort(ExternPort),
     /// `cursor name = Cursor()` or `cursor name = constructor_expr`
     Cursor(CursorDecl),
-    /// `pragma <name>` — a module-level directive opting into a
-    /// compile-time graph transform (polydat_grammar.md §14).
+    /// `pragma <name>` — a directive opting the scope it is written
+    /// in, and every scope nested in it, into a compile-time check
+    /// (polydat_grammar.md §14).
     /// First-class grammar, distinct from line
     /// comments. Recognised pragmas trigger
     /// `CompileEvent::PragmaAcknowledged`; unknown names trigger

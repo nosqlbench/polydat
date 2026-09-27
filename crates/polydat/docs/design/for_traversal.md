@@ -301,6 +301,45 @@ dispense state.
 
 ## 4. Compilation
 
+<a id="sec-placement"></a>
+**Placement.** A `for` producer (`for_expr`) compiles only as the whole
+value of a binding. A traversal (`for_stmt`) compiles in a program and
+in a `for` body, and never in a module body.
+
+| Form | Program | `for` body | Module body |
+|---|---|---|---|
+| Producer binding, `sweep := for k in 1..4` | yes | yes | yes |
+| Producer nested in a larger expression | refused | refused | refused |
+| Traversal, `for k in 1..4 { … }` | yes | yes | refused |
+
+A producer nested in a larger expression, such as a call argument, is
+refused with the message "a `for` producer compiles only as the whole
+value of a binding":
+
+```text
+x := hash(
+    for k in 1..4
+)
+```
+
+The comprehension text runs to the end of its line (§2), so the
+one-line form `x := hash(for k in 1..4)` fails earlier, when `1..4)` does
+not parse as a source. The strip step below rewrites a producer binding to a named `const` wire,
+`const name := streamer("<payload>")`. Traversals, derivations, and
+tiles reach the producer through that name. A `for` nested in a larger
+expression has no binding to rewrite and no name to be reached by. A
+module body's producer binding is rewritten the same way, under the
+call's prefix.
+
+A traversal is refused in a module body with the message "a `for`
+traversal statement does not compile inside a module body". A traversal
+is a child program that the parent stores by the `for` statement's
+lexical position (§5.1). A module does not compile to a program of its
+own: its statements splice into each caller's graph and its boundary
+disappears ([Module System](module_system.md) §5). An inlined module
+therefore has no program to hold the child, and one statement in its
+body would be a separate position at every call.
+
 1. **Parse.** `for_expr` produces `Expr::For(Box<ForSource>)`. `for_stmt`
    produces `Statement::For(ForStmt)`, where `source` is
    comprehension text parsed to the algebra, a producer reference, or a
@@ -323,8 +362,10 @@ dispense state.
    body as it lowered it (`BodySource` in `polydat-core/src/dsl/traversal.rs`): the
    child file, its source text, and the compiler settings the parent
    used, which are the source directory, the library paths, strictness,
-   the diagnostic context label, the cursor limit, the pragma set, and
-   the parent's resolved modules. The body compiles on any other engine
+   the diagnostic context label, the cursor limit, the pragma set with
+   the body's own pragmas added
+   ([polydat_grammar.md §14.1](polydat_grammar.md#sec-pragma-scoping)),
+   and the parent's resolved modules. The body compiles on any other engine
    (the closure tier, native, or pure native) from this record, with the
    same settings, on the first request for that engine (§5.2).
 

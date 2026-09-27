@@ -148,8 +148,10 @@ compiler:
 
 Input declarations are satisfied by the caller and are not copied into the
 host graph. Nested module definitions, extern declarations, and cursor
-declarations are not inlined as body nodes. Module pragmas are added to the
-combined pragma set. The resulting nodes go through the host program's
+declarations are not inlined as body nodes. A module body is a pragma
+scope: its bindings compile under the host's pragmas plus the module's
+own, and the module's pragmas do not apply to the host
+([polydat_grammar.md §14.1](polydat_grammar.md#sec-pragma-scoping)). The resulting nodes go through the host program's
 single wiring validation, lifecycle analysis, topological ordering,
 dead-code elimination, fusion, and engine selection passes. No runtime
 module boundary remains.
@@ -171,7 +173,8 @@ module boundary remains.
 A `for` body ([The `for` Construct](for_traversal.md) §4) compiles as a
 child program with the settings its parent used: the source directory,
 the ordered library paths, the strict flag, the diagnostic context label,
-the cursor limit, and the pragma set. The child compiler also starts with
+the cursor limit, and the pragma set, to which the body's own pragmas are
+added ([polydat_grammar.md §14.1](polydat_grammar.md#sec-pragma-scoping)). The child compiler also starts with
 the parent's module cache as it stood when the body was lowered. That
 cache holds the program's own formal definitions (registered before any
 statement compiled, §2) and every module the parent had resolved by then.

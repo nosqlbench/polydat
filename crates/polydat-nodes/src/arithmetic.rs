@@ -57,9 +57,10 @@ fn r#mod(input: u64, modulus: Const<u64>) -> u64 {
 /// The divisor is computed at cycle time from another node — for
 /// example, a control read or a runtime-derived shard count. The
 /// divisor port declares a `NonZeroU64` constraint, so under
-/// `// @pragma: strict_values` the compiler auto-inserts an
-/// `assert_u64_nonzero` between the source and the divisor input
-/// (graph_compiler.md §2). Without strict mode, the node
+/// `pragma strict_values` the compiler rejects a constant zero
+/// divisor at build and inserts an `assert_u64_nonzero` between any
+/// other source and the divisor input (graph_compiler.md §2).
+/// Without strict mode, the node
 /// trusts the divisor and a zero value will panic at cycle time —
 /// the canonical "panic at hour 14" hazard, opt-out by design.
 ///

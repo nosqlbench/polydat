@@ -60,7 +60,7 @@ pub enum TokenKind {
     /// a cursor decl's constructor expression; in expression
     /// position it's a plain identifier.
     Over,
-    /// `pragma` keyword (module-level directive opening,
+    /// `pragma` keyword (opens a scope directive,
     /// polydat_grammar.md §14). Followed by an `Ident` naming the
     /// pragma. Distinct from line comments, so the parser sees
     /// pragmas as first-class statements.

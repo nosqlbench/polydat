@@ -773,18 +773,67 @@ ratio := (i as f64) / 100.0
 > [programmatic guide](polydat_grammar_programmatic.md#p-cursor-over).
 
 The **constructor** is an ordinary expression. `range(start, end)` is the
-finite-ordinal form. The vectordata cursor-sugar forms rewrite to a
-synthetic `range(…)` plus auxiliary projections at compile time (the
-cursor-sugar registry is **open**, extensible by node modules via
-`inventory::submit!`):
+finite-ordinal form. The cursor-sugar forms of §[11.3](#sec-cursor-sugar)
+rewrite to a `range(…)` constructor at compile time.
+
+<a id="sec-cursor-sugar"></a>
+### 11.3 Cursor sugar
+
+A **cursor sugar** form is a cursor constructor that the compiler
+rewrites into a `range(…)` constructor plus bindings placed after the
+cursor. A node module registers each form (`dsl::cursor_sugar`), and
+the registry is open to any node module. The vectordata module
+registers three forms. They parse in every build and compile under the
+`vectordata` feature, so the blocks in this section are round-tripped
+and not compiled.
+
+Each form reads one facet of a dataset profile, the base vectors or the
+query vectors. Its arguments are string literals, and the compiler joins
+the dataset and the profile into one source name, `"<dataset>:<profile>"`.
+
+| Sugar | Means |
+|---|---|
+| `vectordata_base(dataset, profile)` | `vectordata_source(dataset, profile, "base")` |
+| `vectordata_query(dataset, profile)` | `vectordata_source(dataset, profile, "query")` |
+| `vectordata_source(dataset, profile, facet)` | The long form below for `facet`, which is `"base"` or `"query"`. |
+
+The base facet, as sugar:
 
 ```polydat
 cursor row = vectordata_base("example", "label_00")
 ```
 
-(`vectordata_base`/`_query`/`_source` parse without any feature flag but
-only *compile* under the `vectordata` feature, so this block is
-round-tripped, not compiled, by the test harness.)
+The long form it means:
+
+```polydat
+cursor row = range(0, vector_count("example:label_00"))
+__row_prebuffer := dataset_prebuffer("example:label_00")
+row__vector := vector_at("example:label_00", row.ordinal)
+```
+
+The query facet, as sugar:
+
+```polydat
+cursor q = vectordata_query("example", "label_00")
+```
+
+The long form it means:
+
+```polydat
+cursor q = range(0, query_count("example:label_00"))
+__q_prebuffer := dataset_prebuffer("example:label_00")
+q__vector := query_vector_at("example:label_00", q.ordinal)
+```
+
+The cursor ranges over every vector of the facet. `__<cursor>_prebuffer`
+loads the profile once, when the kernel is initialized, so reads at
+cycle time hit memory that is already loaded. `<cursor>__vector` is the
+vector at the cursor's ordinal. The sugar also declares that binding as
+the cursor's `vector` projection, so `row.vector` reads it and a host
+lists it among the cursor's projections. The long form binds the same
+wire, which `row.vector` reads (§[11.1](#sec-field-access)), but it
+declares no projection. A facet's other columns, such as metadata or
+ground truth, have no sugar and are read with their accessor functions.
 
 ---
 
@@ -845,13 +894,77 @@ is in the [programmatic guide](polydat_grammar_programmatic.md#p-module).
 <a id="sec-pragmas"></a>
 ## 14. Pragmas
 
-`pragma <name>` is a first-class, module-level compile-time directive
-(bare name only, no arguments). Recognized pragmas include
-`strict_types`, `strict_values`, and `strict`. **Unknown pragmas are
-forward-compatible** — a warning, not an error.
+`pragma <name>` is a statement that opts a scope into a compile-time
+check. It takes a bare name and no arguments. The recognized pragmas
+are these:
+
+- `strict_values` turns on the strict-wire checks
+  ([graph_compiler.md §2.3](graph_compiler.md#sec-strict-wires)). A
+  constant fed to a port that declares a value constraint is checked at
+  build, and any other source feeding such a port gets a runtime guard.
+- `strict_types` is accepted and acknowledged, and it has no effect.
+  Wires are statically typed, so a runtime type assertion would have
+  nothing to catch.
+- `strict` is an alias for both.
+
+**Unknown pragmas are forward-compatible.** An unknown name is logged
+as a warning (`UnknownPragma`), never an error.
 
 ```polydat
 pragma strict_types
+```
+
+<a id="sec-pragma-scoping"></a>
+### 14.1 Pragma scoping
+
+Pragma scoping is **lexical**. A pragma applies to the scope it is
+written in and to every scope nested in it. The scopes are a program, a
+`for` body, and a module body. A pragma applies to its whole scope,
+wherever in the scope it is written. A nested scope compiles under the
+enclosing scope's pragmas plus its own. Pragmas are presence-only, so a
+nested scope can add to the set and never conflicts with it. A pragma
+never reaches an enclosing scope.
+
+A pragma in a `for` body applies to the body. The program around it is
+unchecked:
+
+```polydat compile
+input cycle: u64
+d := mod(hash(cycle), 100)
+b := mod_wire(cycle, d)
+for k in 1..3 {
+    pragma strict_values
+    c := mod_wire(cycle, k)
+}
+```
+
+Here `c`'s divisor gets a runtime guard and `b`'s does not.
+
+A module's pragma applies to the module's own bindings. It does not reach
+the host that calls the module:
+
+```polydat compile
+checked(a: u64, n: u64) -> (out: u64) := {
+    pragma strict_values
+    out := mod_wire(a, n)
+}
+input cycle: u64
+s := checked(cycle, 7)
+b := mod_wire(cycle, s)
+```
+
+The module's `mod_wire` is checked: its divisor is the constant 7, which
+is checked at build. The host's `mod_wire` is not checked.
+
+An enclosing scope's pragma applies to every nested scope, so this
+program fails at build on the constant zero divisor in its body:
+
+```text
+pragma strict_values
+input cycle: u64
+for k in 1..3 {
+    c := mod_wire(k, 0)
+}
 ```
 
 ---

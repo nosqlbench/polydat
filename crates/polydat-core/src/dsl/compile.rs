@@ -579,27 +579,30 @@ pub fn compile_polydat_interpreter_with_log(
 /// unknown pragma never blocks compilation.
 ///
 /// Called from `Prepared::new` for every entry point given a log;
-/// the set comes from `pragmas::collect_from_ast`.
+/// the set comes from `pragmas::collect_from_ast`. A `for` body's and
+/// a module body's own pragmas are recorded when that scope compiles.
 pub(crate) fn record_pragma_events(
     set: &super::pragmas::PragmaSet,
     log: &mut super::events::CompileEventLog,
 ) {
-    use super::events::CompileEvent;
     for entry in &set.entries {
-        let known = matches!(
-            entry.name.as_str(),
-            "strict_types" | "strict_values" | "strict"
-        );
-        if known {
-            log.push(CompileEvent::PragmaAcknowledged {
-                name: entry.name.clone(),
-                line: entry.line,
-            });
-        } else {
-            log.push(CompileEvent::UnknownPragma {
-                name: entry.name.clone(),
-                line: entry.line,
-            });
+        log.push(pragma_event(entry));
+    }
+}
+
+/// The event one pragma records: `PragmaAcknowledged` for a
+/// recognised name, `UnknownPragma` for the rest.
+pub(crate) fn pragma_event(entry: &super::pragmas::Pragma) -> super::events::CompileEvent {
+    use super::events::CompileEvent;
+    if super::pragmas::is_known(&entry.name) {
+        CompileEvent::PragmaAcknowledged {
+            name: entry.name.clone(),
+            line: entry.line,
+        }
+    } else {
+        CompileEvent::UnknownPragma {
+            name: entry.name.clone(),
+            line: entry.line,
         }
     }
 }
@@ -1957,7 +1960,12 @@ impl Compiler {
                 f.span.col
             );
             child_compiler.cursor_limit = self.cursor_limit;
-            child_compiler.pragmas = self.pragmas.clone();
+            // The body is a pragma scope (polydat_grammar.md §14): it
+            // compiles under this program's set plus its own pragmas.
+            child_compiler.pragmas = self.pragmas.nested(&f.body);
+            for pragma in super::pragmas::declared_in(&f.body) {
+                self.pending_events.push(pragma_event(&pragma));
+            }
             let child_kernel = child_compiler
                 .compile_interpreter(&child, None, None, crate::JitMode::Auto)
                 .map_err(|e| {
@@ -1978,7 +1986,7 @@ impl Compiler {
                 strict: self.strict,
                 context_label: child_compiler.context_label.clone(),
                 cursor_limit: self.cursor_limit,
-                pragmas: self.pragmas.clone(),
+                pragmas: child_compiler.pragmas.clone(),
                 modules: self.module_cache.clone(),
                 programs: std::sync::Mutex::new(std::collections::HashMap::new()),
                 ledger: self.ledger.clone(),
@@ -2011,6 +2019,7 @@ impl Compiler {
         context_label: &str,
     ) -> Result<super::traversal::BodySource, String> {
         let file = super::lexer::lex(source).and_then(super::parser::parse)?;
+        let pragmas = self.pragmas.nested(&file.statements);
         Ok(super::traversal::BodySource::from_parts(
             file,
             source.to_string(),
@@ -2019,7 +2028,7 @@ impl Compiler {
             self.strict,
             format!("{} :: {context_label}", self.context_label),
             self.cursor_limit,
-            self.pragmas.clone(),
+            pragmas,
             self.module_cache.clone(),
             self.ledger.clone(),
         ))

@@ -201,22 +201,16 @@ impl Compiler {
         let module_stmts = module.statements.clone();
 
         // Module inlining is the *flatten* combinator
-        // (module_system.md §5): the module's `Statement`s splice into this
-        // host's DAG and the boundary disappears. Pragmas declared
-        // inside the module body therefore become *additive*
-        // contributions to the *same* `PragmaSet` — they're not a
-        // separate scope. The outer-wins / conflict-detection
-        // pragma semantics fire at *scope
-        // composition* boundaries (workload → phase → for_each),
-        // which live in `nbrs-runtime`, not here.
-        for stmt in &module_stmts {
-            if let crate::dsl::ast::Statement::Pragma { name, span } = stmt {
-                self.pragmas.entries.push(super::pragmas::Pragma {
-                    name: name.clone(),
-                    args: Vec::new(),
-                    line: span.line,
-                });
-            }
+        // (module_system.md §5): the module's `Statement`s splice into
+        // this host's DAG. The module body is still a pragma scope
+        // (polydat_grammar.md §14): its bindings compile under the
+        // host's set plus the module's own pragmas, and the host's set
+        // is restored once they are inlined, so a module's pragma never
+        // reaches its host.
+        let module_pragmas = self.pragmas.nested(&module_stmts);
+        for pragma in super::pragmas::declared_in(&module_stmts) {
+            self.pending_events
+                .push(super::compile::pragma_event(&pragma));
         }
 
         // Strict mode: require all module arguments to be named
@@ -331,7 +325,10 @@ impl Compiler {
         let prefix = format!("__{func_name}_{}_", self.anon_counter);
         self.anon_counter += 1;
 
-        // Inline each statement from the module, rewriting names
+        // Inline each statement from the module, rewriting names, under
+        // the module's pragma scope.
+        let host_pragmas = std::mem::replace(&mut self.pragmas, module_pragmas);
+        asm.set_scope_strict_values(self.pragmas.strict_values());
         for stmt in &module_stmts {
             match stmt {
                 Statement::InputDecl(_) => {} // skip — kernel inputs handled by caller
@@ -401,7 +398,7 @@ impl Compiler {
                 }
                 Statement::ModuleDef(_) | Statement::ExternPort(_) => {} // nested module defs not inlined
                 Statement::Cursor(_) => {}
-                Statement::Pragma { .. } => {} // pragmas don't inline; they're module-scoped
+                Statement::Pragma { .. } => {} // in `module_pragmas`, in force while the body inlines
                 Statement::For(f) => {
                     return Err(format!(
                         "`for {}` inside module '{}': {}",
@@ -431,6 +428,10 @@ impl Compiler {
                 }
             }
         }
+
+        // The target nodes below are the host's bindings.
+        asm.set_scope_strict_values(host_pragmas.strict_values());
+        self.pragmas = host_pragmas;
 
         // Wire module outputs to caller's targets via identity nodes.
         // This makes the target name available as both a wire source

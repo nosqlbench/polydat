@@ -55,6 +55,10 @@ struct PendingNode {
     name: String,
     node: Box<dyn PolydatNode>,
     inputs: Vec<WireRef>,
+    /// The node was added in a scope under `pragma strict_values`, so
+    /// its constrained wire inputs are checked whatever the program's
+    /// own pragmas say (polydat_grammar.md §14).
+    strict_values: bool,
 }
 
 /// Errors that can occur during assembly.
@@ -598,15 +602,14 @@ pub struct PolydatAssembler {
     /// Contract").
     const_outputs: std::collections::HashSet<String>,
     /// The `strict_values` pragma (graph_compiler.md §2, strict-wire
-    /// assertions): when true, the resolver auto-inserts `AssertValue`
-    /// nodes in front of every wire input whose declared
-    /// `Port.constraint` can't be statically proven satisfied by the
-    /// source.
+    /// assertions): when true, the resolver checks a compile-time
+    /// constant source against its sink port's `Port.constraint` at
+    /// build and splices an `AssertValue` in front of every other
+    /// constrained wire input.
     pub(crate) strict_values: bool,
-    /// The `strict_types` pragma. The resolver inserts no `AssertType`
-    /// node for it: the adapter pass has already made every resolved
-    /// wire's type match the sink's declared `PortType`.
-    pub(crate) strict_types: bool,
+    /// Whether nodes added now are marked as written under
+    /// `strict_values`; see [`Self::set_scope_strict_values`].
+    scope_strict_values: bool,
     /// Strict mode: an implicit type coercion is refused at wire
     /// resolution, and a config wire fed from a cycle-time source, a
     /// nondeterministic node no `volatile` output acknowledges, and a
@@ -687,7 +690,7 @@ impl PolydatAssembler {
             template: false,
             const_outputs: std::collections::HashSet::new(),
             strict_values: false,
-            strict_types: false,
+            scope_strict_values: false,
             strict: false,
             input_variance: crate::dsl::compile::InputVariance::Fixed,
             jit_mode: None,
@@ -709,12 +712,13 @@ impl PolydatAssembler {
         &self.cursor_schemas
     }
 
-    /// Set the `strict_types` and `strict_values` pragmas; under
-    /// `strict_values` the resolver inserts value assertion nodes
-    /// (graph_compiler.md §2). Off by default — the caller (compiler /
-    /// DSL pragma extractor) opts in.
-    pub fn set_strict_wires(&mut self, strict_types: bool, strict_values: bool) {
-        self.strict_types = strict_types;
+    /// Set the `strict_types` and `strict_values` pragmas
+    /// (graph_compiler.md §2). Under `strict_values` the resolver
+    /// checks constant sources at build and inserts value assertion
+    /// nodes on the other constrained wires. `strict_types` has no
+    /// effect: wires are statically typed, so a runtime type assertion
+    /// has nothing to catch. Both are off by default.
+    pub fn set_strict_wires(&mut self, _strict_types: bool, strict_values: bool) {
         self.strict_values = strict_values;
     }
 
@@ -752,8 +756,18 @@ impl PolydatAssembler {
             name: name.into(),
             node,
             inputs,
+            strict_values: self.scope_strict_values,
         });
         self
+    }
+
+    /// Mark the nodes added from here on as written under
+    /// `pragma strict_values`, or stop marking them. The compiler
+    /// sets it for a module body whose own pragmas turn
+    /// `strict_values` on, so the module's nodes are checked and its
+    /// host's are not (polydat_grammar.md §14).
+    pub(crate) fn set_scope_strict_values(&mut self, on: bool) {
+        self.scope_strict_values = on;
     }
 
     /// Set the binding modifier for a named output.
@@ -1958,8 +1972,23 @@ impl PolydatAssembler {
         let mut adapter_count = 0usize;
         let mut assertion_count = 0usize;
         let strict_values = self.strict_values;
-        let strict_types = self.strict_types;
         let strict = self.strict;
+        // The assertions this pass inserts, by node index, with the
+        // constraint each enforces: the structural mark
+        // `constraint_proof` reads to accept an upstream guard.
+        let mut inserted_guards: HashMap<usize, crate::dsl::const_constraints::ConstConstraint> =
+            HashMap::new();
+        // Nodes whose output the author declared `volatile`: never
+        // constants, whatever their inputs.
+        let volatile_nodes: std::collections::HashSet<String> = self
+            .output_modifiers
+            .iter()
+            .filter(|(_, m)| m.is_volatile())
+            .filter_map(|(name, _)| match self.outputs.get(name) {
+                Some(WireRef::Node(node, _)) => Some(node.clone()),
+                _ => None,
+            })
+            .collect();
 
         for pn in self.nodes {
             let idx = all_nodes.len();
@@ -2030,6 +2059,7 @@ impl PolydatAssembler {
                                 name: conv_name,
                                 node: Box::new(converter),
                                 inputs: vec![],
+                                strict_values: false,
                             });
                             converters.insert((input_idx, expected_type), idx);
                             idx
@@ -2084,6 +2114,7 @@ impl PolydatAssembler {
                         name: adapter_name,
                         node: adapter,
                         inputs: vec![],
+                        strict_values: false,
                     });
 
                     node_wiring.push(WireSource::NodeOutput(adapter_idx, 0));
@@ -2108,20 +2139,47 @@ impl PolydatAssembler {
                 // === Strict-wire assertion insertion (graph_compiler.md §2) ===
                 //
                 // After a wire is resolved (and any type adapter
-                // inserted), look at the sink port's declared
-                // `constraint`. If strict_values is on, we either
-                // prove the source already satisfies it (skip) or
-                // splice an `AssertValue` node in front of the
-                // sink. The adapter pass above has already matched
-                // the static type; the skip cases here are constant
-                // sources and upstream-assertion chains for value
-                // constraints.
+                // inserted), the sink port's declared `constraint`
+                // is checked under strict_values, the program's or
+                // the scope's the sink was written in. A compile-time
+                // constant source is checked now, and a violation
+                // stops the build; the guard this pass inserted for
+                // the same constraint needs no second guard; any
+                // other source gets an `AssertValue` spliced in
+                // front of the sink.
                 let sink_port = &all_nodes[node_idx].node.meta().wire_inputs()[port_idx];
                 if let Some(constraint) = sink_port.constraint {
                     let last_source = node_wiring.last().expect("wire just pushed").clone();
-                    if strict_values
-                        && !value_constraint_proven(&all_nodes, &last_source, &constraint)
-                    {
+                    let proof = if strict_values || all_nodes[node_idx].strict_values {
+                        constraint_proof(
+                            &all_nodes,
+                            &inserted_guards,
+                            &volatile_nodes,
+                            &last_source,
+                            &constraint,
+                        )
+                    } else {
+                        ConstraintProof::NotChecked
+                    };
+                    if let ConstraintProof::Violated { value, message } = &proof {
+                        let sink = &all_nodes[node_idx];
+                        // A parser's own message says what it refused.
+                        let detail = match constraint {
+                            crate::dsl::const_constraints::ConstConstraint::StrParser(_) => {
+                                format!(" ({message})")
+                            }
+                            _ => String::new(),
+                        };
+                        return Err(AssemblyError::Other(format!(
+                            "strict_values: port '{}' of '{}' ({}) must be {}, but its \
+                             source is the constant {value}{detail}",
+                            sink_port.name,
+                            sink.name,
+                            sink.node.meta().name,
+                            crate::library::assertions::describe_constraint(&constraint),
+                        )));
+                    }
+                    if matches!(proof, ConstraintProof::Unproven) {
                         let assert_name = format!("__assert_v_{assertion_count}");
                         assertion_count += 1;
                         let assert_idx = all_nodes.len();
@@ -2152,7 +2210,9 @@ impl PolydatAssembler {
                                 constraint,
                             ),
                             inputs: vec![],
+                            strict_values: false,
                         });
+                        inserted_guards.insert(assert_idx, constraint);
 
                         // Replace the just-pushed source with the
                         // assertion's output.
@@ -2165,18 +2225,9 @@ impl PolydatAssembler {
                         log.push(crate::dsl::events::CompileEvent::AssertionSkipped {
                             from_node: from_name,
                             to_node: all_nodes[node_idx].name.clone(),
-                            reason: assertion_skip_reason(
-                                strict_values,
-                                &all_nodes,
-                                &last_source,
-                                &constraint,
-                            ),
+                            reason: proof.skip_reason().into(),
                         });
                     }
-                } else if strict_types && source_type != expected_type {
-                    // Type mismatch was already adapted above; the
-                    // post-adapter wire is statically the right
-                    // type, so no `AssertType` is inserted.
                 }
             }
 
@@ -2245,6 +2296,8 @@ impl PolydatAssembler {
                             ))
                         }),
                         inputs: vec![], // wiring is in resolved_wiring
+                        // The strict-wire pass has run.
+                        strict_values: false,
                     })
                     .collect();
             }
@@ -2489,72 +2542,106 @@ impl PolydatAssembler {
     }
 }
 
-/// Decide whether the source feeding `wire_source` already
-/// guarantees the sink's value `constraint` at compile time.
-/// Returns `true` if the assertion can be safely skipped.
-///
-/// Two skip cases apply:
-///
-/// 1. **Constant source.** The source node has no wire inputs, as
-///    `fixed::ConstU64` et al. do. Const sources have already been
-///    validated against their `ParamSpec.constraint` at the factory
-///    layer, so any further runtime check would be redundant.
-/// 2. **Upstream assertion.** The source is itself an assertion
-///    node (its name starts with `__assert_v_` or `assert_`), which
-///    is taken to enforce the same or stronger contract.
-fn value_constraint_proven(
-    all_nodes: &[PendingNode],
-    src: &WireSource,
-    _constraint: &crate::dsl::const_constraints::ConstConstraint,
-) -> bool {
-    match src {
-        WireSource::Input(_) => false,
-        WireSource::NodeOutput(idx, _) => {
-            let meta = all_nodes[*idx].node.meta();
-            // Const-source heuristic: a node with no wire inputs
-            // is a constant. The `ConstU64` / `ConstF64` /
-            // `ConstBool` (in `nodes::fixed`) and the synthesised
-            // `ConstNode` from compile-time folding both qualify.
-            let no_wire_inputs = meta.wire_inputs().is_empty();
-            if no_wire_inputs {
-                return true;
-            }
-            // Upstream assertion: skip stacking the same guard.
-            // Any `__assert_v_*` or `assert_*` upstream counts as
-            // proof, whatever its constraint: the constraint shapes
-            // are not compared.
-            if meta.name.starts_with("__assert_v_") || meta.name.starts_with("assert_") {
-                return true;
-            }
-            false
+/// What the strict-wire pass knows about a constrained wire at
+/// build (graph_compiler.md §2).
+enum ConstraintProof {
+    /// `strict_values` is off: nothing is checked.
+    NotChecked,
+    /// The source is a compile-time constant whose value satisfies
+    /// the constraint.
+    ConstantSatisfies,
+    /// The source is a compile-time constant that evaluates to
+    /// `None`, which the sink never reads (none_semantics.md Rule 1).
+    ConstantNone,
+    /// The source is the guard this pass inserted for the same
+    /// constraint.
+    Guarded,
+    /// The source is a compile-time constant whose value fails the
+    /// constraint.
+    Violated {
+        /// The constant, as displayed.
+        value: String,
+        /// The constraint's own message for the value.
+        message: String,
+    },
+    /// Nothing is known at build; the wire needs a runtime guard.
+    Unproven,
+}
+
+impl ConstraintProof {
+    /// The reason the `AssertionSkipped` event gives for a wire that
+    /// gets no guard.
+    fn skip_reason(&self) -> &'static str {
+        match self {
+            ConstraintProof::NotChecked => "strict_values not enabled",
+            ConstraintProof::ConstantSatisfies => "constant source satisfies the constraint",
+            ConstraintProof::ConstantNone => "constant source is None",
+            ConstraintProof::Guarded => "upstream assertion",
+            ConstraintProof::Violated { .. } => "constant source fails the constraint",
+            ConstraintProof::Unproven => "no skip rule matched",
         }
     }
 }
 
-/// Format the reason a strict-wire assertion was skipped, for the
-/// `AssertionSkipped` advisory event. Names the skip case
-/// `value_constraint_proven` matched, so the log is grep-able.
-fn assertion_skip_reason(
-    strict_values: bool,
+/// Decide what the build knows about `src` against the sink's value
+/// `constraint`.
+///
+/// - A **compile-time constant** is a node with no wire inputs that is
+///   not nondeterministic: its purity is not
+///   [`Purity::Nondeterministic`](crate::ast::Purity::Nondeterministic)
+///   and no `volatile` output names it. It is evaluated here and its
+///   value checked, so a violation is a build error rather than a
+///   runtime panic.
+/// - An **inserted guard** is an `AssertValue` this pass spliced in for
+///   an equal constraint, known by its index in `inserted_guards`.
+/// - Everything else, including an input slot and a nondeterministic
+///   zero-input node, is unproven.
+fn constraint_proof(
     all_nodes: &[PendingNode],
+    inserted_guards: &HashMap<usize, crate::dsl::const_constraints::ConstConstraint>,
+    volatile_nodes: &std::collections::HashSet<String>,
     src: &WireSource,
-    _constraint: &crate::dsl::const_constraints::ConstConstraint,
-) -> String {
-    if !strict_values {
-        return "strict_values not enabled".into();
+    constraint: &crate::dsl::const_constraints::ConstConstraint,
+) -> ConstraintProof {
+    let WireSource::NodeOutput(idx, port) = src else {
+        return ConstraintProof::Unproven;
+    };
+    if let Some(guarded) = inserted_guards.get(idx) {
+        return if crate::library::assertions::same_constraint(guarded, constraint) {
+            ConstraintProof::Guarded
+        } else {
+            ConstraintProof::Unproven
+        };
     }
-    match src {
-        WireSource::Input(_) => "raw input wire".into(),
-        WireSource::NodeOutput(idx, _) => {
-            let meta = all_nodes[*idx].node.meta();
-            if meta.wire_inputs().is_empty() {
-                "constant source already validated".into()
-            } else if meta.name.starts_with("__assert_v_") || meta.name.starts_with("assert_") {
-                "upstream assertion".into()
-            } else {
-                "no skip rule matched".into()
-            }
-        }
+    let pending = &all_nodes[*idx];
+    let node = pending.node.as_ref();
+    let nondeterministic = matches!(node.purity(), crate::ast::Purity::Nondeterministic { .. })
+        || volatile_nodes.contains(&pending.name);
+    if !node.meta().wire_inputs().is_empty() || nondeterministic {
+        return ConstraintProof::Unproven;
+    }
+    // A panic here is the same failure the constant fold reports
+    // with its own diagnostic; the wire keeps its runtime guard.
+    let mut outputs = vec![crate::ast::Value::None; node.meta().outs.len()];
+    let evaluated = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        node.eval(&[], &mut outputs);
+    }));
+    if evaluated.is_err() {
+        return ConstraintProof::Unproven;
+    }
+    let Some(value) = outputs.get(*port) else {
+        return ConstraintProof::Unproven;
+    };
+    if matches!(value, crate::ast::Value::None) {
+        return ConstraintProof::ConstantNone;
+    }
+    match crate::library::assertions::check_value(constraint, value, "the value") {
+        Some(Ok(())) => ConstraintProof::ConstantSatisfies,
+        Some(Err(message)) => ConstraintProof::Violated {
+            value: value.to_display_string(),
+            message,
+        },
+        None => ConstraintProof::Unproven,
     }
 }
 
@@ -3459,5 +3546,117 @@ impl PolydatAssembler {
                 extras,
             )?),
         })
+    }
+}
+
+#[cfg(test)]
+mod strict_values_tests {
+    use super::*;
+    use crate::ast::{NodeMeta, Port, Slot, Value};
+    use crate::dsl::const_constraints::ConstConstraint;
+    use crate::dsl::events::{CompileEvent, CompileEventLog};
+
+    /// A pass-through whose one input declares `NonZeroU64`.
+    struct NonZeroSink {
+        meta: NodeMeta,
+    }
+
+    impl NonZeroSink {
+        fn new() -> Self {
+            let mut port = Port::u64("divisor");
+            port.constraint = Some(ConstConstraint::NonZeroU64);
+            NonZeroSink {
+                meta: NodeMeta {
+                    name: "nonzero_sink".into(),
+                    ins: vec![Slot::Wire(port)],
+                    outs: vec![Port::u64("output")],
+                },
+            }
+        }
+    }
+
+    impl PolydatNode for NonZeroSink {
+        fn meta(&self) -> &NodeMeta {
+            &self.meta
+        }
+        fn eval(&self, inputs: &[Value], outputs: &mut [Value]) {
+            outputs[0] = inputs[0].clone();
+        }
+    }
+
+    fn inserted(asm: PolydatAssembler) -> usize {
+        let mut log = CompileEventLog::new();
+        asm.resolve_with_log(Some(&mut log)).expect("resolve");
+        log.events()
+            .iter()
+            .filter(|e| matches!(e, CompileEvent::AssertionInserted { .. }))
+            .count()
+    }
+
+    /// An assertion node the compiler did not insert for the sink's
+    /// constraint proves nothing: here it guards a different
+    /// constraint, and the sink still gets its own guard.
+    #[test]
+    fn an_upstream_assertion_for_another_constraint_is_not_proof() {
+        let mut asm = PolydatAssembler::new(vec!["cycle".into()]);
+        asm.add_node(
+            "ranged",
+            crate::library::assertions::assert_value_node(
+                PortType::U64,
+                ConstConstraint::RangeU64 { min: 0, max: 10 },
+            ),
+            vec![WireRef::input("cycle")],
+        );
+        asm.add_node(
+            "sink",
+            Box::new(NonZeroSink::new()),
+            vec![WireRef::node("ranged")],
+        );
+        asm.add_output("out", WireRef::node("sink"));
+        asm.set_strict_wires(false, true);
+        assert_eq!(inserted(asm), 1);
+    }
+
+    /// A node named like an inserted guard is not one: the mark is
+    /// structural, never a name.
+    #[test]
+    fn a_guard_like_name_is_not_proof() {
+        let mut asm = PolydatAssembler::new(vec!["cycle".into()]);
+        asm.add_node(
+            "__assert_v_0",
+            Box::new(crate::library::identity::Identity::new(PortType::U64)),
+            vec![WireRef::input("cycle")],
+        );
+        asm.add_node(
+            "sink",
+            Box::new(NonZeroSink::new()),
+            vec![WireRef::node("__assert_v_0")],
+        );
+        asm.add_output("out", WireRef::node("sink"));
+        asm.set_strict_wires(false, true);
+        assert_eq!(inserted(asm), 1);
+    }
+
+    /// A node added under a scope's `strict_values` is checked though
+    /// the program's own pragmas leave the flag off; one added outside
+    /// the scope is not.
+    #[test]
+    fn scope_strictness_marks_only_the_nodes_added_under_it() {
+        let mut asm = PolydatAssembler::new(vec!["cycle".into()]);
+        asm.set_scope_strict_values(true);
+        asm.add_node(
+            "inner",
+            Box::new(NonZeroSink::new()),
+            vec![WireRef::input("cycle")],
+        );
+        asm.set_scope_strict_values(false);
+        asm.add_node(
+            "outer",
+            Box::new(NonZeroSink::new()),
+            vec![WireRef::input("cycle")],
+        );
+        asm.add_output("a", WireRef::node("inner"));
+        asm.add_output("b", WireRef::node("outer"));
+        assert_eq!(inserted(asm), 1);
     }
 }

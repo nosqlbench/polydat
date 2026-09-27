@@ -14,9 +14,9 @@
 //!
 //! * **Type assertions** — one per supported [`PortType`]. They
 //!   confirm the runtime [`Value`] variant matches the static
-//!   port type and pass it through. Useful when provenance can't
-//!   prove the wire already carries the right type (dynamic JSON
-//!   navigation, `Ext` unwraps, cross-adapter values).
+//!   port type and pass it through. The compiler inserts none:
+//!   wires are statically typed, and a resolved wire's type is the
+//!   sink port's type, so a runtime type check has nothing to catch.
 //!
 //! * **Value assertions** — one per `PortType`, parameterised by
 //!   a [`ConstConstraint`]. Pass the value through if the
@@ -24,9 +24,9 @@
 //!   The same vocabulary the const-constraint metadata uses on
 //!   `ParamSpec` is reused on `Port` and on these nodes.
 //!
-//! Auto-insertion is the compiler's job (graph_compiler.md §2)
-//! — these nodes are also user-callable from Polydat source for ad-hoc
-//! guards.
+//! The compiler inserts value assertions under `pragma strict_values`
+//! (graph_compiler.md §2). Neither family is callable from Polydat
+//! source (library_catalog.md, the hand-written-impl carve-outs).
 
 use crate::ast::SlotShape;
 use crate::ast::{NodeMeta, PolydatNode, Port, PortType, Slot, Value};
@@ -39,9 +39,9 @@ use crate::dsl::const_constraints::ConstConstraint;
 /// Pass-through guard that confirms the runtime value variant
 /// matches a declared `PortType`. Panics on mismatch.
 ///
-/// Constructed with [`assert_type_node`] from the compiler when
-/// strict wire mode can't statically prove the source's runtime
-/// variant. End users rarely instantiate these directly.
+/// Constructed with [`assert_type_node`]. The compiler inserts none,
+/// under `strict_types` or otherwise: a resolved wire's type is the
+/// sink port's type (graph_compiler.md §2).
 pub struct AssertType {
     meta: NodeMeta,
     expected: PortType,
@@ -251,17 +251,13 @@ impl PolydatNode for AssertValue {
         // by lifting the value into a `ConstArg` shaped tuple. Avoids
         // duplicating the per-variant logic between assembly and
         // runtime.
-        let arg = match &inputs[0] {
-            Value::U64(v) => crate::dsl::factory::ConstArg::Int(*v),
-            Value::F64(v) => crate::dsl::factory::ConstArg::Float(*v),
-            Value::Str(s) => crate::dsl::factory::ConstArg::Str(s.to_string()),
-            other => panic!(
+        match check_value(&self.constraint, &inputs[0], "value") {
+            Some(Ok(())) => {}
+            Some(Err(msg)) => panic!("{}: {msg}", self.meta.name),
+            None => panic!(
                 "{}: unsupported runtime value variant {:?}",
-                self.meta.name, other
+                self.meta.name, inputs[0]
             ),
-        };
-        if let Err(msg) = self.constraint.check(&arg, "value") {
-            panic!("{}: {msg}", self.meta.name);
         }
         outputs[0] = inputs[0].clone();
     }
@@ -329,7 +325,63 @@ impl PolydatNode for AssertValue {
 // Helpers used by the compiler when auto-wiring assertions
 // =========================================================================
 
+/// Check `value` against `constraint`, naming the checked value
+/// `name` in the message. `None` when the value's variant is one the
+/// constraint vocabulary has no reading of (anything but `U64`, `F64`
+/// and `Str`).
+pub fn check_value(
+    constraint: &ConstConstraint,
+    value: &Value,
+    name: &str,
+) -> Option<Result<(), String>> {
+    use crate::dsl::factory::ConstArg;
+    let arg = match value {
+        Value::U64(v) => ConstArg::Int(*v),
+        Value::F64(v) => ConstArg::Float(*v),
+        Value::Str(s) => ConstArg::Str(s.to_string()),
+        _ => return None,
+    };
+    Some(constraint.check(&arg, name))
+}
+
+/// The condition `constraint` states, in words, for diagnostics.
+pub fn describe_constraint(constraint: &ConstConstraint) -> String {
+    match constraint {
+        ConstConstraint::RangeU64 { min, max } => format!("in [{min}, {max}]"),
+        ConstConstraint::RangeF64 { min, max } => format!("in [{min}, {max}]"),
+        ConstConstraint::AllowedU64(allowed) => format!("one of {allowed:?}"),
+        ConstConstraint::NonZeroU64 => "non-zero".into(),
+        ConstConstraint::NonEmptyStr => "non-empty".into(),
+        ConstConstraint::StrParser(_) => "accepted by the port's parser".into(),
+        ConstConstraint::PositiveFiniteF64 => "positive and finite".into(),
+        ConstConstraint::FiniteF64 => "finite".into(),
+    }
+}
+
+/// Whether two constraints state the same condition. A parser
+/// constraint equals another only when both name the same function.
+pub fn same_constraint(a: &ConstConstraint, b: &ConstConstraint) -> bool {
+    use ConstConstraint as C;
+    match (a, b) {
+        (C::RangeU64 { min: a0, max: a1 }, C::RangeU64 { min: b0, max: b1 }) => {
+            a0 == b0 && a1 == b1
+        }
+        (C::RangeF64 { min: a0, max: a1 }, C::RangeF64 { min: b0, max: b1 }) => {
+            a0.to_bits() == b0.to_bits() && a1.to_bits() == b1.to_bits()
+        }
+        (C::AllowedU64(a), C::AllowedU64(b)) => a == b,
+        (C::StrParser(a), C::StrParser(b)) => std::ptr::fn_addr_eq(*a, *b),
+        (C::NonZeroU64, C::NonZeroU64)
+        | (C::NonEmptyStr, C::NonEmptyStr)
+        | (C::PositiveFiniteF64, C::PositiveFiniteF64)
+        | (C::FiniteF64, C::FiniteF64) => true,
+        _ => false,
+    }
+}
+
 /// Construct the right type assertion node for a given `PortType`.
+/// The compiler inserts none: a resolved wire's type is the sink
+/// port's type (graph_compiler.md §2).
 pub fn assert_type_node(typ: PortType) -> Box<dyn PolydatNode> {
     Box::new(AssertType::new(typ))
 }
