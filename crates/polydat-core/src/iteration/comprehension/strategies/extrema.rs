@@ -293,12 +293,13 @@ mod tests {
         assert_eq!(sorted, vec![vec![0, 0], vec![0, 1], vec![1, 0], vec![1, 1]]);
     }
 
+    /// The strata of a 3×3×3 lattice are the k-faces of a 3-cube
+    /// (comprehension_forms.md §3.6; Coxeter, *Regular Polytopes*
+    /// §7.2): corners 2^3 = 8, edges C(3,1)·2^2 = 12, faces C(3,2)·2 =
+    /// 6, interior 1; 8+12+6+1 = 27. Each truncation keeps whole strata,
+    /// corners first in Lex order, and the all-interior point last.
     #[test]
-    fn extrema_3x3x3_strata_match_srd_18d_example() {
-        // SRD-18d §214 worked example — the canonical cross-reference.
-        // k-face counts of a 3-cube (Coxeter, *Regular Polytopes*
-        // §7.2): corners 2^3 = 8, edges C(3,1)·2^2 = 12, faces
-        // C(3,2)·2 = 6, interior 1; 8+12+6+1 = 27.
+    fn a_3x3x3_lattice_strata_are_corners_edges_faces_then_interior() {
         let idx = IndexFn::Lattice {
             axis_sizes: vec![3, 3, 3],
         };
@@ -308,7 +309,7 @@ mod tests {
         assert_eq!(extrema_multi_indices(&idx, Some(4)).len(), 27); // + interior
         assert_eq!(extrema_multi_indices(&idx, None).len(), 27); // all strata
 
-        // Stratum 0 is exactly the 8 corners, in lex order (SRD example).
+        // Stratum 0 is exactly the 8 corners, in Lex order.
         assert_eq!(
             extrema_multi_indices(&idx, Some(1)),
             vec![
