@@ -1,7 +1,7 @@
 ---
 type: guide
 title: Releasing polydat
-description: The steps of a release, including raising the internal dependency requirements so a host's lockfile picks up every crate the release publishes.
+description: How a release chooses its version, the porting guide every minor release ships, and the steps of a release, including raising the internal dependency requirements so a host's lockfile picks up every crate the release publishes.
 tags: [release]
 ---
 
@@ -14,6 +14,22 @@ published. The facade `polydat` re-exports the other crates, and a host
 depends on the facade alone, so a release is correct only when the
 facade it publishes requires the versions of the other crates it was
 built and tested with.
+
+## Which version a release takes
+
+A release that contains any breaking change bumps the minor version
+(0.x.0). A patch release (0.x.y) carries only compatible fixes: a host
+that updates to it compiles unchanged, and its behavior changes only by
+the corrections the release names. A change is breaking when a host
+that compiled against the previous release stops compiling, or when a
+program or call that succeeded gives a different result for a reason
+other than a named correction.
+
+Every minor release ships a porting guide,
+`guides/porting_to_X_Y_0.md`, that lists every change a host sees since
+the previous minor release, patch releases included, in the structure
+of the existing guides: what stops compiling and its fix, what changes
+quietly, the new capabilities, and the known issues.
 
 ## Why the requirements must be raised
 
@@ -41,7 +57,13 @@ crate makes Cargo move the host's lockfile to that version.
      evaluation loops, the engine ladder against a same-hour baseline
      ([Engine-ladder performance](performance.md)).
 2. **Bump the versions.** `cargo workspaces version` bumps the crates
-   that changed and the workspace version they inherit.
+   that changed and the workspace version they inherit, to the next
+   minor version when the release contains a breaking change and to the
+   next patch version otherwise.
+   For a minor release, first write
+   `crates/polydat/docs/guides/porting_to_X_Y_0.md`, add it to the
+   Guides list in `crates/polydat/docs/README.md`, newest first, and
+   regenerate the indexes with `ct okf gen-index --recursive`.
 3. **Raise the internal requirements.** In the root `Cargo.toml`, under
    `[workspace.dependencies]`, set the `version` of every internal crate
    this release publishes to the version it is being published at. A
