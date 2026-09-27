@@ -517,7 +517,10 @@ impl PolydatProgram {
     ///   compile time of the child scope)
     ///
     /// Returns the bindings in topological order (dependencies
-    /// first). Names already in `excluded` are not re-walked,
+    /// first), each statement once: a tuple-target statement whose
+    /// targets are needed more than once appears at the first. The
+    /// contract is wire_materialization.md, "Local inclusion".
+    /// Names already in `excluded` are not re-walked,
     /// letting callers express "stop here — this name is locally
     /// defined / coordinated / already collected".
     pub fn local_inclusion_chain<'a>(
@@ -552,10 +555,16 @@ impl PolydatProgram {
         let Some(stmt) = self.binding_ast_for(name) else {
             return;
         };
-        let value = match stmt {
-            Statement::Binding(b) => &b.value,
-            _ => return,
+        let Statement::Binding(binding) = stmt else {
+            return;
         };
+        // The statement defines every one of its targets, so each
+        // target is visited now: a tuple-target statement is included
+        // once, however many of its targets the chain needs.
+        for target in &binding.targets {
+            visited.insert(target.clone());
+        }
+        let value = &binding.value;
         // Recurse into dependencies first, then push this stmt —
         // produces topo order (deps before dependents).
         let mut refs = std::collections::HashSet::new();

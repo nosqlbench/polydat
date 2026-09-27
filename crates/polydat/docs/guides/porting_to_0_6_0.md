@@ -207,6 +207,14 @@ a rule the specifications now state and every engine follows.
   built with `Engine::default()` now has native children, and program
   matter keeps the engine its program was compiled for
   ([native_scope_trees.md](../design/native_scope_trees.md) §5).
+- **An inclusion chain holds each statement once.**
+  `PolydatProgram::local_inclusion_chain` returned a tuple-target
+  statement such as `(tenant, device) := mixed_radix(cycle, 100, 0)`
+  once for every target the chain needed, so a descendant that copied
+  the chain defined the targets twice. The statement now appears once,
+  where the first of its targets is reached
+  ([wire_materialization.md](../design/wire_materialization.md),
+  "Local inclusion").
 
 ### Engines
 
@@ -445,7 +453,6 @@ this guide was written against. Each bullet is completed, or removed,
 when its change lands.
 
 - Named generators are specified.
-- Local matter inclusion copies a tuple-target statement once.
 
 ## Checklist
 

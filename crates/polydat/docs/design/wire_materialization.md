@@ -306,3 +306,52 @@ need an owned tree (a `Json` body they mutate before serialising)
 deep-clone explicitly at the consume site (`Value::to_json_value`
 does so for the `Json` variant); the chain itself never
 deep-clones.
+
+---
+
+## Local inclusion
+
+A descendant scope can hold an outer wire as code instead of as a
+materialized handle: its matter includes a copy of the outer
+statements that compute the wire, and the descendant evaluates them
+itself. This is *local inclusion*. The statements to copy for a name
+are its *inclusion chain*, which
+`PolydatProgram::local_inclusion_chain(name, excluded)` reads from the
+outer program's retained AST.
+
+The inclusion chain of `name` holds the statement that defines `name`
+and, transitively, the statements that define the names its right-hand
+side references. Dependencies come first: every statement follows the
+statements it references, and the statement that defines `name` is
+last. The references of one statement are visited in name order. Each
+statement appears once, so a tuple-target statement `(a, b) := …` is
+included once when both `a` and `b` are needed, at the position where
+the first of them is reached.
+
+The walk includes no statement for the following names and does not
+walk past them:
+
+- a `const` or `shared` output, which the descendant reads through the
+  materialization gradient (forms 1 and 2);
+- an `extern` port and an `input` slot, which are declarations rather
+  than bindings;
+- a name that no binding defines, which the descendant's own compile
+  reports as unresolved;
+- a name in `excluded`, the caller's set of names the descendant
+  already provides, such as its own bindings, its coordinates, and
+  names collected by an earlier chain.
+
+When `name` itself is one of these, its chain is empty.
+
+```polydat
+input cycle: u64
+const seed := 7
+(tenant, device) := mixed_radix(cycle, 100, 0)
+mixed := u64_add(tenant, device)
+key   := hash(u64_add(mixed, seed))
+```
+
+The inclusion chain of `key` is the `(tenant, device)` statement, then
+`mixed`, then `key`. `cycle` is an input and `seed` is a `const`, so
+neither contributes a statement, and the tuple statement appears once
+although `mixed` references both of its targets.

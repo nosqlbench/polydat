@@ -1708,6 +1708,39 @@ bar := mod(foo, 100)
             _ => panic!("expected bar"),
         }
     }
+
+    /// A tuple-target statement is copied once when the chain needs
+    /// two of its targets, and the walk stops at the input and the
+    /// const (wire_materialization.md, "Local inclusion").
+    #[test]
+    fn local_inclusion_chain_includes_a_tuple_statement_once() {
+        let src = "\
+input cycle: u64
+const seed := 7
+(tenant, device) := mixed_radix(cycle, 100, 0)
+mixed := u64_add(tenant, device)
+key   := hash(u64_add(mixed, seed))
+";
+        let k = compile_polydat_interpreter(src).expect("compile");
+        let chain = k
+            .program()
+            .local_inclusion_chain("key", &std::collections::HashSet::new());
+        let targets: Vec<Vec<String>> = chain
+            .iter()
+            .map(|stmt| match stmt {
+                Statement::Binding(b) => b.targets.clone(),
+                other => panic!("the chain holds only bindings, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            targets,
+            vec![
+                vec!["tenant".to_string(), "device".to_string()],
+                vec!["mixed".to_string()],
+                vec!["key".to_string()],
+            ]
+        );
+    }
 }
 
 mod kernel_program_canonical_hash_tests {
