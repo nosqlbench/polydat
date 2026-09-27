@@ -2103,11 +2103,11 @@ mod dsl_stub_tests {
         );
         let mut scoped = ScopedExpr::bind(&parent, "__pred", matter).expect("bind to parent scope");
         assert!(
-            scoped.set("threshold", Value::U64(100)).is_true(),
+            scoped.set("threshold", Value::U64(100)).unwrap().is_true(),
             "100 > 50 → true"
         );
         assert!(
-            !scoped.set("threshold", Value::U64(10)).is_true(),
+            !scoped.set("threshold", Value::U64(10)).unwrap().is_true(),
             "10 > 50 → false"
         );
     }

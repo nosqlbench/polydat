@@ -118,16 +118,24 @@ impl GraphMatter {
     /// `port_type`) rather than a compile-time generic. The type must be
     /// faithful: an extern that names an in-scope shared cell attaches to
     /// it at subscope build, and the cell's own port type is the contract.
+    ///
+    /// The extern's default is its own type's zero value: `0` for
+    /// `u64`, `0.0` for `f64`, `""` for `str`, and `false` for `bool`.
+    /// A type with no literal form declares no default, so the extern
+    /// reads `None` until a value is set.
     pub fn extern_wire_typed(&mut self, name: impl Into<String>, port: PortType) -> &mut Self {
         let span = Span { line: 0, col: 0 };
         let default = match port {
-            PortType::F64 => Expr::FloatLit(0.0, span),
-            _ => Expr::IntLit(0, span),
+            PortType::U64 => Some(Expr::IntLit(0, span)),
+            PortType::F64 => Some(Expr::FloatLit(0.0, span)),
+            PortType::Str => Some(Expr::StringLit(String::new(), span)),
+            PortType::Bool => Some(Expr::Ident("false".into(), span)),
+            _ => None,
         };
         self.statements.push(Statement::ExternPort(ExternPort {
             name: name.into(),
             typ: port.to_keyword().to_string(),
-            default: Some(default),
+            default,
             span,
         }));
         self
@@ -183,20 +191,45 @@ impl ScopedExpr {
 
     /// Set a runtime input wire by name before evaluating, converted to
     /// the wire's type by the one conversion rule
-    /// ([`crate::convert::to_port`]). No-op for a name the expression
-    /// doesn't read, for a coordinate, or for a value that does not
-    /// convert.
-    pub fn set(&mut self, name: &str, value: Value) -> &mut Self {
-        if let Some(idx) = self.kernel.input_index(name) {
-            let converted = match self.kernel.input_port_type(name) {
-                Some(ty) => crate::convert::to_port(value, ty).ok(),
-                None => Some(value),
-            };
-            if let Some(value) = converted {
-                let _ = self.kernel.set_input_at(idx, value);
-            }
+    /// ([`crate::convert::to_port`]).
+    ///
+    /// Refused with the error [`Kernel::set_input`](crate::Kernel::set_input)
+    /// gives: [`WriteError::UnknownWire`](crate::kernel::WriteError) for a
+    /// name the expression has no input for,
+    /// [`WriteError::CoordinateSlot`](crate::kernel::WriteError) for a
+    /// coordinate, [`WriteError::TypeMismatch`](crate::kernel::WriteError)
+    /// for a value that does not convert to the wire's type, and
+    /// [`WriteError::ConstSlot`](crate::kernel::WriteError) for a const.
+    pub fn set(
+        &mut self,
+        name: &str,
+        value: Value,
+    ) -> Result<&mut Self, crate::kernel::WriteError> {
+        use crate::kernel::WriteError;
+        let Some(idx) = self.kernel.input_index(name) else {
+            return Err(WriteError::UnknownWire {
+                key: name.to_string(),
+                known: self.kernel.input_names(),
+            });
+        };
+        if idx < self.kernel.coord_count() {
+            return Err(WriteError::CoordinateSlot {
+                slot: name.to_string(),
+            });
         }
-        self
+        let value = match self.kernel.input_port_type(name) {
+            Some(ty) => {
+                let got = value.port_type();
+                crate::convert::to_port(value, ty).map_err(|_| WriteError::TypeMismatch {
+                    slot: name.to_string(),
+                    expected: ty,
+                    got,
+                })?
+            }
+            None => value,
+        };
+        self.kernel.set_input_at(idx, value)?;
+        Ok(self)
     }
 
     /// The bound sub-context, for callers that write a batch of inputs

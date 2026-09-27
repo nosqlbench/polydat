@@ -125,6 +125,8 @@ mod sampling_test;
 mod scope_composition;
 #[path = "scope_trees.rs"]
 mod scope_trees;
+#[path = "scoped_expr.rs"]
+mod scoped_expr;
 #[path = "shared_tiers.rs"]
 mod shared_tiers;
 #[path = "slot_state_axioms.rs"]

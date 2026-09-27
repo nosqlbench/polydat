@@ -451,3 +451,81 @@ produce identical `pull` results, which is the behavioural counterpart
 of the projection equality. The suite checks only the syntax equality;
 where a behavioural guarantee is needed, compile both paths and compare
 their `pull` outputs.
+
+<a id="sec-stubs"></a>
+## 11. Expression stubs and scoped expressions
+
+A host that composes small programs of its own, such as a stop condition
+or a metric predicate, builds them from two types in
+`polydat::dsl::stub`. An **expression stub** (`ExprStub`) is one named
+binding over an expression. A **scoped expression** (`ScopedExpr`) is a
+stub program compiled once under a parent kernel and evaluated many
+times.
+
+### 11.1 `ExprStub`
+
+`ExprStub::parse(name, text)` parses `text` as one expression, once, at
+the boundary where the text enters the host. From then on the stub is an
+AST value: it becomes a statement without being printed back to source
+and parsed again, so text the author wrote cannot change meaning by
+being concatenated with other text. `ExprStub::new(name, expr)` takes an
+expression the host built itself.
+
+- `returning::<T>()` wraps the expression in an `as` cast to `T`'s port
+  type ([polydat_grammar.md §10](polydat_grammar.md)), so the Rust type
+  and the Polydat type are the same one. `T` is any `Wire` type:
+  `returning::<u64>()` is `(expr) as u64`, `returning::<f64>()` is
+  `(expr) as f64`.
+- `volatile()` marks the binding `volatile`, so every pull evaluates it
+  again ([runtime_model.md](runtime_model.md), R1.v).
+- `into_statement()` yields the binding statement, for a
+  `PolydatMatter` or a `BodyFragment::Statements`.
+
+```rust
+let stmt = ExprStub::parse("__pred", "op_count > 50")?
+    .returning::<u64>()
+    .volatile()
+    .into_statement();
+// The binding `volatile __pred := (op_count > 50) as u64`.
+```
+
+A `GraphMatter` collects statements: `extern_wire::<T>(name)` declares a
+typed extern and `bind(stub)` appends a stub's binding. An extern
+declared this way starts at its own type's zero value: `0` for `u64`,
+`0.0` for `f64`, `""` for `str`, and `false` for `bool`. An extern of any
+other type has no default and reads `None` until the host sets it.
+`extern_wire_typed(name, port)` is the same declaration with the type as
+a runtime value.
+
+### 11.2 `ScopedExpr`
+
+`ScopedExpr::bind(parent, output, matter)` compiles `matter` as a
+subscope of `parent` ([subcontext_construction.md](subcontext_construction.md))
+on the parent's engine, so the expression reads the parent's outputs by
+name and runs on whichever of the four engines the parent runs on. It is
+compiled once; each evaluation afterwards is a pull.
+
+- `set(name, value)` writes one of the expression's inputs, converted to
+  the input's type by the one conversion rule (`polydat::convert::to_port`),
+  and returns `Result<&mut ScopedExpr, WriteError>` so writes chain with
+  `?`. It refuses what `Kernel::set_input` refuses, with the same
+  errors: `UnknownWire` for a name the expression has no input for,
+  `CoordinateSlot` for a coordinate, `ConstSlot` for a const, and
+  `TypeMismatch` for a value that does not convert to the input's type.
+- `eval()` pulls the output and returns its value.
+- `is_true()` pulls the output and reads it as a truth value: a `Bool`
+  as itself, an `F64` as true when it is not `0.0`, and every other value
+  as true when its `u64` reading is not `0`. Comparisons and `&&`/`||`
+  produce `u64` `0` or `1`, which this reads directly.
+- `kernel()` is the subscope's kernel, for a host that writes a batch of
+  inputs through the `Kernel` trait.
+
+```rust
+let mut matter = GraphMatter::new();
+matter.extern_wire::<u64>("threshold").bind(
+    ExprStub::parse("__pred", "threshold > 50")?.returning::<u64>().volatile(),
+);
+let mut pred = ScopedExpr::bind(parent.as_ref(), "__pred", matter)?;
+assert!(pred.set("threshold", Value::U64(100))?.is_true());
+assert!(pred.set("nope", Value::U64(1)).is_err()); // UnknownWire
+```
