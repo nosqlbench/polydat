@@ -4,12 +4,12 @@
 //! `CompiledComprehension` — the entry point for the three
 //! consumption surfaces.
 //!
-//! Holds an `Arc<Program>` (immutable IR per spec §9.1). Each
-//! factory method on this handle (`coordinate_stream`,
+//! Holds an `Arc<Program>` (immutable IR per comprehension_forms.md
+//! §9.1). Each factory method on this handle (`coordinate_stream`,
 //! `scoped_kernel_stream`, `scope_once`) returns a fresh
 //! streamer with its own dispense state but shares the
-//! `Arc<Program>` — no recompilation across siblings (spec
-//! §9.5.2's "IR-sharing test" property).
+//! `Arc<Program>`, so siblings never recompile (§9.5.2's
+//! independence contract).
 
 use std::sync::Arc;
 
@@ -95,7 +95,7 @@ impl CompiledComprehension {
     }
 
     /// Access the underlying compiled program (immutable per
-    /// spec §9.1).
+    /// comprehension_forms.md §9.1).
     pub fn program(&self) -> &Program {
         &self.program
     }
@@ -106,17 +106,17 @@ impl CompiledComprehension {
         Arc::clone(&self.program)
     }
 
-    /// **First-order surface** (spec §9.5).
+    /// **First-order surface** (comprehension_forms.md §9.5).
     ///
     /// Return a fresh [`CoordinateStream`]. Each call
     /// allocates new per-streamer state; siblings share the
-    /// underlying IR but dispense independently per spec
-    /// §9.5.2's independence contract.
+    /// underlying IR but dispense independently per §9.5.2's
+    /// independence contract.
     pub fn coordinate_stream(&self) -> CoordinateStream {
         CoordinateStream::new(self.program_arc())
     }
 
-    /// **Second-order surface** (spec §9.5).
+    /// **Second-order surface** (comprehension_forms.md §9.5).
     ///
     /// Return a fresh [`ScopedKernelStream`] wrapping the
     /// supplied parent kernel. Each `advance()` pulls one
@@ -131,7 +131,7 @@ impl CompiledComprehension {
         ScopedKernelStream::new(self.program_arc(), parent)
     }
 
-    /// **One-shot surface** (spec §9.5.3).
+    /// **One-shot surface** (comprehension_forms.md §9.5.3).
     ///
     /// Apply `parent.scope(coords)` directly, without
     /// constructing any streamer. Pure function — no

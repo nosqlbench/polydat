@@ -1,11 +1,11 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Post-parse optimizer — spec §10.
+//! Post-parse optimizer — comprehension_forms.md §10.
 //!
 //! Required pass upstream of compilation. Takes an AST and
 //! produces a canonical, push-down form with these properties
-//! (per spec §10.6):
+//! (§10.6):
 //!
 //! 1. **Semantic-preserving.** Output produces the same
 //!    dispense sequence (per §9.2).
@@ -20,7 +20,7 @@
 //! ## R-rule catalog
 //!
 //! Priority order: R0a → R0b → R1 → R2 → R3 → R4 → R5 → R6 →
-//! R7 (spec §10.10.5).
+//! R7 (§10.10.5).
 //!
 //! - **R0a — identity elimination** (I1–I5): singleton
 //!   combinators, trivially-true filter, `order(Lex, None)`.
@@ -28,23 +28,26 @@
 //!   union / cartesian collapse to n-ary form.
 //! - **R1 — `order(Lex)` → `ORDER_STREAMING`**: the IR
 //!   compiler emits `ORDER_STREAMING` for `order(Lex, _)` and
-//!   `ORDER_MATERIALIZE { indexed }` otherwise, with `indexed`
-//!   taken from `metadata.index_addressable`. Not an AST
-//!   rewrite; recorded in the reducibility catalog as an
-//!   IR-compilation eligibility.
+//!   `ORDER_MATERIALIZE` otherwise, carrying the input's
+//!   `metadata.index_addressable`. Not an AST rewrite; recorded
+//!   in the reducibility catalog as an IR-compilation
+//!   eligibility.
 //! - **R2 — `order(c, strategy, Some(n))` → `indexed_order`**:
-//!   metadata-driven. Working set already shrunk via
-//!   `strategy_working_set` in `metadata.rs`'s propagation
-//!   rule. IR compiler emits `ORDER_MATERIALIZE` with the
-//!   indexed variant.
+//!   metadata-driven. The working set is the selection, sized by
+//!   `strategy_working_set` in `metadata.rs`'s propagation rule,
+//!   and `ORDER_MATERIALIZE` selects positions from its input's
+//!   shape when it evaluates.
 //! - **R3 — `order(filter, Lex, None)` → `filter(order, Lex, None)`**:
 //!   AST rewrite. Commute when un-truncated.
 //! - **R4 — `filter(union(...), p)` → `union(filter(...))`**:
-//!   AST rewrite. Distribute filter into each union child.
+//!   AST rewrite. Distribute filter into each union child, except
+//!   under a non-`Lex` order that ranks the filter's survivors.
 //! - **R5 — per-axis filter pushdown**: AST rewrite. Consults
 //!   the predicate analyzer (§10.9) for factorization; when
-//!   `factorization = PerAxis`, splits the filter into
-//!   per-axis filters wrapping each cartesian child.
+//!   `factorization = PerAxis` and every per-axis sub-predicate is
+//!   total over its axis, splits the filter into per-axis filters
+//!   wrapping each cartesian child, except under a non-`Lex` order
+//!   that ranks the filter's survivors.
 //! - **R6 — chained filter folding** (F1): AST rewrite.
 //!   `filter(filter(c, p), q)` → `filter(c, p && q)`.
 //! - **R7 — order chain folding** (O1): AST rewrite.
@@ -85,9 +88,10 @@ pub use finding::{
 /// Top-level optimizer entry. Applies the R-rule catalog to a
 /// fixed point and returns the optimized AST.
 ///
-/// Per spec §10.6 the function is total — it never rejects.
-/// Validation (V1–V9) must run before this; the optimizer
-/// assumes its input is well-formed.
+/// Per comprehension_forms.md §10.6 the function is total — it
+/// never rejects. Validation (V1–V9) runs on the tree as written,
+/// before this; the optimizer assumes its input is well-formed and
+/// keeps it so.
 ///
 /// The optimizer is a thin loop over the reducibility analyzer
 /// (§10.10): ask `analyze_reducibility` for a finding; apply
@@ -117,7 +121,7 @@ pub fn optimize(ast: Comprehension) -> Comprehension {
     current
 }
 
-/// Reducibility analyzer entry — spec §10.10.
+/// Reducibility analyzer entry — comprehension_forms.md §10.10.
 ///
 /// Walks the AST bottom-up trying each R-rule in priority
 /// order. Returns the first non-empty finding; returns
@@ -342,9 +346,9 @@ fn replace_child_at(ast: &Comprehension, i: usize, replacement: Comprehension) -
     }
 }
 
-/// Bound on optimizer iterations. Per spec §10.6.3 the
-/// optimizer halts because each rewrite strictly decreases a
-/// well-founded measure. We bound iterations defensively as
+/// Bound on optimizer iterations. Per comprehension_forms.md §10.6
+/// (property 3) the optimizer halts because each rewrite strictly
+/// decreases a well-founded measure. Iterations are bounded as
 /// `node_count^2` to guard against any bug in a rule that
 /// would otherwise loop.
 fn max_steps(ast: &Comprehension) -> usize {

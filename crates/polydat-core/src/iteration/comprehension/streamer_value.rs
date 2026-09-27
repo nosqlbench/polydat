@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! The value a producer wire carries (SRD 113 §3.1).
+//! The value a producer wire carries (for_traversal.md §3.1).
 //!
 //! `name := for ...` binds a comprehension as a value. The wire is a
 //! `Streamer`, realized as a reflected `Ext` value so it rides the
@@ -10,7 +10,7 @@
 //! `compiled()` (from which all three consumption surfaces hang) and
 //! `coordinate_stream()` as factories. Every factory call compiles
 //! a fresh stream, so streams obtained from one wire never share
-//! dispense state (§9.5.2 of Comprehension Forms).
+//! dispense state (comprehension_forms.md §9.5.2).
 
 use serde::{Deserialize, Serialize};
 

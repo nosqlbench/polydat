@@ -13,7 +13,7 @@
 //!
 //! ## Single `for` verb
 //!
-//! Per spec §8.1, the surface has one keyword. The RHS shape
+//! The surface has one keyword (comprehension_forms.md §8.1). The RHS shape
 //! disambiguates which constructor:
 //!
 //! ```yaml
@@ -72,13 +72,8 @@ pub use text::{TextParseError, parse_text};
 
 /// An `order` specification on its own — `halton/5`, `lex`,
 /// `shuffle(seed=7)` — as the algebra's strategy, truncation, and
-/// seed.
-///
-/// A caller that has an order and nothing else used to reach this by
-/// writing `__o in 0..1 order <spec>` and running the whole
-/// comprehension parser over the result, then matching the algebra
-/// tree it got back for the one node it wanted. The parser has had an
-/// order-spec entry point all along; this exposes it.
+/// seed, read by the parser's order-spec entry point without parsing
+/// a comprehension around it.
 pub fn parse_order(
     spec: &str,
 ) -> Result<
@@ -111,7 +106,7 @@ pub fn parse_order(
 // - `parse_clause_list` — comma-separated clauses → `Vec<Clause>`
 // - `parse_order_spec` — order-spec text → `TraversalOrder`
 // - `parse_comprehension_text` — full `for ... where ... order`
-//   text → legacy `Comprehension` (used for inline-text shapes
+//   text → the flat clause `Comprehension` (used for inline-text shapes
 //   where the where/order are not separate keys).
 //
 // Not re-exported here (comprehension-build pipeline — callers

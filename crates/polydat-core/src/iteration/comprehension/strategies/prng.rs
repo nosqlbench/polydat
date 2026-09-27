@@ -10,8 +10,7 @@
 //! workhorse generator for deterministic data. This wrapper
 //! exposes a stateful `next_u64` / `next_bounded` / `shuffle`
 //! interface for strategy use; the underlying algorithm is
-//! the same PCG that powers polydat's `pcg(position)` GK
-//! node.
+//! the same PCG that powers polydat's `pcg(position)` node.
 //!
 //! ## References
 //!
@@ -26,10 +25,9 @@
 //!   §3.4.2 Algorithm P).
 //!
 //! Determinism: same `(seed, stream)` → same sequence on
-//! every materialization. Spec §3.6 calls for the seed to be
-//! captured at materialization; the strategy layer currently
-//! uses a module constant plus input length, and per-streamer
-//! seeding is not implemented.
+//! every materialization. A seeded strategy derives its seed from
+//! the authored seed, or its module constant when none is authored,
+//! plus the input length (comprehension_forms.md §3.6).
 
 use crate::numeric::pcg::pcg_seek;
 

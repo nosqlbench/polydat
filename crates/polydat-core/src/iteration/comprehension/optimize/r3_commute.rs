@@ -1,14 +1,14 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! R3 — Lex / filter commute (spec §7.5 N2).
+//! R3 — Lex / filter commute (comprehension_forms.md §7.5 N2).
 //!
 //! `order(filter(c, p), Lex, None) → filter(order(c, Lex, None), p)`
 //!
 //! When untruncated, permutation and selection commute. The
 //! Lex-then-filter form is equivalent and cheaper to emit
-//! (Lex is streaming; filter wraps it). The R0a I5 rule will
-//! then eliminate the now-redundant `order(c, Lex, None)`.
+//! (Lex is streaming; filter wraps it). R0a's I5 then eliminates
+//! the redundant `order(c, Lex, None)`.
 //!
 //! Guard:
 //! - Outer is `Order(Lex, None)`.

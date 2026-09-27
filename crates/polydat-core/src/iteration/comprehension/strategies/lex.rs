@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! `Lex` strategy — spec §3.6.
+//! `Lex` strategy — comprehension_forms.md §3.6.
 //!
 //! Pass-through. The default emission order — rightmost axis
 //! varies fastest in a cartesian. `Lex` is the only strategy

@@ -207,10 +207,10 @@ fn convert_zip_mode(clauses: ZipModeForm) -> AlgebraZipMode {
 }
 
 /// Convert a clauses [`OrderForm`] into the algebra's
-/// `(StrategyName, Option<u64>)` pair.
+/// strategy, truncation, and seed.
 ///
-/// The clauses `Custom { function }` form is rejected — per
-/// spec §3.6, custom orderings are no longer supported.
+/// The clauses `Custom { function }` form is rejected: the strategy
+/// set is closed (comprehension_forms.md §3.6, §14.4).
 pub(crate) fn convert_order(
     order: &OrderForm,
 ) -> Result<(StrategyName, Option<u64>, Option<u64>), ConvertError> {
@@ -424,10 +424,6 @@ mod tests {
             other => panic!("expected Clause, got {other:?}"),
         }
     }
-
-    // (algebra → clauses back-converter tests retired with the
-    // bridge in 9c-4b phase 2. The forward direction
-    // (`clauses_to_algebra`) tests above remain.)
 
     /// The authored seed of a seeded order reaches the algebra; the
     /// other strategies lower without one.

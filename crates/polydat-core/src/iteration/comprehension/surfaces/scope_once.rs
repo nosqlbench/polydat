@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! `scope_once` — non-streamed surface (spec §9.5.3).
+//! `scope_once` — non-streamed surface (comprehension_forms.md §9.5.3).
 //!
 //! Pure function: takes a single coordinate tuple and produces
 //! a single scoped kernel instance. Used for replay,

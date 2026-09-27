@@ -1,7 +1,8 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! `Lhs` (Latin Hypercube Sampling) strategy — spec §3.6.
+//! `Lhs` (Latin Hypercube Sampling) strategy — comprehension_forms.md
+//! §3.6.
 //!
 //! Per-axis stratified permutation. For K-D + n samples:
 //!
@@ -15,9 +16,8 @@
 //! mathematical definition. Over discrete inputs, the
 //! stratified positions are floored to integer indices.
 //!
-//! 1-axis Lhs is degenerate (equivalent to Shuffle); spec
-//! §5.8 emits a warning when this composition is detected
-//! (handled in `validate.rs`).
+//! 1-axis Lhs is degenerate (equivalent to Shuffle); the validator
+//! warns about the composition (§5.8, `validate.rs`).
 //!
 //! ## References
 //!
@@ -44,8 +44,7 @@ use crate::iteration::comprehension::strategy::StrategyName;
 pub struct Lhs;
 
 /// Seed base when none is authored; the input length is added per
-/// call. Per-streamer
-/// seeding is not implemented.
+/// call, so every streamer of one comprehension draws the same design.
 const SEED: u64 = 0x1A50_4577_3EED_BEEF;
 
 impl Strategy for Lhs {
@@ -265,7 +264,7 @@ mod tests {
 
     /// A continuous axis's codes are 53-bit fractions, one in each of
     /// the n equal bins of the unit interval (the Latin hypercube over
-    /// a real box, spec §10.2 R2).
+    /// a real box, comprehension_forms.md §10.2 R2).
     #[test]
     fn continuous_axis_codes_are_stratified_unit_fractions() {
         use crate::iteration::comprehension::cardinality::{Interval, ProductMeasure};

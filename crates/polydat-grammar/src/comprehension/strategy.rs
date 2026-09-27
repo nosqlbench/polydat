@@ -1,21 +1,21 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Strategy taxonomy and zip modes — spec §3.6 + §3.3.
+//! Strategy taxonomy and zip modes (comprehension_forms.md §3.6,
+//! §3.3).
 //!
-//! `StrategyName` is a closed enum per spec §10.7.5: adding a
-//! new strategy is a coordinated type extension (parser
-//! keyword, §3.6 table row, §10.2 R2 push-down rule). No
-//! user-defined `Custom` callback escape hatch — the spec
-//! removed it in favor of named strategies whose closed-form
-//! semantics the optimizer can analyze.
+//! `StrategyName` is a closed enum (comprehension_forms.md §10.7.5,
+//! §14.4): adding a new strategy is a coordinated type extension
+//! (parser keyword, §3.6 table row, §10.2 R2 push-down rule). There
+//! is no user-defined `Custom` callback: every strategy is named, with
+//! closed-form semantics the optimizer can analyze.
 
 use serde::{Deserialize, Serialize};
 
-/// Named ordering strategies per spec §3.6 (plus `Shuffle`).
+/// Named ordering strategies (comprehension_forms.md §3.6).
 ///
 /// Each strategy declares its accepted input `IndexFn` shape
-/// per the spec §3.6 strategy table. V4 (§5) enforces the
+/// in the §3.6 strategy table. V4 (§5) enforces the
 /// per-strategy input-shape contract; R2 (§10.2) implements
 /// the per-strategy push-down rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -125,7 +125,7 @@ impl std::fmt::Display for StrategyName {
     }
 }
 
-/// Zip combination mode per spec §3.3.
+/// Zip combination mode (comprehension_forms.md §3.3).
 ///
 /// - `Strict` errors on length mismatch (V7).
 /// - `Truncate` cuts to the shortest child.

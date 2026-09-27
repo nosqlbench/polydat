@@ -2,14 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! `ScopedKernelStream<K>` — second-order consumption surface
-//! (spec §9.5).
+//! (comprehension_forms.md §9.5).
 //!
 //! Wraps a [`CoordinateStream`] + a parent `K`. Each
 //! `advance()` pulls one coord tuple from the underlying IR
 //! and applies `parent.scope(&coords)` to produce a
 //! [`ScopedKernelInstance`].
 //!
-//! Per spec §9.5.2's independence contract: this stream's
+//! Per §9.5.2's independence contract: this stream's
 //! cursor is **independent** of any other `CoordinateStream`
 //! or `ScopedKernelStream` instantiated from the same
 //! `CompiledComprehension`. Pulling from this stream does NOT
@@ -50,7 +50,7 @@ impl<K: KernelScope> ScopedKernelStream<K> {
     /// Pull the next scoped instance. Internally:
     /// 1. Pull one coord tuple from the underlying
     ///    `CoordinateStream`.
-    /// 2. Apply `parent.scope(&coords)` (spec §9.5.3's
+    /// 2. Apply `parent.scope(&coords)` (comprehension_forms.md §9.5.3's
     ///    `scope_once` semantic).
     /// 3. Return the wrapped instance.
     ///

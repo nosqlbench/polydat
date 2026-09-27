@@ -1,8 +1,8 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! R5 — per-axis filter pushdown (spec §7.3 D2's optimizer
-//! direction + §10.2 R5).
+//! R5 — per-axis filter pushdown (comprehension_forms.md §7.3 D2's
+//! optimizer direction, §10.2 R5).
 //!
 //! `filter(cartesian(c1, ..., cN), p) →
 //!  cartesian(c1, ..., filter(ci, p_i), ..., cN)`
@@ -20,13 +20,15 @@
 //! A pushed sub-predicate tests values the filter as written may
 //! never test, so it moves only when it is total over its axis
 //! ([`CompiledPredicate::is_total`]): `{k} > 5` over a range moves,
-//! and `{w} > 2` over strings, or `u64_mod({k}, {m}) == 0`, stays.
+//! and `{w} > 2` over strings, or `u64_mod({k}, 3) == 0`, stays.
 //!
 //! Guard:
 //! - Outer is `Filter`.
 //! - Child is `Cartesian`.
 //! - Predicate's `Factorization` is `PerAxis(_)`.
 //! - Every pushed sub-predicate is total over the child it wraps.
+//! - No non-`Lex` order ranks the filter's survivors (§5 V5); the
+//!   optimizer's walker enforces this.
 
 use crate::iteration::comprehension::ast::Comprehension;
 use crate::iteration::comprehension::predicate::{

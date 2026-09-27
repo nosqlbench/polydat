@@ -1,10 +1,10 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! §9.3 resource-bound checker.
+//! Resource-bound checker (comprehension_forms.md §9.3).
 //!
 //! Given an IR `Program`, compute the closed-form peak-memory
-//! bound symbolically. Per spec §9.3:
+//! bound symbolically. Per comprehension_forms.md §9.3:
 //!
 //! ```text
 //! memory(C) ≤

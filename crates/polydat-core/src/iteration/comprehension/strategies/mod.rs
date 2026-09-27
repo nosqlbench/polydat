@@ -1,7 +1,8 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Strategy implementations — spec §3.6 + §10.2 R2 + §10.7.8.
+//! Strategy implementations — comprehension_forms.md §3.6, §10.2 R2,
+//! §10.7.8.
 //!
 //! ## Selection, then lookup
 //!
@@ -10,15 +11,16 @@
 //! [`Strategy::select`] computes that order as a [`Selection`] of
 //! positions into the input without seeing a tuple, which is what
 //! lets an index-addressed evaluator choose `order halton/100`'s
-//! tuples from a large product and compute only those 100 (spec
-//! §10.2 R2). [`Strategy::apply`] is the same selection looked up
-//! against an [`EvaluatedInput`]'s materialized tuples.
+//! tuples from a large product and compute only those 100 (§10.2
+//! R2). [`Strategy::select_surviving`] is the selection over a
+//! filter's input of which only some positions pass (§5 V5).
+//! [`Strategy::apply`] is the selection looked up against an
+//! [`EvaluatedInput`]'s materialized tuples.
 //!
-//! Per spec §10.7.8 this is the **strategy invocation
-//! contract**: V4 fires at invocation time against the input's
-//! `index_fn` — definitively, regardless of how the input source
-//! was authored (literal, range, context-free generator, or
-//! workload-param).
+//! Per §10.7.8 this is the **strategy invocation contract**: V4
+//! fires at invocation time against the input's evaluated
+//! `index_fn`, however the input source was authored (literal,
+//! range, context-free generator, or workload-param).
 //!
 //! Each strategy module holds a closed-form path over an `IndexFn`
 //! that supports lookup and a fallback over a one-axis position
@@ -106,7 +108,7 @@ impl Default for Tuple {
 }
 
 /// The materialized input to a strategy at invocation time
-/// (spec §10.7.8).
+/// (comprehension_forms.md §10.7.8).
 ///
 /// `tuples` are the input stream's tuples in source order (the
 /// natural enumeration of the upstream comprehension subtree).
@@ -114,8 +116,8 @@ impl Default for Tuple {
 /// the addressing scheme the input actually satisfies —
 /// derived from observed shape for Generator /
 /// WorkloadParamList leaves via the [`crate::iteration::comprehension::eval_source`]
-/// layer, combined upward by the runtime walker per spec
-/// §10.7.2 propagation rules.
+/// layer, combined upward by the runtime walker per the
+/// propagation rules of comprehension_forms.md §10.7.2.
 pub struct EvaluatedInput {
     /// The input's tuples, in source order.
     pub tuples: Vec<Tuple>,
@@ -192,7 +194,7 @@ impl Selection {
     }
 }
 
-/// The strategy invocation surface per spec §10.7.8.
+/// The strategy invocation surface of comprehension_forms.md §10.7.8.
 ///
 /// Implementations are stateless — every call to
 /// [`select`](Strategy::select) produces the same positions given the
@@ -217,13 +219,13 @@ pub trait Strategy {
     /// and both orders run.
     fn selects_from_shape(&self) -> bool;
 
-    /// V4 input-shape check (spec §3.6). `None` represents an
+    /// V4 input-shape check (comprehension_forms.md §3.6). `None` represents an
     /// input with no closed-form index function; only `Lex`
     /// accepts that. Concrete `IndexFn` variants are accepted
-    /// per the per-strategy rules in spec §3.6's table.
+    /// per the per-strategy rules in §3.6's table.
     fn accepts_input(&self, idx: Option<&IndexFn>) -> bool;
 
-    /// R2 push-down eligibility (spec §10.2 R2). `true` if this
+    /// R2 push-down eligibility (§10.2 R2). `true` if this
     /// strategy has a closed-form multi-index rule over the given
     /// input; otherwise [`select`](Strategy::select) orders the
     /// input's positions as one axis.
@@ -286,7 +288,7 @@ pub trait Strategy {
     ///
     /// V4 is the caller's responsibility — call
     /// `accepts_input(Some(&input.index_fn))` before `apply`
-    /// to fire V4 at strategy-invocation time per spec §10.7.8.
+    /// to fire V4 at strategy-invocation time per §10.7.8.
     fn apply(&self, input: &EvaluatedInput, truncation: Option<u64>) -> Vec<Tuple> {
         self.apply_seeded(input, truncation, None)
     }

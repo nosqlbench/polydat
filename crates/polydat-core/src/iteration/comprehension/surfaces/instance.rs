@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! `KernelScope` trait + `ScopedKernelInstance` — the
-//! second-order surface's value type (spec §9.5).
+//! second-order surface's value type (comprehension_forms.md §9.5).
 //!
 //! `KernelScope` is the algebra-layer abstraction over
 //! "a thing that can be scoped to a coordinate tuple."
@@ -14,8 +14,8 @@
 use crate::iteration::comprehension::strategies::Tuple;
 
 /// A parent value that can be scoped to a coordinate tuple,
-/// producing an instance of `Self::Scoped`. Spec §9.5.3 names
-/// this the "one-shot scope function."
+/// producing an instance of `Self::Scoped`: the binding
+/// comprehension_forms.md §9.5.3's one-shot map function applies.
 ///
 /// For polydat kernels this is
 /// `PolydatKernel::for_iteration(&canonical, &parent, &bindings)`.

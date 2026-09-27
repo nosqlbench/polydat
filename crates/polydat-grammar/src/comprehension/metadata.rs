@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Metadata algebra — spec §10.7.
+//! Metadata algebra (comprehension_forms.md §10.7).
 //!
 //! Every well-formed comprehension AST node carries a four-field
 //! [`Metadata`] bundle computed bottom-up from its children's
@@ -18,7 +18,7 @@
 //!   continuous, hybrid).
 //! - [`NaturalOrder`] — how a node enumerates by default.
 //! - [`Materialization`] — streaming or sized-barrier
-//!   classification (spec §6.2).
+//!   classification (comprehension_forms.md §6.2).
 //! - [`Comprehension::metadata`] — propagation entry point.
 //!
 //! The propagation rules are total, constant-time per node, and
@@ -43,29 +43,31 @@ use super::strategy::{StrategyName, ZipMode};
 /// callbacks, no fail-able analyses.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Metadata {
-    /// Cardinality class per spec §6.1.
+    /// Cardinality class (comprehension_forms.md §6.1).
     pub cardinality: CardinalityClass,
 
     /// Closed-form bijection from `0..|c|` to the node's
     /// dispensed tuples. `None` when the node has no
     /// addressable index space (raw filter output, dependent
-    /// cartesian, non-Lex order output at the AST level).
+    /// cartesian, the output of a truncated `Lex` or any non-`Lex`
+    /// order).
     pub index_addressable: Option<IndexFn>,
 
     /// How this node enumerates by default.
     pub natural_order: NaturalOrder,
 
-    /// Streaming-vs-barrier classification per spec §6.2.
+    /// Streaming-vs-barrier classification (comprehension_forms.md §6.2).
     pub materialization: Materialization,
 }
 
-/// Closed-form addressing schemes — spec §10.7.1.
+/// Closed-form addressing schemes (comprehension_forms.md §10.7.1).
 ///
 /// Six variants. Each describes the bijection from a
 /// `0..cardinality` index range to the node's tuple shape.
 /// `Continuous` and `Hybrid` carry the cardinality's
 /// interval+measure descriptors directly so the R2 push-down
-/// rules (Phase 6) can dispatch on them without recomputing.
+/// rule (comprehension_forms.md §10.2) dispatches on them without
+/// recomputing.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum IndexFn {
@@ -144,7 +146,7 @@ impl IndexFn {
     }
 }
 
-/// Natural enumeration order — spec §10.7.1.
+/// Natural enumeration order (comprehension_forms.md §10.7.1).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum NaturalOrder {
@@ -164,12 +166,12 @@ pub enum NaturalOrder {
     /// The wrapped strategy determines the emission order.
     Strategy(StrategyName),
 
-    /// Pending — continuous source not yet wrapped by a
-    /// sampling order. V8 requires resolution before dispense.
+    /// A continuous source that no sampling order wraps. V8
+    /// refuses to dispense it.
     PendingSampling,
 }
 
-/// Streaming-vs-barrier classification per spec §6.2.
+/// Streaming-vs-barrier classification (comprehension_forms.md §6.2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Materialization {
@@ -177,7 +179,7 @@ pub enum Materialization {
     Streaming,
 
     /// Holds a finite working set; size declared at compile
-    /// time. The two natural barriers per spec §6.3:
+    /// time. The two natural barriers (comprehension_forms.md §6.3):
     /// `zip(Cycle)` shorter children + non-Lex `order`.
     BoundedBarrier {
         /// Tuples the barrier holds at most.
@@ -192,7 +194,8 @@ pub enum Materialization {
 }
 
 impl Comprehension {
-    /// Compute this node's metadata bundle per spec §10.7.2.
+    /// Compute this node's metadata bundle (comprehension_forms.md
+    /// §10.7.2).
     ///
     /// Bottom-up: every child's metadata is computed first,
     /// then this node's. Constant-time per node above the
@@ -200,10 +203,9 @@ impl Comprehension {
     ///
     /// For non-leaf nodes the metadata is recomputed on every
     /// call (no caching at this layer); consumers that need
-    /// memoization should wrap externally. This is fine
-    /// because the propagation cost is O(N) total nodes and
-    /// the optimizer (Phase 6) re-propagates after each
-    /// rewrite anyway.
+    /// memoization wrap it externally. The propagation cost is
+    /// O(N) in the nodes, and the optimizer re-propagates after
+    /// each rewrite.
     pub fn metadata(&self) -> Metadata {
         match self {
             Comprehension::Clause { source, .. } => clause_metadata(source),
@@ -319,7 +321,7 @@ fn known_empty(m: &Metadata) -> bool {
     )
 }
 
-/// How a `zip(Cycle)` holds one operand while it cycles (spec §6.2,
+/// How a `zip(Cycle)` holds one operand while it cycles (comprehension_forms.md §6.2,
 /// §6.3).
 ///
 /// Cycling re-emits an operand's earlier tuples once it is exhausted
@@ -612,9 +614,8 @@ fn combine_cartesian_index_fn(children: &[Metadata]) -> Option<IndexFn> {
             }
             // Lockstep / Modular / Concatenation — these don't
             // combine as cartesian axes (they're 1-D index
-            // spaces of their own); cartesian-of-zip / cartesian-
-            // of-union would need a richer addressing scheme.
-            // For now, fall back to None.
+            // spaces of their own), and a cartesian of a zip or a
+            // union has no addressing scheme here, so it has none.
             IndexFn::Lockstep { .. } | IndexFn::Modular { .. } | IndexFn::Concatenation { .. } => {
                 return None;
             }
@@ -945,7 +946,7 @@ fn strategy_working_set(
             let dim = lattice_dim(idx).max(1);
             n.saturating_mul(dim as u64)
         }
-        // Extrema (SRD-18d §214) and Shells rank every multi-index of
+        // Extrema (comprehension_forms.md §3.6) and Shells rank every multi-index of
         // the input's index space before keeping the first strata or
         // shells, so they hold the whole index space.
         (StrategyName::Extrema, Some(idx), Some(_))
@@ -1000,7 +1001,7 @@ fn index_fn_cardinality(idx: &IndexFn) -> u64 {
 
 /// Walk children's source expressions for back-references to
 /// earlier-axis coordinate names. Used by cartesian metadata
-/// propagation to detect dependent sources per spec §3.2.
+/// propagation to detect dependent sources (comprehension_forms.md §3.2).
 fn detect_dependent_sources(children: &[Comprehension]) -> bool {
     let mut prior_names: Vec<String> = Vec::new();
     for child in children {

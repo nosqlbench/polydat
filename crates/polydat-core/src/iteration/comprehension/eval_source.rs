@@ -1,41 +1,38 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Source evaluation — spec §10.7.0, §10.7.6, §10.7.8.
+//! Source evaluation — comprehension_forms.md §10.7.0, §10.7.6,
+//! §10.7.8.
 //!
-//! Lifts [`IndexFn`] from a static AST property to a contextual
-//! query: every [`Source`] variant answers
+//! Makes [`IndexFn`] a contextual query as well as a static AST
+//! property: every [`Source`] variant answers
 //! `evaluate(ctx) -> EvaluatedSource` carrying its materialized
 //! values, observed cardinality, and the index function the
 //! emitted values actually satisfy.
 //!
 //! ## Why this layer exists
 //!
-//! Before this module, [`crate::iteration::comprehension::metadata`]
-//! computed `IndexFn` at AST-construction time using only static
-//! source attributes (`cardinality_hint`, declared step, etc.).
-//! Two classes of sources couldn't claim a useful `IndexFn`:
+//! [`crate::iteration::comprehension::metadata`] computes `IndexFn`
+//! at AST-construction time from static source attributes
+//! (`cardinality_hint`, declared step, etc.). Two classes of sources
+//! cannot claim their real `IndexFn` that way:
 //!
-//! - **`Source::Generator { expr }`** — the spec-text resolves
+//! - **`Source::Generator { expr }`** — the source text resolves
 //!   to a list whose shape is only known after evaluation. The
-//!   static path conservatively declared `Lattice { axis_sizes:
-//!   [N] }` from `cardinality_hint` (or `Unbounded` without
-//!   it), regardless of whether the actual values form a
-//!   regular arithmetic progression.
-//! - **`Source::WorkloadParamList { name }`** — same: the
-//!   parameter's list contents are unknown until kernel
-//!   evaluation.
+//!   static path declares `Lattice { axis_sizes: [N] }` from
+//!   `cardinality_hint` (or `Unbounded` without it).
+//! - **`Source::WorkloadParamList { name }`** — the parameter's
+//!   list contents are unknown until kernel evaluation.
 //!
 //! Non-`Lex` strategies (Diagonal / Extrema / Shells / Halton /
 //! Sobol / Lhs) need the input's real `IndexFn` shape to
-//! validate V4 and dispatch their indexed-form algorithms.
-//! Without this module, V4 fires (or fails to fire) against
-//! a stale static estimate; with this module, V4 fires
-//! against the post-evaluation truth.
+//! check V4 and dispatch their indexed-form algorithms, so V4
+//! fires at strategy invocation against the evaluated shape.
 //!
 //! ## Eval classes
 //!
-//! Per spec §10.7.0, sources partition into three eval classes:
+//! Per comprehension_forms.md §10.7.0, sources partition into three
+//! eval classes:
 //!
 //! | Class | Variants | `evaluate(None)` works? |
 //! |---|---|---|
@@ -53,8 +50,8 @@
 //! [`SourceEval::eval_class`] classifies a source for callers
 //! that want to know whether `evaluate(None)` will succeed; the
 //! compile-time V4 check in `validate` works from AST metadata
-//! and does not consult it. V4 otherwise fires at
-//! strategy-invocation time per spec §10.7.8.
+//! and does not consult it. V4 fires again at
+//! strategy-invocation time (comprehension_forms.md §10.7.8).
 //!
 //! ## What this module DOES NOT own
 //!
@@ -95,7 +92,7 @@ pub struct EvaluatedSource {
     pub index_fn: IndexFn,
 }
 
-/// Spec §10.7.0 partitioning.
+/// The eval-class partition of comprehension_forms.md §10.7.0.
 ///
 /// Tells a caller whether a source can be materialized with
 /// `ctx = None`. The compile-time V4 check in `validate` works
@@ -180,8 +177,8 @@ pub struct EvalContext<'a> {
 /// object-safe but typically called through the inherent
 /// [`Source`] methods below.
 pub trait SourceEval {
-    /// Classify this source for the IR planner per spec
-    /// §10.7.0. See [`EvalClass`].
+    /// Classify this source for the IR planner per
+    /// comprehension_forms.md §10.7.0. See [`EvalClass`].
     fn eval_class(&self) -> EvalClass;
 
     /// Materialize this source.
@@ -203,7 +200,8 @@ impl SourceEval for Source {
                 EvalClass::Distribution
             }
             // A generator's class is its expression's: context-free
-            // when it references no name (spec §10.7.0).
+            // when it references no name (comprehension_forms.md
+            // §10.7.0).
             Source::Generator { .. } if self.referenced_names().is_empty() => EvalClass::Static,
             Source::Generator { .. } => EvalClass::ContextRequired,
             Source::WorkloadParamList { .. } => EvalClass::ContextRequired,
@@ -304,7 +302,8 @@ impl SourceEval for Source {
                 values: Vec::new(),
                 cardinality: 0,
                 // The parameters travel on the AST carrier; the
-                // runtime's sampler reads them there (spec §10.7.6).
+                // runtime's sampler reads them there
+                // (comprehension_forms.md §10.7.6).
                 index_fn: IndexFn::Continuous {
                     intervals: vec![support.clone()],
                     measure: ProductMeasure::Named(*distribution),
@@ -316,16 +315,12 @@ impl SourceEval for Source {
 
 /// Classify a materialized value list by observed shape.
 ///
-/// The "expand-then-classify" stage of spec §10.7.6 / §10.7.8:
-/// a numeric arithmetic progression →
-/// `Lattice { axis_sizes: [N] }` reflecting the regular stride.
-/// Non-numeric or non-progression value lists → a plain
-/// `Lattice { axis_sizes: [N] }` whose only shape claim is
-/// length. Either way the strategy gets a useful 1-axis Lattice
-/// for indexed-form dispatch.
-///
-/// A static generator catalogue that declares shape from args
-/// without expansion is not implemented.
+/// The "expand-then-classify" stage of comprehension_forms.md
+/// §10.7.6 / §10.7.8: any list of `N` values is a one-axis
+/// `Lattice { axis_sizes: [N] }`, whose only shape claim is its
+/// length, since a strategy looks values up by position. The shape
+/// is read off the evaluated values, never declared from a
+/// generator's name.
 fn classify_observed_values(vals: &[Value]) -> IndexFn {
     let n = vals.len() as u64;
     IndexFn::Lattice {

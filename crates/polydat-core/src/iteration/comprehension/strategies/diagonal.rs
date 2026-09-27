@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! `Diagonal` / `Antidiagonal` strategies — spec §3.6.
+//! `Diagonal` / `Antidiagonal` strategies — comprehension_forms.md §3.6.
 //!
 //! Emits multi-indices in index-sum-ascending (or descending)
 //! order: `(0,0,…), (0,…,1), (0,1,…,0), (1,0,…,0), …`

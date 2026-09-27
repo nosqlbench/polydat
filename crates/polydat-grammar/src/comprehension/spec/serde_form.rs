@@ -18,8 +18,9 @@
 //! - `where: "..."` — filter predicate
 //! - `order: "halton/50"` — traversal order spec
 //!
-//! Conversion delegates to the existing legacy parsers + the
-//! [`super::from_clauses`] bridge. This module owns only the
+//! Conversion delegates to the clause parsers, which build the flat
+//! parse form (comprehension_forms.md §14.8), and the
+//! [`super::from_clauses`] lowering. This module owns only the
 //! serde surface and the shape-routing logic.
 
 use serde::{Deserialize, Serialize};
@@ -60,7 +61,7 @@ pub struct ComprehensionSpec {
 
 /// The three accepted shapes of the `for` field.
 ///
-/// Routes through the legacy parser:
+/// Routes through the clause parser:
 ///
 /// - [`ForSpec::Inline`] → one call to `parse_clause_list`,
 ///   then the structural-detection rule (`comprehension_from_subspaces`).
@@ -101,12 +102,12 @@ pub enum SpecConvertError {
         /// The parser's message.
         message: String,
     },
-    /// Legacy AST failed self-validation.
+    /// The flat clause form failed its own validation.
     LegacyValidate {
         /// The validation errors, in order.
         errors: Vec<String>,
     },
-    /// Conversion from legacy AST to algebra AST failed.
+    /// Lowering the flat clause form to the algebra AST failed.
     Convert(ConvertError),
 }
 
@@ -158,18 +159,17 @@ pub fn parse_inline(spec: &str) -> Result<AlgebraAst, SpecConvertError> {
 impl ComprehensionSpec {
     /// Convert this spec into the algebra-layer
     /// [`AlgebraAst`].  Routes the `for` shape through the
-    /// legacy parser, builds a legacy AST (applying `where` /
-    /// `order` modifiers), and runs the [`clauses_to_algebra`]
-    /// bridge.
+    /// clause parser, builds the flat clause form (applying `where`
+    /// / `order` modifiers), and lowers it with
+    /// [`clauses_to_algebra`].
     pub fn into_algebra(self) -> Result<AlgebraAst, SpecConvertError> {
         let legacy = self.into_legacy()?;
         let algebra = clauses_to_algebra(&legacy)?;
         Ok(algebra)
     }
 
-    /// Build the intermediate legacy AST.  Exposed for tests
-    /// and for any consumer that still needs the legacy shape
-    /// (e.g., during incremental cutover).
+    /// Build the intermediate flat clause form. Exposed for tests
+    /// and for a consumer that reads that form.
     pub fn into_legacy(self) -> Result<ClauseAst, SpecConvertError> {
         let subspaces = self.r#for.into_subspaces()?;
         let mut legacy = comprehension_from_subspaces(subspaces);
@@ -396,10 +396,9 @@ mod tests {
 
     #[test]
     fn unparseable_source_inside_for_falls_back_to_generator() {
-        // parse_source now treats unrecognized text as a
+        // parse_source treats unrecognized text as a
         // Source::Generator that the runtime evaluator resolves
-        // against the Polydat Kernel chain — matching the legacy
-        // grammar's permissive accept-anything behavior.
+        // against the Polydat Kernel chain.
         let yaml = r#"
             for: "k in something-weird"
         "#;

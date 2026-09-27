@@ -1,14 +1,14 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Pattern recognizer catalog — spec §10.9.5.
+//! Pattern recognizer catalog — comprehension_forms.md §10.9.5.
 //!
 //! Each recognizer matches one syntactic shape against a
 //! predicate string and produces partial [`PredicateInfo`]
 //! data. The analyzer ([`super::analyzer::analyze`])
 //! composes the recognizers to build the full info.
 //!
-//! ## Initial catalog (spec §10.9.5)
+//! ## Catalog (§10.9.5)
 //!
 //! - `{a} OP K` for OP ∈ {==, !=, <, <=, >, >=}
 //! - `{a} OP {b}` (cross-axis)
@@ -19,7 +19,7 @@
 //! - `{a} in [K1, K2, K3]` (discrete-set membership)
 //!
 //! Patterns NOT in this catalog return `Opaque(UnknownPattern)`.
-//! Per spec §10.9.4 property 2 ("Conservatively incomplete"):
+//! Per §10.9.4 property 2 ("Conservatively incomplete"):
 //! missing an optimization is acceptable; asserting a false
 //! property is not.
 
@@ -62,7 +62,7 @@ pub fn recognize(predicate: &str, coords: &CoordSet) -> PredicateInfo {
 
     // Continuous-coord short-circuit. Any reference to a
     // continuous-classified coord makes the whole predicate
-    // Opaque(Continuous) per spec §10.9 + F20.
+    // Opaque(Continuous) (comprehension_forms.md §14.2).
     for r in &coord_refs {
         if matches!(coords.get(r).map(|c| c.kind), Some(CoordKind::Continuous)) {
             return PredicateInfo {
@@ -555,7 +555,7 @@ fn recognize_disjunction(
 ) -> PredicateInfo {
     let sub_infos: Vec<PredicateInfo> = parts.iter().map(|p| recognize(p, coords)).collect();
 
-    // Per spec §10.9.5's disjunction rule: Disjunctive only if
+    // Per §10.9.5's disjunction rule: Disjunctive only if
     // every disjunct is Conjunctive / PerAxis; otherwise
     // Opaque.
     let all_known = sub_infos.iter().all(|i| {
@@ -649,8 +649,8 @@ fn invert_predicate(inner: &PredicateInfo, coord_refs: Vec<String>) -> Predicate
         inverted_mono.insert(axis, new);
     }
 
-    // Inverting ranges is non-trivial; drop range claims on
-    // negated predicates for now.
+    // A negated predicate makes no range claim: the complement of
+    // a range is not one range.
     let inverted_range = PerAxisMap::<RangeConstraint>::new();
 
     PredicateInfo {

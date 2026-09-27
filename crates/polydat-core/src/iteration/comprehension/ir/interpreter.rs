@@ -1,15 +1,15 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Stack-machine IR interpreter — spec §9.1 option (a) +
-//! §9.2 correctness contract.
+//! Stack-machine IR interpreter — comprehension_forms.md §9.2's
+//! execution model (a), held to its correctness contract.
 //!
 //! Walks an IR `Program` linearly, maintaining a stack of
-//! tuple-stream operands. Each opcode either pushes a new
-//! stream ([`Op::PushClause`]) or combines / wraps the top-N
-//! ([`Op::Cartesian`], `Zip`, `Union`, `Filter`,
-//! `OrderStreaming`, `OrderMaterialize`). `Dispense` marks
-//! the top stream as the output.
+//! tuple-stream operands. Each opcode pushes a new stream
+//! ([`Op::PushClause`], and `OrderMaterialize`, which holds its
+//! input) or combines / wraps the top-N ([`Op::Cartesian`], `Zip`,
+//! `Union`, `Filter`, `OrderStreaming`). `Dispense` marks the top
+//! stream as the output.
 //!
 //! Returns a [`TupleStream`] — a lazy producer the consumer
 //! pulls from. The stream graph is built at
@@ -22,7 +22,8 @@
 //! position instead of caching its tail axes, a cycle zip reads such
 //! an operand at `i mod |operand|` instead of buffering it, and a
 //! non-`Lex` order over such an input selects its positions and
-//! computes only the selected tuples (spec §6.2, §10.2 R2).
+//! computes only the selected tuples (comprehension_forms.md §6.2,
+//! §10.2 R2).
 //!
 //! Predicates and non-`Lex` orders evaluate as a traversal evaluates
 //! them, in the empty scope: a filter through [`CompiledPredicate`],
@@ -83,7 +84,7 @@ fn extend(out: &mut Tuple, tuple: Tuple) {
 type BoxedStream = Box<dyn TupleStream>;
 
 /// Interpret a compiled `Program` and return the result
-/// stream. Per spec §9.1 the final opcode must be
+/// stream. Per comprehension_forms.md §9.1 the final opcode must be
 /// `Op::Dispense`; if it's missing the function panics
 /// (programs not produced by the compiler are caller-error).
 pub fn interpret(program: &Program) -> BoxedStream {
@@ -1123,7 +1124,7 @@ mod tests {
 
     #[test]
     fn dispense_sequence_for_section_11_1() {
-        // Spec §11.1: cartesian over (k in 1..=2) × (b in 10..=20 step 10).
+        // comprehension_forms.md §11.1: cartesian over (k in 1..=2) × (b in 10..=20 step 10).
         let ast = Comprehension::cartesian(vec![clause("k", &[1, 2]), clause("b", &[10, 20])]);
         let prog = compile(&ast);
         let mut stream = interpret(&prog);

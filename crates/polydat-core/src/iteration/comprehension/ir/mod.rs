@@ -1,19 +1,20 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! IR + compiler + interpreter — spec §9.1, §9.2, §9.3.
+//! IR + compiler + interpreter — comprehension_forms.md §9.1, §9.2,
+//! §9.3.
 //!
 //! The IR is a finite linear sequence of opcodes (the 8-op
 //! set in [`Op`]) that compiles from an optimized AST and
-//! executes via a stack-machine interpreter (`Interpreter`)
-//! or a stream-fusion compiler (future). Both interpretation
-//! models produce identical dispense sequences per spec §9.2.
+//! executes on a stack-machine interpreter ([`interpreter`]). Any
+//! other execution model, such as a stream-fusion compiler, must
+//! produce the same dispense sequences (§9.2).
 //!
 //! ## Module layout
 //!
 //! - [`op`] — the 8-opcode enum + supporting parameter types.
 //! - [`program`] — `#[non_exhaustive] Program` wrapper:
-//!   immutable, accessible by value (spec §9.1).
+//!   immutable, accessible by value (§9.1).
 //! - [`compile`](fn@compile) — bottom-up AST → IR walker.
 //! - [`interpreter`] — stack-machine interpreter; produces a
 //!   tuple stream that pulls lazily.

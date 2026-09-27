@@ -1,13 +1,14 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! R0b — associativity flattening (spec §7.1 A1, A2).
+//! R0b — associativity flattening (comprehension_forms.md §7.1 A1,
+//! A2).
 //!
 //! - A1: `union(union(a, b), c) → union(a, b, c)` (and the
 //!   right-nested form).
 //! - A2: `cartesian(cartesian(a, b), c) → cartesian(a, b, c)`.
 //!
-//! Zip is NOT associative (spec A3) — nested zips are a parse
+//! Zip is NOT associative (§7.1 A3) — nested zips are a parse
 //! error and never appear in valid input.
 //!
 //! Each flatten strictly decreases AST node count.

@@ -1,7 +1,8 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! `PredicateInfo` and supporting enums — spec §10.9.3.
+//! `PredicateInfo` and supporting enums — comprehension_forms.md
+//! §10.9.3.
 //!
 //! Five independent assertions the analyzer makes about a
 //! predicate:
@@ -50,9 +51,9 @@ pub struct PredicateInfo {
 
 /// Per-coordinate decomposition of a predicate.
 ///
-/// Spec §10.9.3 defines the four variants. `Opaque` carries
-/// an [`OpaqueReason`] explaining why the analyzer couldn't
-/// decompose further.
+/// comprehension_forms.md §10.9.3 defines the four variants.
+/// `Opaque` carries an [`OpaqueReason`] explaining why the analyzer
+/// couldn't decompose further. R5 fires only on `PerAxis`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Factorization {
@@ -62,20 +63,19 @@ pub enum Factorization {
     PerAxis(PerAxisMap<String>),
 
     /// Conjunction of sub-predicates where each may still
-    /// cross-cut multiple axes. R5 can fire partially on the
-    /// per-axis subset.
+    /// cross-cut multiple axes.
     Conjunctive(Vec<String>),
 
-    /// Disjunction of sub-predicates. R5 fires only if every
-    /// disjunct is `PerAxis` itself (per spec §10.9.5's
-    /// disjunction rule).
+    /// Disjunction of sub-predicates, each `PerAxis` or
+    /// `Conjunctive` itself (§10.9.5's disjunction rule).
     Disjunctive(Vec<String>),
 
     /// Analyzer can't structurally decompose. R5 doesn't fire.
     Opaque(OpaqueReason),
 }
 
-/// Why the analyzer marked a predicate `Opaque`. Spec §10.9.3.
+/// Why the analyzer marked a predicate `Opaque`
+/// (comprehension_forms.md §10.9.3).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OpaqueReason {
@@ -89,23 +89,24 @@ pub enum OpaqueReason {
     /// as deterministic falls here.
     NonDeterministic,
 
-    /// Predicate depends on previously-emitted tuples. Not
-    /// expressible in current GK; reserved for future use.
+    /// Predicate depends on previously-emitted tuples. No predicate
+    /// the language can write does; the variant names the reason
+    /// for completeness.
     CrossTupleState,
 
     /// Predicate has observable side effects.
     SideEffecting,
 
     /// Predicate references one or more continuous-cardinality
-    /// coordinates. Continuous-coord predicate analysis is
-    /// deliberately deferred per spec §14.
+    /// coordinates, which the analyzer treats as opaque
+    /// (comprehension_forms.md §14.2).
     Continuous,
 }
 
 /// Per-axis monotonicity direction. "Increasing" means: once
 /// the predicate becomes true for `axis = k`, it stays true
-/// for all `axis ≥ k`. Used by the deferred R10
-/// (monotonic-cutoff truncation).
+/// for all `axis ≥ k`. It is the fact R10 (monotonic-cutoff
+/// truncation, outside the catalog per §14.1) would read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Monotonicity {
@@ -117,9 +118,9 @@ pub enum Monotonicity {
     None,
 }
 
-/// Per-axis value-bound implied by the predicate. Used by the
-/// deferred R8 (range-narrowing) and R9 (discrete-set
-/// substitution).
+/// Per-axis value-bound implied by the predicate: the fact R8
+/// (range-narrowing) and R9 (discrete-set substitution), outside the
+/// catalog per comprehension_forms.md §14.1, would read.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RangeConstraint {

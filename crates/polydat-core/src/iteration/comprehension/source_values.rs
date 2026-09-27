@@ -9,7 +9,7 @@
 use super::source::split_string_comprehension;
 
 /// The canonical "is this value peelable, and into what?" predicate
-/// (SRD-18f §4). Returns `Some(interior)` when `v` has an iteration
+/// (comprehension_forms.md §3.1.2). Returns `Some(interior)` when `v` has an iteration
 /// interior — peeling it one level yields these elements — and
 /// `None` when `v` is an iteration scalar (relaxed wraps it; an
 /// explicit `[v…]` destructure errors).
@@ -52,7 +52,8 @@ pub fn iteration_interior(v: &crate::ast::Value) -> Option<Vec<crate::ast::Value
                 .collect()
         }),
         // Ext carrying a PartitionList peels into its partitions
-        // (SRD-71). Other Ext values are opaque scalars.
+        // (cursor_partitions.md §7.1). Other Ext values are opaque
+        // scalars.
         Value::Ext(_) => v.as_partition_list().map(|list| {
             list.as_slice()
                 .iter()
@@ -114,7 +115,7 @@ pub fn iteration_interior(v: &crate::ast::Value) -> Option<Vec<crate::ast::Value
 }
 
 /// Split a string-comprehension source into its token values
-/// (SRD-18f §3.2). Separators are runs of comma, semicolon, and
+/// (comprehension_forms.md §3.1.3). Separators are runs of comma, semicolon, and
 /// ASCII whitespace; every other character — notably `:` (k:v /
 /// `a:b:c` tuples), `.` (floats), `-` (negatives / hyphenated
 /// labels), `/` — stays inside the token. Each token is typed
@@ -151,7 +152,8 @@ mod tests {
 
     #[test]
     fn string_strips_on_comma_semicolon_whitespace_retaining_colons() {
-        // SRD-18f §3.2: separators are comma / semicolon / ws;
+        // comprehension_forms.md §3.1.3: separators are comma /
+        // semicolon / ws;
         // colons (and dots, dashes) stay in-token.
         let got = strip_string_tokens("a:1, b:2; c:3 d:4");
         assert_eq!(

@@ -1,19 +1,19 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Cardinality classes — spec §6.1.
+//! Cardinality classes (comprehension_forms.md §6.1).
 //!
 //! Six classes describe every comprehension's dispense count.
 //! Three are discrete (`Bounded`, `BoundedAtMost`, `Unbounded`);
 //! two are continuous-domain (`Continuous`, `ContinuousAtMost`);
 //! one is hybrid (`Hybrid`). The class propagates through every
-//! constructor per spec §6.1's table.
+//! constructor by §6.1's table.
 
 use serde::{Deserialize, Serialize};
 
 /// Cardinality of a comprehension's dispense stream.
 ///
-/// Six variants per spec §6.1:
+/// Six variants (comprehension_forms.md §6.1):
 ///
 /// - **Discrete classes** enumerate distinct tuples; the count
 ///   may be known exactly (`Bounded`), bounded above
@@ -177,9 +177,9 @@ impl ProductMeasure {
     }
 }
 
-/// Named continuous distribution. Closed enum per spec
-/// §10.7.5's "User-defined extensions" non-goal — new
-/// distributions land as coordinated additions.
+/// Named continuous distribution. A closed enum, per
+/// comprehension_forms.md §10.7.5's "User-defined extensions"
+/// non-goal: a new distribution is a coordinated addition to it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum MeasureName {
     /// The normal distribution.
@@ -278,7 +278,8 @@ impl MeasureName {
     }
 
     /// The measure a source-text name denotes, or `None` when the
-    /// name is not one of the closed set (§10.7.5): the caller reads
+    /// name is not one of the closed set (comprehension_forms.md
+    /// §10.7.5): the caller reads
     /// the text as something else, a generator call for one.
     pub fn from_text(name: &str) -> Option<Self> {
         [

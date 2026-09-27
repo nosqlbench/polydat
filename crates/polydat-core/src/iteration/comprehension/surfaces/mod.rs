@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Consumption surfaces — spec §9.5.
+//! Consumption surfaces — comprehension_forms.md §9.5.
 //!
 //! Three independent first-class consumption surfaces over a
 //! shared compiled IR:
@@ -16,7 +16,7 @@
 //!
 //! All three surfaces share the underlying `Program` via
 //! `Arc<Program>` but maintain independent dispense state per
-//! spec §9.5.2's independence contract:
+//! §9.5.2's independence contract:
 //!
 //! > Each call to `coordinate_stream` or
 //! > `scoped_kernel_stream` returns a fresh streamer with its

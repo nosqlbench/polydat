@@ -1,13 +1,13 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Immutable IR Program wrapper — spec §9.1.
+//! Immutable IR Program wrapper — comprehension_forms.md §9.1.
 //!
 //! `Program` is the public surface of the compiled IR. It's
 //! `#[non_exhaustive]` and accessible by value but cannot be
 //! mutated after construction: `ir::compile::compile` is the
-//! only path from AST to IR (the optimizer (§10) is a separate
-//! AST→AST pass callers may run first), and the resulting
+//! only path from AST to IR (the optimizer, §10, is the AST→AST
+//! pass the compile stage runs before it), and the resulting
 //! program is frozen.
 
 use serde::{Deserialize, Serialize};
@@ -17,8 +17,8 @@ use super::op::Op;
 /// An immutable IR program — a finite, ordered sequence of
 /// [`Op`]s ending in [`Op::Dispense`].
 ///
-/// `Program` is the load-bearing immutable public API per
-/// spec §9.1. `ir::compile::compile` is the only constructor;
+/// `Program` is the immutable public API of
+/// comprehension_forms.md §9.1. `ir::compile::compile` is the only constructor;
 /// consumers read via `ops` and
 /// [`stack_depth`](Program::stack_depth).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

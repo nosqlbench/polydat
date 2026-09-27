@@ -1,13 +1,13 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Predicate analyzer entry point — spec §10.9.2.
+//! Predicate analyzer entry point — comprehension_forms.md §10.9.2.
 //!
 //! Single public function: [`analyze`]. Takes a predicate
 //! string + a coord set, dispatches through the §10.9.5
 //! pattern recognizers, and returns a [`PredicateInfo`].
 //!
-//! The analyzer's correctness contract per spec §10.9.4:
+//! The analyzer's correctness contract per §10.9.4:
 //!
 //! 1. **Sound.** Every assertion in the returned `PredicateInfo`
 //!    is true of the predicate.
@@ -28,13 +28,13 @@ use super::info::PredicateInfo;
 use super::recognizers;
 
 /// Analyze a predicate string in the context of a coordinate
-/// set. Returns a structured [`PredicateInfo`] consumable by
-/// the optimizer's R5 and the deferred R8 / R9 / R10 rules.
+/// set. Returns a structured [`PredicateInfo`], which the
+/// optimizer's R5 reads.
 ///
 /// The coord set's per-coord `CoordKind` short-circuits
-/// continuous-coord predicates to `Opaque(Continuous)` per
-/// spec §10.9 + F20 — continuous-coord predicate analysis is
-/// deliberately deferred.
+/// continuous-coord predicates to `Opaque(Continuous)`: predicates
+/// over continuous coordinates are opaque to the analyzer
+/// (comprehension_forms.md §14.2).
 pub fn analyze(predicate: &str, coords: &CoordSet) -> PredicateInfo {
     recognizers::recognize(predicate, coords)
 }

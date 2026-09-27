@@ -1,13 +1,13 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! `Shells` strategy — spec §3.6.
+//! `Shells` strategy — comprehension_forms.md §3.6.
 //!
 //! Emits multi-indices stratified by concentric shells around
 //! the lattice center, outermost first. A "shell" is the set
 //! of multi-indices at Chebyshev distance `d` from the center
 //! (max-norm). Discrete `Lattice` is the native shape;
-//! continuous rejected per spec §3.6 ("ill-defined without
+//! continuous rejected per §3.6 ("ill-defined without
 //! discretization parameter").
 //!
 //! Emission within a shell uses Lex order as tiebreak so the

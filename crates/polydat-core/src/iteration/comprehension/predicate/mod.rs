@@ -1,16 +1,16 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Filter predicates — spec §10.9: their evaluation and their
-//! analysis.
+//! Filter predicates — comprehension_forms.md §10.9: their
+//! evaluation (§10.9.1) and their analysis.
 //!
 //! A predicate is the text carried by
 //! [`crate::iteration::comprehension::ast::Comprehension::Filter`],
 //! parsed by [`parse_predicate`] with the language's one precedence
 //! table. [`CompiledPredicate`] evaluates it against a tuple on every
-//! path that filters. The analyzer produces [`PredicateInfo`] from the
-//! same tree for the optimizer's R5 (per-axis filter pushdown) and the
-//! deferred R8 / R9 / R10 rules.
+//! path that filters and decides whether it is total. The analyzer
+//! produces [`PredicateInfo`] from the same tree for the optimizer's
+//! R5 (per-axis filter pushdown).
 //!
 //! ## Module layout
 //!

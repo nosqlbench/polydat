@@ -1,17 +1,13 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! `Shuffle` strategy — spec §3.6.
+//! `Shuffle` strategy — comprehension_forms.md §3.6.
 //!
-//! Random permutation. PRNG seed captured at materialization
-//! per spec §3.6 — same comprehension instance produces the
-//! same shuffle on every dispense pass. Spec §9.5.2's
-//! independence contract has different `CoordinateStream`
-//! instances against the same comprehension get independent
-//! shuffles via a per-streamer seed.
-//!
-//! The seed here is a module constant plus the input length;
-//! per-streamer seeding is not implemented.
+//! Seeded random permutation. The PRNG state derives from the
+//! authored seed, or `DEFAULT_SEED` when none is authored, plus the
+//! input length, so every dispense pass and every streamer of one
+//! comprehension draws the same permutation: sibling streams dispense
+//! identical sequences (§9.5.2).
 //!
 //! ## References
 //!
@@ -28,7 +24,7 @@
 //! Accepts any non-`None` `IndexFn` including continuous: over a
 //! continuous or hybrid space it draws `n` codes, one 53-bit unit
 //! fraction per continuous axis, and the runtime's sampler carries
-//! each onto its axis's measure (spec §3.6, §10.2 R2).
+//! each onto its axis's measure (§3.6, §10.2 R2).
 
 use super::{
     MultiIndex, Selection, Strategy, index_fn_dim, index_fn_size, index_fn_supports_lookup,
@@ -41,8 +37,7 @@ use crate::iteration::comprehension::strategy::StrategyName;
 pub struct Shuffle;
 
 /// Seed base when none is authored; the input length is added per
-/// call. Per-streamer
-/// seeding is not implemented.
+/// call.
 const DEFAULT_SEED: u64 = 0xD1CE_5EED_C0FF_EE42;
 
 impl Strategy for Shuffle {
@@ -329,7 +324,8 @@ mod tests {
     }
 
     /// Over a continuous or hybrid space the truncation is the number
-    /// of draws (spec §3.6: "n PRNG draws from the measure"), and a
+    /// of draws (comprehension_forms.md §3.6: "n PRNG draws from the
+    /// measure"), and a
     /// continuous code is a 53-bit fraction of the unit interval.
     #[test]
     fn continuous_draws_are_counted_by_the_truncation() {

@@ -31,14 +31,11 @@
 //!   Vec<Value>              ← what the executor enumerates
 //! ```
 //!
-//! ## Where this used to live
+//! ## Ownership
 //!
-//! Pre-Phase-C this code lived in the host. The lift was driven by
-//! the principle that Polydat is the canonical owner of what a
-//! comprehension *means*, including how its spec strings resolve
-//! (see `crates/polydat/docs/design/comprehension_forms.md`).
-//! The host now consumes this
-//! API rather than implementing it.
+//! Polydat owns what a comprehension *means*, including how its
+//! source strings resolve (comprehension_forms.md §3.1). A host
+//! consumes this API rather than implementing it.
 
 use std::collections::HashMap;
 
@@ -92,23 +89,15 @@ fn evaluate_spec_internal(spec_text: &str, kernel: &dyn Lookup) -> Result<Vec<Va
     if let Some(values) = try_eval_all_cursor(spec_text, kernel)? {
         return Ok(values);
     }
-    // SRD-18f Stage 2 (non-breaking core): a *bare identifier*
-    // source is a direct wire/param/const reference. Resolve it
+    // A *bare identifier* source is a direct wire/param/const
+    // reference (comprehension_forms.md §3.1.4). It resolves
     // against the kernel chain — the same `kernel.lookup` the
-    // `{name}` interpolation path uses — and peel/wrap its value
-    // via `iteration_interior`. This makes `mnc in mnc_values`
-    // work identically to `mnc in {mnc_values}`.
-    //
-    // If the bare name does NOT resolve, fall through to the
-    // legacy path, which treats it as a label string
-    // (`y in z` → ["z"]). The strict "unresolved bare ident is
-    // an error" enforcement (SRD-18f §6) is deferred to the
-    // breaking part of Stage 2 along with its test/workload
-    // migration.
+    // `{name}` interpolation path uses — and its value is peeled or
+    // wrapped by `iteration_interior`, so `mnc in mnc_values` works
+    // identically to `mnc in {mnc_values}`. A bare name that does
+    // not resolve is a hard error with a quoting hint; it is never
+    // bound as its own name-string.
     if is_single_bare_ident(spec_text) {
-        // SRD-18f §6: a bare identifier source is a reference. It
-        // resolves against the kernel, or it's a hard error — it
-        // is NOT silently bound as its own name-string.
         return match kernel.lookup(spec_text.trim()) {
             Some(v) => Ok(
                 match crate::iteration::comprehension::source_values::iteration_interior(&v) {
@@ -128,53 +117,52 @@ fn evaluate_spec_internal(spec_text: &str, kernel: &dyn Lookup) -> Result<Vec<Va
     let interpolated = crate::kernel::interp::interpolate_with_lookup(spec_text, |name| {
         kernel.lookup(name).map(|v| v.to_display_string())
     })?;
-    // SRD-18f Stage 2: list comprehension sugar `[e1, e2…, e3]`.
-    // Resolved after interpolation so `{name}` placeholders inside
+    // List comprehension sugar `[e1, e2…, e3]`
+    // (comprehension_forms.md §3.1.3). Resolved after interpolation so `{name}` placeholders inside
     // elements expand first; before the const-eval fallthrough so
     // bracket structure isn't misparsed as an array-literal expr.
     if let Some(values) = try_eval_bracket_list(&interpolated, kernel)? {
         return Ok(values);
     }
-    // SRD-18c Layer 2 / SRD-18e Push 3: range operator
-    // (`a..b`, `a..=b`, `a..b..s`, `a..=b..s`). Bounds and
-    // step are Polydat const expressions evaluated at this
+    // Range operator (`a..b`, `a..=b`, `a..b..s`, `a..=b..s`;
+    // comprehension_forms.md §3.1, polydat_grammar.md §16.2). Bounds
+    // and step are Polydat const expressions evaluated at this
     // (post-interpolation) point.
     if let Some(values) = try_eval_range(&interpolated, kernel.ledger())? {
         return Ok(values);
     }
-    // SRD-18c Layer 3 / SRD-18e Push 7: named generators.
+    // Named generators (comprehension_forms.md §3.1).
     if let Some(values) = try_eval_generator(&interpolated)? {
         return Ok(values);
     }
-    // SRD-18c Layer 5 / SRD-18e Push 9: set operators on lists.
+    // Set operators on lists (comprehension_forms.md §3.1).
     if let Some(values) = try_eval_setop(&interpolated, kernel)? {
         return Ok(values);
     }
-    // SRD-18c §"Sequencer-style expansions" / Push 8: LUT
-    // facility (bucket / concat_seq / interval_seq).
+    // Sequencer expansions (bucket / concat_seq / interval_seq;
+    // comprehension_forms.md §3.1).
     if let Some(values) = try_eval_sequencer(&interpolated, kernel)? {
         return Ok(values);
     }
-    // SRD 71: kernel-aware partition sources — `subdivide(outer,
-    // n)` where `outer` is a partition iter-var bound by an
-    // enclosing `for:` clause.
+    // Kernel-aware partition sources — `subdivide(outer, n)` where
+    // `outer` is a partition iter-var bound by an enclosing clause
+    // (cursor_partitions.md §7.1).
     if let Some(values) = try_eval_partition_call(&interpolated, kernel)? {
         return Ok(values);
     }
-    // SRD 71: `<param>.partitions` comprehension-position desugaring —
-    // resolve the param's spec string and expand it into its PartitionList.
+    // `<param>.partitions` in comprehension position resolves the
+    // param's spec string and expands it into its PartitionList
+    // (cursor_partitions.md §7.1).
     if let Some(values) = try_eval_param_partitions(&interpolated, kernel)? {
         return Ok(values);
     }
     match crate::dsl::compile::eval_const_expr_for(&interpolated, kernel.ledger()) {
-        // SRD-18f relaxed source resolution: a resolved value is
-        // peeled one level if it has an iteration interior
-        // (native vector, JSON array, PartitionList per SRD-71,
-        // or a string → its comprehension tokens), else wrapped
-        // as a singleton. `iteration_interior` is the single
-        // canonical place that decision is made — this replaces
-        // the former per-type arms (Str→comma-split,
-        // PartitionList→unpack, other→wrap).
+        // Relaxed source resolution (comprehension_forms.md §3.1.2):
+        // a resolved value is peeled one level if it has an iteration
+        // interior (native vector, JSON array, PartitionList, or a
+        // string → its comprehension tokens), else wrapped as a
+        // singleton. `iteration_interior` is the single place that
+        // decision is made.
         Ok(v) => Ok(
             match crate::iteration::comprehension::source_values::iteration_interior(&v) {
                 Some(interior) => interior,
@@ -190,20 +178,13 @@ fn evaluate_spec_internal(spec_text: &str, kernel: &dyn Lookup) -> Result<Vec<Va
         // *meant* to evaluate; if it failed, we MUST surface the
         // failure rather than silently splitting and
         // handing the workload an iter-var like
-        // `matching_profiles('x'` (truncated). The latter
-        // produces malformed downstream output six steps removed
-        // from the actual fault — a Push-2 kind of bad UX.
+        // `matching_profiles('x'` (truncated), which would produce
+        // malformed downstream output far removed from the fault.
         Err(eval_err) => {
-            // NOTE: SRD-18f §6 specifies that a single bare
-            // identifier that fails to evaluate is an *unresolved
-            // reference* and should be a hard error (with a
-            // quoting hint), not silently bound as its own
-            // name-string. That enforcement is **Stage 2** (the
-            // bare-word→reference change) because it flips every
-            // existing bare-label source (`y in z` meaning the
-            // string "z") and requires migrating those to quoted
-            // form. Until Stage 2, the legacy literal-list
-            // fallback below preserves bare-label-as-string.
+            // A single bare identifier never reaches here: it is a
+            // reference, resolved or refused above. An unbracketed
+            // bare label list (`a, b, c`) keeps string-token striping
+            // (comprehension_forms.md §3.1.4).
             if looks_like_literal_list(&interpolated) {
                 // A bare unquoted token list strips on the same
                 // separator rule as a string comprehension.
@@ -226,23 +207,7 @@ fn evaluate_spec_internal(spec_text: &str, kernel: &dyn Lookup) -> Result<Vec<Va
     }
 }
 
-/// Heuristic: does this interpolated spec text look like a
-/// "literal list" (comma-separated literals like `1, 10, 100` or
-/// `foo, bar, baz`) rather than an expression?
-///
-/// True only when no character suggests an expression: no
-/// parentheses, no operators, no string-quote characters that
-/// would imply a function-call shape. Whitespace, digits,
-/// alphanumerics, dots (for floats), minus (for negatives), and
-/// commas (the separator) are all OK.
-///
-/// The point of this gate is to keep "list" specs (`for: "k in 1,
-/// 10, 100"`) working through the literal-list fallback while
-/// still surfacing real evaluation failures for expression specs
-/// like `matching_profiles('x', 'y')`. A wrong call on a
-/// borderline case here is cheap — it just produces a clearer
-/// error from the eval layer instead of swallowed garbage.
-/// SRD-18f Stage 2 — list comprehension sugar. Evaluate a
+/// List comprehension sugar (comprehension_forms.md §3.1.3). Evaluate a
 /// bracketed source `[e1, e2…, e3]` to its bound sequence,
 /// peeling exactly one level:
 ///   - a plain element contributes its value, whole (no peel);
@@ -303,8 +268,8 @@ fn try_eval_bracket_list(text: &str, kernel: &dyn Lookup) -> Result<Option<Vec<V
 /// peeling). A bare identifier is a wire/param/const reference
 /// resolved against the kernel; anything else (quoted string,
 /// number, bool, expression) goes through the const evaluator.
-/// SRD-18f §6: an unresolved bare reference is a hard error with
-/// a quoting hint, not a silent literal-name binding.
+/// An unresolved bare reference is a hard error with a quoting hint,
+/// not a silent literal-name binding (comprehension_forms.md §3.1.4).
 fn eval_element_value(expr: &str, kernel: &dyn Lookup) -> Result<Value, String> {
     let e = expr.trim();
     if is_single_bare_ident(e) {
@@ -323,7 +288,8 @@ fn eval_element_value(expr: &str, kernel: &dyn Lookup) -> Result<Value, String> 
 /// True when `text` is exactly one bare identifier
 /// (`[A-Za-z_][A-Za-z0-9_]*`), excluding `true`/`false`. A bare
 /// identifier source is a direct reference resolved against the
-/// kernel (SRD-18f Stage 2); the keyword literals are values.
+/// kernel (comprehension_forms.md §3.1.4); the keyword literals are
+/// values.
 fn is_single_bare_ident(text: &str) -> bool {
     let t = text.trim();
     if t == "true" || t == "false" {
@@ -337,6 +303,21 @@ fn is_single_bare_ident(text: &str) -> bool {
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// Heuristic: does this interpolated spec text look like a
+/// "literal list" (comma-separated literals like `1, 10, 100` or
+/// `foo, bar, baz`) rather than an expression?
+///
+/// True only when no character suggests an expression: no
+/// parentheses, no operators, no string-quote characters that
+/// would imply a function-call shape. Whitespace, digits,
+/// alphanumerics, dots (for floats), minus (for negatives), and
+/// commas (the separator) are all OK.
+///
+/// The gate keeps list sources (`k in 1, 10, 100`) working through
+/// the literal-list fallback while still surfacing real evaluation
+/// failures for expression sources like `matching_profiles('x',
+/// 'y')`. A wrong call on a borderline case is cheap: it produces a
+/// clearer error from the eval layer instead of swallowed garbage.
 fn looks_like_literal_list(text: &str) -> bool {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -392,15 +373,13 @@ pub fn pre_evaluate_clause(
     if let Some(values) = try_eval_all_cursor(spec_text, parent_kernel)? {
         return Ok(values);
     }
-    // SRD-18f Stage 2: a bare identifier source is a direct
-    // reference. Resolve it at synthesis the same way the runtime
-    // `evaluate_spec` does — against a prior iter-var probe, then
-    // the parent kernel, then the workload params — so a dependent
-    // clause (e.g. `limit in {k_{k}_limits}`) sees the *typed*
-    // prior value and infers the right extern type. Without this,
-    // `k in k_values` left `k`'s probe as the literal name and the
-    // dependent `limit` defaulted to String (the query_sweep bug
-    // the scenario-synthesis coverage gap was hiding).
+    // A bare identifier source is a direct reference
+    // (comprehension_forms.md §3.1.4). At synthesis it resolves
+    // against a prior iter-var probe, then the parent kernel, then
+    // the workload params, so a dependent clause (e.g. `limit in
+    // {k_{k}_limits}`) sees the *typed* prior value and infers the
+    // right extern type, rather than the literal name typed as a
+    // string.
     if is_single_bare_ident(spec_text) {
         let name = spec_text.trim();
         if let Some(pv) = probes.get(name) {
@@ -435,12 +414,12 @@ pub fn pre_evaluate_clause(
             .or_else(|| workload_params.get(name).cloned())
     })?;
 
-    // Push 3: range operator on the pre-evaluation path too.
+    // The range operator, on the pre-evaluation path too.
     if let Some(values) = try_eval_range(&interpolated, parent_kernel.ledger())? {
         return Ok(values);
     }
-    // Push 7 / 9 / 8 — same generator / set-op / sequencer
-    // shortcuts the runtime path uses.
+    // The same generator, set-operator, and sequencer forms the
+    // runtime path recognizes.
     if let Some(values) = try_eval_generator(&interpolated)? {
         return Ok(values);
     }
@@ -450,24 +429,24 @@ pub fn pre_evaluate_clause(
     if let Some(values) = try_eval_sequencer(&interpolated, parent_kernel)? {
         return Ok(values);
     }
-    // SRD 71: kernel-aware partition sources, same as the
-    // runtime path. At pre-evaluation the outer iter-var may
-    // not be installed yet; `try_eval_partition_call` returns a
-    // single placeholder partition in that case so iter-var
-    // type detection still lands on `ext`.
+    // Kernel-aware partition sources, as on the runtime path
+    // (cursor_partitions.md §7.1). At pre-evaluation the outer
+    // iter-var may not be installed yet; `try_eval_partition_call`
+    // then returns a single placeholder partition so iter-var type
+    // detection yields `ext`.
     if let Some(values) = try_eval_partition_call(&interpolated, parent_kernel)? {
         return Ok(values);
     }
-    // SRD 71: `<param>.partitions` comprehension-position desugaring (same
-    // rule as the runtime path; the param may already be installed here).
+    // `<param>.partitions` in comprehension position, by the same rule
+    // as the runtime path; the param may already be installed here.
     if let Some(values) = try_eval_param_partitions(&interpolated, parent_kernel)? {
         return Ok(values);
     }
     let value_str =
         match crate::dsl::compile::eval_const_expr_for(&interpolated, parent_kernel.ledger()) {
             Ok(Value::Str(s)) => s.to_string(),
-            // SRD 71: `<param>.partitions` and `partitions(spec, ...)`
-            // both evaluate to a `PartitionList` Ext value. Unpack
+            // `<param>.partitions` and `partitions(spec, ...)`
+            // (cursor_partitions.md §7.1) both evaluate to a `PartitionList` Ext value. Unpack
             // its entries into a vec of individual `Partition`
             // values so the for-clause iterates partition-by-
             // partition.
@@ -503,8 +482,8 @@ pub fn pre_evaluate_clause(
 }
 
 /// Parse a comma-separated text list, detecting each element's
-/// native type. SRD-18b's "native types as the general rule":
-/// `"1, 10"` → `[U64(1), U64(10)]`, `"1.5, 2.5"` → `[F64(...)]`,
+/// native type, as element types are inferred
+/// (polydat_grammar.md §16.3): `"1, 10"` → `[U64(1), U64(10)]`, `"1.5, 2.5"` → `[F64(...)]`,
 /// mixed → each element gets its own native type.
 pub fn parse_list_with_types(text: &str) -> Vec<Value> {
     text.split(',')
@@ -603,8 +582,8 @@ fn is_valid_ident(s: &str) -> bool {
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-/// SRD-18c Layer 2 / SRD-18e Push 3: recognise the range
-/// operator and expand it into a `Vec<Value>`.
+/// Recognise the range operator (comprehension_forms.md §3.1,
+/// polydat_grammar.md §16.2) and expand it into a `Vec<Value>`.
 ///
 /// Four shapes:
 /// - `a..b`         half-open with step 1
@@ -958,7 +937,7 @@ fn parse_num_arg(text: &str, what: &str) -> Result<f64, String> {
 }
 
 // ============================================================
-// SRD-18c Layer 3 / SRD-18e Push 7: named generators
+// Named generators (comprehension_forms.md §3.1)
 // ============================================================
 
 /// Recognise `fib(n)`, `pow2(n)`, `geometric(...)`, etc. and
@@ -1194,7 +1173,8 @@ fn generate_binomial(n: u64) -> Vec<Value> {
     out
 }
 
-/// SRD 71: kernel-aware partition comprehension sources.
+/// Kernel-aware partition comprehension sources
+/// (cursor_partitions.md §7.1).
 ///
 /// `subdivide(<ident>, n)` — resolve `<ident>` through the
 /// kernel's scope chain to a `Partition` (typically an iter-var
@@ -1259,8 +1239,8 @@ fn try_eval_partition_call(text: &str, kernel: &dyn Lookup) -> Result<Option<Vec
             let subs = crate::iteration::cursor_partition::subdivide_partition(&p, n)?;
             Ok(Some(subs.into_iter().map(Value::from_partition).collect()))
         }
-        // SRD-71 grammar-position desugaring of an explicit
-        // `partitions(spec, [extent])` source. The spec string is in a
+        // Desugaring of an explicit `partitions(spec, [extent])` source
+        // in comprehension position (cursor_partitions.md §3, §7.1). The spec string is in a
         // comprehension position, so it is parsed + resolved HERE, on the
         // Result path — a bad spec (over-sum list, bad recipe/order/window,
         // malformed tail) surfaces a clean comprehension error rather than the
@@ -1349,7 +1329,7 @@ fn try_eval_partition_call(text: &str, kernel: &dyn Lookup) -> Result<Option<Vec
     }
 }
 
-/// SRD-71 comprehension-position desugaring: a `<ident>.partitions`
+/// Comprehension-position desugaring (cursor_partitions.md §7.1): a `<ident>.partitions`
 /// source (the primary operator sweep flow, `for: "p in cursor.partitions"`).
 ///
 /// In comprehension position a *string* spec desugars per the partition
@@ -1369,7 +1349,7 @@ fn try_eval_partition_call(text: &str, kernel: &dyn Lookup) -> Result<Option<Vec
 /// Returns `Ok(None)` when `text` is not a `<ident>.partitions` form. When the
 /// ident does not resolve (a pre-evaluation probe before the value is
 /// installed), a single placeholder partition is returned so iter-var type
-/// detection still lands on `ext` — the same contract as
+/// detection yields `ext` — the same contract as
 /// [`try_eval_partition_call`].
 fn try_eval_param_partitions(
     text: &str,
@@ -1405,7 +1385,8 @@ fn try_eval_param_partitions(
                 .collect(),
         ));
     }
-    // Otherwise it must be a spec string — desugar it per the SRD-71 grammar.
+    // Otherwise it must be a spec string — desugar it per the partition
+    // spec language (cursor_partitions.md §3).
     let Value::Str(spec) = &value else {
         return Err(format!(
             "comprehension source `{ident}.partitions`: `{ident}` resolved to \
@@ -1427,7 +1408,8 @@ fn try_eval_param_partitions(
 /// desugaring forms (`<ident>.partitions` and `partitions("...")`): a bad
 /// spec surfaces a clean error labelled by `ctx` HERE — it never reaches the
 /// `partitions()` node's eval-time `panic!`. This is a grammar-position
-/// concern (SRD-71), so spec validation lives where the spec is recognized.
+/// concern (cursor_partitions.md §7.1), so spec validation lives where the
+/// spec is recognized.
 fn desugar_partition_spec(spec: &str, extent: u64, ctx: &str) -> Result<Vec<Value>, String> {
     let parsed = crate::iteration::cursor_partition::parse(spec)
         .map_err(|e| format!("{ctx}: bad spec `{spec}`: {e}"))?;
@@ -1471,7 +1453,7 @@ fn resolve_partition_spec_arg(arg: &str, kernel: &dyn Lookup) -> Result<String, 
 ///
 /// These yield *values*, not partitions; splitting a
 /// `Partition` into sub-partitions is `subdivide(p, n)` in the
-/// partition stdlib (SRD 71).
+/// partition stdlib (cursor_partitions.md §7.3).
 fn generate_linear_points(
     start: f64,
     end: f64,
@@ -1515,7 +1497,7 @@ fn generate_log_steps(start: f64, end: f64, n: u64) -> Result<Vec<Value>, String
 }
 
 // ============================================================
-// SRD-18c Layer 5 / SRD-18e Push 9: set operators
+// Set operators (comprehension_forms.md §3.1)
 // ============================================================
 
 /// Recognise `concat(...)`, `unique(...)`, etc. Each set op
@@ -1655,8 +1637,8 @@ fn try_eval_setop(text: &str, kernel: &dyn Lookup) -> Result<Option<Vec<Value>>,
 }
 
 // ============================================================
-// SRD-18c §"Sequencer-style expansions" / Push 8: bucket /
-// concat_seq / interval_seq — LUT facility reusing the
+// Sequencer expansions (comprehension_forms.md §3.1): bucket /
+// concat_seq / interval_seq, a lookup-table facility reusing the
 // op-sequencing algorithms.
 // ============================================================
 
@@ -2096,9 +2078,8 @@ mod tests {
         // pipeline tries to evaluate it as a regular GK
         // expression. There's no registered function named
         // `all`, so eval fails and the failure is propagated as
-        // a clean clause-level error (the legacy silent
-        // literal-list fallback masked this kind of typo six
-        // layers downstream).
+        // a clean clause-level error rather than split into a
+        // literal list.
         let kernel = crate::dsl::compile::compile_polydat_interpreter(
             "const __cursor_extent_row_start := 0\n\
              const __cursor_extent_row_end := 5\n",
@@ -2119,27 +2100,16 @@ mod tests {
 
     #[test]
     fn missing_dataset_surface_as_clean_error_not_garbage() {
-        // Regression: workload runs on a system whose
-        // vectordata catalog doesn't have the requested
-        // dataset. The spec
+        // A workload runs on a system whose vectordata catalog
+        // doesn't have the requested dataset. The source
         //   `profile in matching_profiles('nonexistent_dataset_xyz', 'label_')`
-        // must produce a clean clause-level error naming the
-        // resolution failure — NOT a "garbage" iter-var like
+        // produces a clean clause-level error naming the
+        // resolution failure, never a garbage iter-var like
         // `matching_profiles('nonexistent_dataset_xyz'`
-        // (truncated at the first comma) that flows downstream
-        // into malformed CQL six layers later.
-        //
-        // Three failure layers used to compound here:
-        //   1. `dataset_group_open` returned `Value::None` on
-        //      catalog miss.
-        //   2. `handle_of(&Value::None)` panicked with
-        //      "expected Handle, got U64" — opaque.
-        //   3. `evaluate_spec` swallowed the eval error and
-        //      fell through to splitting the literal text on
-        //      commas.
-        // The user-visible result was a CQL parser error from a
-        // malformed `DROP INDEX`. After this fix every layer
-        // propagates an actionable diagnostic.
+        // (truncated at the first comma) that would flow
+        // downstream into malformed output. Every layer on the
+        // way (the dataset open, the handle read, and
+        // `evaluate_spec`) propagates an actionable diagnostic.
         let kernel =
             crate::dsl::compile::compile_polydat_interpreter("const unrelated := 1\n").unwrap();
         let result = evaluate_spec(
@@ -2262,9 +2232,9 @@ mod tests {
 
     #[test]
     fn evaluate_spec_bare_ident_resolves_like_braced() {
-        // SRD-18f Stage 2: a bare identifier source is a direct
-        // wire/param reference — resolves identically to the
-        // braced `{name}` interpolation form.
+        // A bare identifier source is a direct wire/param reference
+        // (comprehension_forms.md §3.1.4) and resolves identically to
+        // the braced `{name}` interpolation form.
         let kernel =
             crate::dsl::compile::compile_polydat_interpreter("const k_values := \"1, 10, 100\"\n")
                 .unwrap();
@@ -2276,8 +2246,8 @@ mod tests {
 
     #[test]
     fn evaluate_spec_unresolved_bare_is_error_with_quoting_hint() {
-        // SRD-18f §6: a bare identifier source that doesn't
-        // resolve is a hard error (not silently bound as its own
+        // A bare identifier source that doesn't resolve is a hard
+        // error (comprehension_forms.md §3.1.4) (not silently bound as its own
         // name-string), and the message points at the fix.
         let kernel = crate::dsl::compile::compile_polydat_interpreter("\n").unwrap();
         let err = evaluate_spec("nonexistent", &kernel)
@@ -2317,7 +2287,7 @@ mod tests {
         );
     }
 
-    // ── SRD-71: partition-list unpacking ─────────────────────
+    // ── Partition-list unpacking (cursor_partitions.md §7.1) ──
 
     #[test]
     fn evaluate_spec_unpacks_partition_list_into_partition_values() {
@@ -2392,7 +2362,7 @@ mod tests {
         assert_eq!(value_to_polydat_type_name(&v), "ext");
     }
 
-    // ── SRD-18c Layer 2 / SRD-18e Push 3: range operator ──
+    // ── Range operator ──
 
     fn empty_kernel() -> PolydatKernel {
         crate::dsl::compile::compile_polydat_interpreter("\n").unwrap()
@@ -2493,8 +2463,8 @@ mod tests {
 
     #[test]
     fn range_with_si_suffix_bounds() {
-        // Push 4 SI suffixes meet Push 3 ranges — full
-        // composition.
+        // SI suffixes (polydat_grammar.md §2.3) compose with range
+        // bounds.
         let v = evaluate_spec("1K..1K..200", &empty_kernel()).unwrap();
         assert!(v.is_empty(), "1K..1K with positive step → empty");
 
@@ -2567,7 +2537,7 @@ mod tests {
         );
     }
 
-    // ── SRD-18c Layer 3 / SRD-18e Push 7: named generators ──
+    // ── Named generators ──
 
     #[test]
     fn fib_n_first_eight() {
@@ -2736,7 +2706,7 @@ mod tests {
         assert!(err.contains("must be positive"), "{err}");
     }
 
-    // ── SRD-18c Layer 5 / SRD-18e Push 9: set operators ──
+    // ── Set operators ──
 
     #[test]
     fn concat_two_ranges() {
@@ -2857,7 +2827,7 @@ mod tests {
         assert_eq!(v[8], Value::U64(101));
     }
 
-    // ── SRD-18c §"Sequencer-style expansions" / Push 8 ──
+    // ── Sequencer expansions ──
 
     #[test]
     fn bucket_round_robin_3_1_2() {

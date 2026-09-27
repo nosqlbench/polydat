@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! R0a — identity elimination (spec §4.2 I1–I5).
+//! R0a — identity elimination (comprehension_forms.md §4.2 I1–I5).
 //!
 //! Five identity rewrites:
 //!

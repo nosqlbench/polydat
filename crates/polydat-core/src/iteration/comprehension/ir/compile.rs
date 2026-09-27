@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! AST → IR compiler — spec §9.1.
+//! AST → IR compiler — comprehension_forms.md §9.1.
 //!
 //! Bottom-up tree walk: each AST node emits its children's IR
 //! sequences in left-to-right order, then its own operator(s).
@@ -12,8 +12,9 @@
 //! `order(Lex, _)` compiles to `Op::OrderStreaming` (R1). A
 //! non-`Lex` order compiles to one `Op::OrderMaterialize` holding
 //! its input, which the interpreter evaluates as a traversal does:
-//! R2 over an index-addressable input, sampling over a continuous
-//! one.
+//! R2 over an index-addressable input, the survivors' ranking over a
+//! filter, sampling over a continuous space. No IR is emitted for
+//! that input.
 
 use crate::iteration::comprehension::ast::Comprehension;
 use crate::iteration::comprehension::metadata::cycle_operands;
@@ -25,10 +26,10 @@ use super::program::Program;
 /// Compile an optimized AST to a `Program`. The result is
 /// ready for execution by [`super::interpreter::interpret`].
 ///
-/// Per spec §9.4 + §10.6 the input AST should have already
-/// been validated (§5) and optimized (§10). Compiling an
-/// un-optimized AST is well-defined but may produce
-/// catastrophic working sets (spec §10's motivating example).
+/// Per comprehension_forms.md §9.4 and §10.6 the input AST has
+/// already been validated as written (§5) and then optimized (§10).
+/// Compiling an unoptimized AST is well-defined but may produce
+/// catastrophic working sets (§10's motivating example).
 pub fn compile(ast: &Comprehension) -> Program {
     let mut ops = Vec::new();
     emit(ast, &mut ops);

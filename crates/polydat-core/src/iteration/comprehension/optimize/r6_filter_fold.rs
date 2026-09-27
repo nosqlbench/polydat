@@ -1,13 +1,15 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! R6 — chained filter folding (spec §7.2 F1).
+//! R6 — chained filter folding (comprehension_forms.md §7.2 F1).
 //!
 //! `filter(filter(c, p), q) → filter(c, p && q)`
 //!
 //! One predicate evaluation per tuple instead of two. The
 //! folded predicate is the conjunction of the original two;
-//! parentheses preserve precedence.
+//! parentheses preserve precedence, and since `&&` stops at the
+//! first false operand (§10.9.1), the fold tests `q` on exactly the
+//! tuples the chain did.
 
 use crate::iteration::comprehension::ast::Comprehension;
 

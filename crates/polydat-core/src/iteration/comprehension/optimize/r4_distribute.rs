@@ -1,22 +1,24 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! R4 — filter distributes over union (spec §7.3 D1).
+//! R4 — filter distributes over union (comprehension_forms.md §7.3
+//! D1).
 //!
 //! `filter(union(a, b, ...), p) → union(filter(a, p), filter(b, p), ...)`
 //!
 //! Each child becomes its own filtered sub-pipeline; downstream
 //! barriers (if any) see smaller inputs.
 //!
-//! Unconditionally safe because V2 requires identical tuple
-//! shape across union children — every name `p` could
-//! reference is bound by every child, so there's no
-//! "this predicate makes sense against child a but not child
-//! b" case.
+//! The predicate is safe in every child because V2 requires
+//! identical tuple shape across union children: every name `p`
+//! could reference is bound by every child.
 //!
 //! Guard:
 //! - Outer is `Filter`.
 //! - Child is `Union`.
+//! - No non-`Lex` order ranks the filter's survivors (§5 V5); the
+//!   optimizer's walker enforces this, since distributing the filter
+//!   would reshape the input whose positions that order ranks.
 
 use crate::iteration::comprehension::ast::Comprehension;
 

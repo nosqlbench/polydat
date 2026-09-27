@@ -62,7 +62,7 @@ use serde::{Deserialize, Serialize};
 /// binds successive values from one source list.
 /// `Clause::new("k", "1..10")` is the construction shortcut.
 ///
-/// **Parallel clause** (SRD-18c Layer 7a): multiple
+/// **Parallel clause** (comprehension_forms.md §3.3, §8.1): multiple
 /// variables advance in lockstep ("zip") from multiple
 /// source expressions. `Clause::parallel(["x", "y"],
 /// ["1..10", "100..1000..100"])` builds the parallel form.
@@ -102,7 +102,7 @@ pub enum ClauseSource {
     },
 }
 
-/// Length-policy for parallel-iter clauses (SRD-18c Layer 7a).
+/// Length-policy for parallel-iter clauses (comprehension_forms.md §3.3).
 ///
 /// Authored as the RHS form: bare parens `(e1, e2)` = strict;
 /// `zip_truncate(e1, e2)` = truncate; `zip_cycle(e1, e2)` =
@@ -134,7 +134,7 @@ impl Clause {
         }
     }
 
-    /// Parallel-iter construction (SRD-18c Layer 7a):
+    /// Parallel-iter construction (comprehension_forms.md §3.3):
     /// `Clause::parallel(["x", "y"], ["1..10", "fib(8)"])`.
     /// Defaults to [`ZipMode::Strict`] — length mismatch
     /// across the parallel group is an iteration-time error.
@@ -197,35 +197,28 @@ impl Clause {
         }
     }
 
-    /// True for parallel-iter clauses (Layer 7a).
+    /// True for parallel-iter clauses.
     pub fn is_parallel(&self) -> bool {
         matches!(self.source, ClauseSource::Parallel { .. })
     }
 
-    /// Backward-compat accessor: returns the first variable
-    /// name regardless of clause shape. Single-var clauses
-    /// have `vars.len() == 1`; parallel clauses have ≥ 2.
-    /// Most existing callers operate on single-var clauses
-    /// and treat parallel forms as either-or — those should
-    /// migrate to `single_var()` for explicit handling.
+    /// The first variable name, whatever the clause's shape.
+    /// Single-var clauses have `vars.len() == 1`; parallel
+    /// clauses have ≥ 2.
     pub fn first_var(&self) -> &str {
         &self.vars[0]
     }
 
-    /// Convenience for single-var clauses (the historical
-    /// common case): the lone variable name. For parallel
-    /// clauses, returns the first variable's name. Most
-    /// existing call sites treat clauses as single-var; this
-    /// keeps them working with a one-line `c.var` →
-    /// `c.var()` migration.
+    /// Convenience for single-var clauses (the common case): the
+    /// lone variable name. For parallel clauses, returns the first
+    /// variable's name.
     pub fn var(&self) -> &str {
         &self.vars[0]
     }
 
     /// Convenience for single-source clauses: the lone
     /// source-expression text. For parallel clauses, returns
-    /// the first expression — single-var-assuming callers
-    /// see the same shape they did before Layer 7a.
+    /// the first expression.
     pub fn expr(&self) -> &str {
         match &self.source {
             ClauseSource::Single(s) => s,
@@ -241,10 +234,7 @@ impl Clause {
     ///   `Parallel { exprs: [e0, e1, ...], .. }`): returns
     ///   `[(v0, e0), (v1, e1), ...]`.
     ///
-    /// One canonical place to expand the var↔expr mapping —
-    /// previously open-coded at three callers (synthesis
-    /// representative-vars expansion, runner canonical-input
-    /// declaration, runner param-ref scan).
+    /// The one place that expands the var↔expr mapping.
     pub fn scalar_bindings(&self) -> Vec<(&str, &str)> {
         match &self.source {
             ClauseSource::Single(s) => self.vars.iter().map(|v| (v.as_str(), s.as_str())).collect(),
@@ -361,7 +351,7 @@ impl std::ops::Deref for Subspace {
     }
 }
 
-/// Traversal order for emitted tuples. See SRD-18d.
+/// Traversal order for emitted tuples (comprehension_forms.md §3.6).
 ///
 /// Default emission is lexicographic with rightmost clause
 /// varying fastest — equivalent to `Lex { count: None }`. The
@@ -538,7 +528,7 @@ impl Comprehension {
     }
 
     /// Attach a traversal order, returning `self` for builder
-    /// chaining. See [`TraversalOrder`] and SRD-18d.
+    /// chaining. See [`TraversalOrder`] and comprehension_forms.md §3.6.
     pub fn with_order(mut self, order: TraversalOrder) -> Self {
         self.order = Some(order);
         self
@@ -678,9 +668,6 @@ impl Comprehension {
     }
 }
 
-/// Order/mode compatibility check used by
-/// [`Comprehension::validate`]. SRD-18e §"Union mode +
-/// non-lex orderings" specifies the rule: every
 /// Canonical text rendering of a comprehension:
 /// `<clauses> [where <filter>] [order <spec>]`.
 ///

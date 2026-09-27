@@ -5,10 +5,8 @@
 //! source expression (e.g. `"1..10"`, `"[a, b, c]"`,
 //! `"fib(8)"`) into a typed [`Source`] value.
 //!
-//! Polydat owns the source-string grammar per the audit
-//! resolution + this design pass: SRD-18c covers the parser-
-//! layer surface conceptually, but the actual parsing lives
-//! here so all polydat consumers share one canonical
+//! comprehension_forms.md §3.1 specifies the source forms, and
+//! the parsing lives here so every polydat consumer shares one
 //! source-grammar implementation.
 //!
 //! Recognized forms:
@@ -57,7 +55,7 @@ pub fn parse_source(text: &str) -> Result<Source, SourceParseError> {
         });
     }
 
-    // SRD-18f string comprehension: a wholly-quoted string in
+    // String comprehension (comprehension_forms.md §3.1.3): a wholly-quoted string in
     // source position. Quote-kind selects the iteration interior:
     //   - double `"…"` → iterable: token-strip (comma/semicolon/
     //     whitespace; colons etc. retained) into a literal list.
@@ -80,7 +78,7 @@ pub fn parse_source(text: &str) -> Result<Source, SourceParseError> {
         });
     }
 
-    // List comprehension sugar `[…]` (SRD-18f Stage 2).
+    // List comprehension sugar `[…]` (comprehension_forms.md §3.1.3, §3.1.4).
     //   - Pure-literal list (numbers / bools / quoted strings,
     //     no spread, no bare references) → `Source::Literal`,
     //     baked at parse time with a static cardinality (the
@@ -101,7 +99,8 @@ pub fn parse_source(text: &str) -> Result<Source, SourceParseError> {
         });
     }
 
-    // A named continuous measure (§3, §10.7.5): `normal(0, 1)`, and
+    // A named continuous measure (comprehension_forms.md §3.1,
+    // §10.7.5): `normal(0, 1)`, and
     // `normal(0, 1) on 0.0..1.0` for the measure restricted to an
     // interval. Before the range and call branches, which would read
     // the interval alone or take the call for a generator.
@@ -123,19 +122,17 @@ pub fn parse_source(text: &str) -> Result<Source, SourceParseError> {
     }
 
     // Bare scalar literal: `10`, `"hello"`, `true`, `3.14` →
-    // single-element Literal. This matches the legacy
-    // grammar's `k in 10` shape, where the RHS is a single
-    // literal value (the comprehension dispenses exactly one
-    // tuple).
+    // single-element Literal: `k in 10` dispenses exactly one
+    // tuple.
     if let Some(value) = try_parse_bare_scalar(trimmed) {
         return Ok(Source::Literal {
             values: vec![value],
         });
     }
 
-    // Bare comma-separated list — the legacy grammar accepts
-    // `k in 1,2,3` and `y in a,b,c` without brackets. Treat
-    // it as a Literal list. The check is conservative:
+    // Bare comma-separated list: `k in 1,2,3` and `y in a,b,c`
+    // without brackets are a Literal list (the bare label list of
+    // comprehension_forms.md §3.1.4). The check is conservative:
     // require a top-level comma and that no element contains
     // syntax that would suggest a more complex expression
     // (parens, brackets, braces, operators).
@@ -143,13 +140,11 @@ pub fn parse_source(text: &str) -> Result<Source, SourceParseError> {
         return parse_literal_list(trimmed);
     }
 
-    // Fallback: treat as a Generator expression. The legacy
-    // grammar accepts arbitrary expression text (e.g.
-    // `pre_{outer}`, `mod_in(cycle, p)`, `range(0, {n})`)
-    // that the runtime evaluator resolves via the Polydat Kernel
-    // chain. The algebra-layer typing for these is generator
-    // (cardinality_hint=None); the bridge back to legacy
-    // round-trips them verbatim.
+    // Fallback: a Generator expression. Any other expression text
+    // (e.g. `pre_{outer}`, `mod_in(cycle, p)`, `range(0, {n})`) is
+    // resolved by the runtime evaluator via the Polydat Kernel
+    // chain; its cardinality is unknown here
+    // (cardinality_hint=None), and it renders back verbatim.
     Ok(Source::Generator {
         expr: trimmed.to_string(),
         cardinality_hint: None,
@@ -253,10 +248,10 @@ fn split_on_keyword<'a>(text: &'a str, keyword: &str) -> Option<(&'a str, &'a st
     None
 }
 
-/// Conservative bare-comma-list detector. The legacy form
+/// Conservative bare-comma-list detector. The form
 /// `k in 1,2,3` (no brackets) is a literal list; this matches
 /// it without misclassifying expression-like text. Same shape
-/// as the legacy `looks_like_literal_list` in
+/// as `looks_like_literal_list` in
 /// `polydat::iteration::comprehension::eval`.
 fn looks_like_bare_value_list(text: &str) -> bool {
     !text.chars().any(|c| {
@@ -327,8 +322,8 @@ fn parse_literal_list(inner: &str) -> Result<Source, SourceParseError> {
 /// (integer, float, bool, or quoted string) and there is no
 /// spread (`…`/`...`). Such lists bake to `Source::Literal` at
 /// parse time. A bare-identifier element (a reference) or a
-/// spread makes the list eval-time (`Source::Generator`).
-/// SRD-18f Stage 2.
+/// spread makes the list eval-time (`Source::Generator`)
+/// (comprehension_forms.md §3.1.4).
 fn bracket_is_pure_literal(inner: &str) -> bool {
     let elems: Vec<&str> = inner
         .split(',')
@@ -397,10 +392,10 @@ fn parse_range(text: &str, dotdot_idx: usize) -> Result<Source, SourceParseError
         (false, after)
     };
 
-    // Optional ` step N` suffix OR legacy three-segment form
+    // Optional ` step N` suffix or the three-segment form
     // `..N` (e.g. `1..10..2`, `1..=10..2`). Both are step
-    // suffixes; the legacy form predates the keyword. Check
-    // ` step ` first since it's the documented form.
+    // suffixes. Check ` step ` first since it's the documented
+    // form.
     let (rhs, step) = if let Some(step_pos) = after.find(" step ") {
         let rhs = after[..step_pos].trim();
         let step_str = after[step_pos + 6..].trim();
@@ -409,7 +404,7 @@ fn parse_range(text: &str, dotdot_idx: usize) -> Result<Source, SourceParseError
             .map_err(|_| SourceParseError::InvalidRange(text.to_string()))?;
         (rhs, step)
     } else if let Some(step_pos) = after.find("..") {
-        // Legacy `lo..hi..step` shape — the second `..` is
+        // The `lo..hi..step` shape: the second `..` is
         // the step separator.
         let rhs = after[..step_pos].trim();
         let step_str = after[step_pos + 2..].trim();
@@ -556,7 +551,7 @@ mod tests {
 
     #[test]
     fn double_quoted_source_is_string_comprehension_striped() {
-        // SRD-18f §3.2: double-quoted source → token-strip.
+        // comprehension_forms.md §3.1.3: double-quoted source → token-strip.
         let s = parse_source(r#""rerank_def, rerank_1x, rerank_2x""#).unwrap();
         match s {
             Source::Literal { values } => {
@@ -575,7 +570,7 @@ mod tests {
 
     #[test]
     fn single_quoted_source_is_atomic() {
-        // SRD-18f §3.2: single-quoted source → one whole element.
+        // comprehension_forms.md §3.1.3: single-quoted source → one whole element.
         let s = parse_source("'rerank_def, rerank_1x'").unwrap();
         match s {
             Source::Literal { values } => {
@@ -629,7 +624,7 @@ mod tests {
 
     #[test]
     fn bracket_bare_words_are_references_not_strings() {
-        // SRD-18f Stage 2: bare-word bracket elements are wire
+        // comprehension_forms.md §3.1.4: bare-word bracket elements are wire
         // *references*, not string literals — so the list defers
         // to a Generator (resolved at eval time) rather than
         // baking `["a","b","c"]`. To get string literals, quote
@@ -717,10 +712,9 @@ mod tests {
 
     #[test]
     fn unrecognized_source_falls_back_to_generator() {
-        // Previously: returned Err(Unrecognized). The legacy
-        // grammar accepts arbitrary expression text and the
-        // runtime evaluator resolves it via the Polydat Kernel
-        // chain, so unrecognized shapes pass through as a
+        // The source grammar accepts arbitrary expression text and
+        // the runtime evaluator resolves it via the Polydat Kernel
+        // chain, so an unrecognized shape passes through as a
         // Generator expression rather than failing the parse.
         let s = parse_source("totally nonsense").unwrap();
         match s {

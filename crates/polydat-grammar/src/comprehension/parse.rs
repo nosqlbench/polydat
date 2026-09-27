@@ -35,11 +35,10 @@ use super::clause_ast::{Clause, Comprehension, ShellOrigin, TraversalOrder, ZipM
 ///
 /// Two shapes are recognised:
 ///
-/// - **Single-var** (Layers 1–6): `var in expr`. The lone
-///   variable on the LHS binds successive values from the
-///   single source on the RHS. This is the historical shape
-///   and remains the common case.
-/// - **Parallel-iter** (SRD-18c Layer 7a): `(a, b, …) in
+/// - **Single-var**: `var in expr`. The lone variable on the
+///   LHS binds successive values from the single source on the
+///   RHS. This is the common case.
+/// - **Parallel-iter** (comprehension_forms.md §3.3, §8.1): `(a, b, …) in
 ///   (e1, e2, …)`. Each variable on the LHS binds the
 ///   corresponding source on the RHS; the sources advance in
 ///   lockstep ("zip"). Length-mismatch across the group is a
@@ -255,8 +254,8 @@ fn is_simple_ident(s: &str) -> bool {
 /// Examples:
 /// ```text
 /// k in 10,100, limit in 10,20,30
-/// k in 10,100 where k > 5
-/// k in 10,100, limit in 10,20,30,50,100,200,300 where k * limit < 1000
+/// k in 10,100 where {k} > 5
+/// k in 10,100, limit in 10,20,30,50,100,200,300 where {k} * {limit} < 1000
 /// ```
 pub fn parse_comprehension_text(text: &str) -> Result<Comprehension, String> {
     // Split off the optional `order <spec>` first (it's the
@@ -284,7 +283,7 @@ pub fn parse_comprehension_text(text: &str) -> Result<Comprehension, String> {
 
 /// Parse an order spec string into a [`TraversalOrder`].
 ///
-/// Three syntactic shapes (per SRD-18d §"GK text grammar"):
+/// Three syntactic shapes (comprehension_forms.md §8; polydat_grammar.md §16.2):
 ///
 /// - **Bare name**: `lex`, `extrema`, `shells`, `sobol`, …
 ///   No truncation; uses the strategy's defaults.
@@ -356,9 +355,8 @@ fn build_order_from_terse(name: &str, n: Option<usize>) -> Result<TraversalOrder
 
 /// The one message for a strategy name outside the closed set. The
 /// bare form and the keyword form both report through it, so a reader
-/// is told the same thing whichever they wrote — and is told that the
-/// set is closed, which `custom(<fn>)` used to leave them to discover
-/// later, from the lowering pass.
+/// is told the same thing whichever they wrote, including that the
+/// set is closed.
 fn unknown_strategy(name: &str) -> String {
     format!(
         "order spec: unknown strategy '{name}' — expected one of \
@@ -705,7 +703,7 @@ pub fn split_respecting_parens(s: &str) -> Vec<String> {
 /// either:
 /// - an identifier followed by ` in ` (single-var clause), or
 /// - a `(<ident>, <ident>, ...)` group followed by ` in `
-///   (parallel-iter clause, SRD-18c Layer 7a).
+///   (parallel-iter clause, comprehension_forms.md §3.3).
 ///
 /// Used by [`split_respecting_parens`] to recognise a clause
 /// boundary.
@@ -850,9 +848,9 @@ mod tests {
 
     #[test]
     fn split_at_where_simple() {
-        let (clauses, filter) = split_at_where("k in 10,100 where k > 5");
+        let (clauses, filter) = split_at_where("k in 10,100 where {k} > 5");
         assert_eq!(clauses, "k in 10,100");
-        assert_eq!(filter, Some("k > 5".to_string()));
+        assert_eq!(filter, Some("{k} > 5".to_string()));
     }
 
     #[test]
@@ -865,9 +863,9 @@ mod tests {
     #[test]
     fn split_at_where_inside_parens_is_ignored() {
         // `where` inside a function call shouldn't split.
-        let (clauses, filter) = split_at_where("p in pick(profiles, where='ann') where p == 'x'");
+        let (clauses, filter) = split_at_where("p in pick(profiles, where='ann') where {p} == 'x'");
         assert_eq!(clauses, "p in pick(profiles, where='ann')");
-        assert_eq!(filter, Some("p == 'x'".to_string()));
+        assert_eq!(filter, Some("{p} == 'x'".to_string()));
     }
 
     #[test]
@@ -881,18 +879,18 @@ mod tests {
     #[test]
     fn parse_comprehension_text_with_filter() {
         let comp =
-            parse_comprehension_text("k in 10,100, limit in 10,20,30 where k * limit < 1000")
+            parse_comprehension_text("k in 10,100, limit in 10,20,30 where {k} * {limit} < 1000")
                 .unwrap();
         assert!(comp.is_cartesian());
         assert_eq!(comp.coordinate_names(), vec!["k", "limit"]);
-        assert_eq!(comp.filter, Some("k * limit < 1000".to_string()));
+        assert_eq!(comp.filter, Some("{k} * {limit} < 1000".to_string()));
     }
 
     #[test]
     fn parse_comprehension_text_repeated_var_yields_union_with_filter() {
-        let comp = parse_comprehension_text("k in 1, k in 2 where k > 0").unwrap();
+        let comp = parse_comprehension_text("k in 1, k in 2 where {k} > 0").unwrap();
         assert!(comp.is_union());
-        assert_eq!(comp.filter, Some("k > 0".to_string()));
+        assert_eq!(comp.filter, Some("{k} > 0".to_string()));
     }
 
     #[test]
@@ -1048,10 +1046,8 @@ mod tests {
     }
 
     /// The strategy set is closed, so a name outside it is a parse
-    /// error that lists the set. `custom(<fn>)` used to parse and
-    /// then be refused when the text was lowered to the algebra —
-    /// two answers to one question, the later one in a place a
-    /// reader of the grammar would not look.
+    /// error that lists the set, raised by the parser rather than by
+    /// the lowering to the algebra.
     #[test]
     fn an_out_of_tree_ordering_is_a_parse_error() {
         let err = parse_comprehension_text("k in 10, k in 100 order custom(my_fn)").unwrap_err();
@@ -1074,7 +1070,7 @@ mod tests {
     #[test]
     fn validate_accepts_each_index_space_strategy_on_union() {
         // Routes through Comprehension::validate: the text front end
-        // no longer refuses an index-space strategy over a union; the
+        // accepts an index-space strategy over a union, and the
         // algebra's V4 decides at compile.
         for (_label, ord) in [
             ("reverse_lex", TraversalOrder::ReverseLex { count: None }),
@@ -1107,7 +1103,7 @@ mod tests {
         }
     }
 
-    // ---- Push 2: Layer 7a parallel-iter clauses --------------
+    // ---- parallel-iter clauses ---------------------------------
 
     #[test]
     fn parse_clause_parallel_two_vars() {

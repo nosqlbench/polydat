@@ -1,7 +1,8 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Coordinate set with per-coord classification — spec §10.9.2.
+//! Coordinate set with per-coord classification —
+//! comprehension_forms.md §10.9.2.
 //!
 //! The predicate analyzer takes a `CoordSet` (not a bare list
 //! of names) so it can detect continuous-coord references and
@@ -80,7 +81,7 @@ impl CoordSet {
     /// axis is discrete or continuous.
     ///
     /// For comprehensions with `None` `index_addressable`
-    /// (raw filter output, dependent cartesian), every axis is
+    /// (a filter's output, a dependent cartesian), every axis is
     /// classified as discrete — the conservative choice that
     /// keeps the analyzer running. Continuous classification
     /// requires a `Continuous` or `Hybrid` `IndexFn`, where

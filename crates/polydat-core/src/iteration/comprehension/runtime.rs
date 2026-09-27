@@ -11,7 +11,8 @@
 //! a compiled stack-machine program over fully-statically-
 //! resolvable `Source` variants (`IntRange`, `Literal`). It
 //! has no notion of a runtime parent kernel, which is correct
-//! for the spec §9.5 consumption surfaces it serves.
+//! for the consumption surfaces it serves
+//! (comprehension_forms.md §9.5).
 //!
 //! Runtime comprehension evaluation is fundamentally different:
 //!
@@ -25,8 +26,8 @@
 //!   N's spec text may reference iter-vars from clauses
 //!   1..N-1. Prior-axis values are layered in front of the
 //!   scope (`Layered`) so each clause evaluates against the
-//!   correct context. This is SRD-18b §"Dependent Tuple
-//!   Iteration".
+//!   correct context: the dependent product of
+//!   comprehension_forms.md §3.2.
 //! - **Filter predicates evaluate against per-tuple scopes.**
 //!   A [`CompiledPredicate`] parses the predicate once and tests
 //!   each tuple: its boolean structure over the tuple's values
@@ -34,9 +35,8 @@
 //!   a `Layered` view of the scope and evaluated as a Polydat
 //!   expression, charged to the scope's ledger.
 //!
-//! All three depend on polydat-side primitives that exist
-//! today; this evaluator is the algebra-typed entry point for
-//! them.
+//! All three rest on the kernel's own primitives; this evaluator
+//! is the algebra-typed entry point to them.
 //!
 //! ## What this owns
 //!
@@ -48,11 +48,13 @@
 //! [`evaluate_for_iteration_materialized`] is the reference the
 //! index-addressed evaluator is held to: every node materializes.
 //!
-//! Order modifiers route through `Strategy::select` (spec
-//! §10.7.8): each node returns its tuples paired with the
-//! [`IndexFn`] they satisfy, and the Order node selects positions
-//! from that shape and the tuple count. V4 fires at this site,
-//! definitively.
+//! Order modifiers route through `Strategy::select`
+//! (comprehension_forms.md §10.7.8): each node returns its tuples
+//! paired with the [`IndexFn`] they satisfy, and the Order node
+//! selects positions from that shape and the tuple count. An order
+//! over a filter selects through `Strategy::select_surviving`, ranking
+//! the survivors by their positions in the filter's input (§5 V5). V4
+//! fires again at this site, against the evaluated shape.
 //!
 //! ## What this does NOT own
 //!
@@ -95,8 +97,8 @@ pub type RuntimeTuple = Vec<(String, Value)>;
 /// axis varies slowest in cartesian, sequential in union,
 /// lockstep in zip). `index_fn` is the addressing scheme the
 /// stream satisfies; `None` when the stream is non-addressable
-/// (filter output, dependent cartesian over context-required
-/// sources whose actual shapes don't combine cleanly).
+/// (a filter's output, a dependent cartesian whose axes vary, an
+/// order other than an untruncated `Lex`).
 struct EvaluatedNode {
     tuples: Vec<RuntimeTuple>,
     index_fn: Option<IndexFn>,
@@ -129,16 +131,18 @@ pub enum RuntimeError {
         /// The underlying reason.
         message: String,
     },
-    /// V4 (spec §5) violation — strategy rejects the input's
-    /// addressing shape at invocation time (spec §10.7.8).
+    /// V4 (comprehension_forms.md §5) violation — strategy rejects
+    /// the input's addressing shape at invocation time (§10.7.8).
     StrategyRejectsInput {
         /// The strategy applied.
         strategy: StrategyName,
         /// The input's addressing scheme, if one was claimed.
         index_fn: Option<IndexFn>,
     },
-    /// The runtime evaluator encountered an algebra-AST shape
-    /// it doesn't support (e.g., nested Filter under Order).
+    /// A shape the runtime evaluator cannot evaluate: a discrete
+    /// clause referencing an axis beside a continuous one in a
+    /// sampled space, a cartesian or union of more than 2^64 tuples,
+    /// or a source asking for a scope the evaluator did not supply.
     UnsupportedShape(String),
     /// A strict zip's operands have different lengths. The traversal
     /// evaluators report it at open; a stream reports it when one
@@ -168,7 +172,8 @@ impl std::fmt::Display for RuntimeError {
             RuntimeError::StrategyRejectsInput { strategy, index_fn } => write!(
                 f,
                 "order strategy {strategy:?} rejects input shape {index_fn:?} \
-                 (V4: per-strategy IndexFn contract; see spec §3.6's strategy table)"
+                 (V4: per-strategy IndexFn contract; see comprehension_forms.md §3.6's \
+                 strategy table)"
             ),
             RuntimeError::UnsupportedShape(msg) => write!(f, "{msg}"),
             RuntimeError::ZipLengthMismatch { lengths } => {
@@ -562,7 +567,7 @@ impl EvalState<'_> {
                 // A continuous axis has no tuples of its own: an order
                 // over one samples the child's space, discrete axes by
                 // position and continuous axes through their measures
-                // (spec §10.2 R2).
+                // (comprehension_forms.md §10.2 R2).
                 if has_continuous_axis(child) {
                     return self.sample_space(child, prefix, *strategy, *truncation, *seed);
                 }
@@ -847,15 +852,16 @@ impl EvalState<'_> {
                 out.push(tuple);
             }
         }
-        // Filter destroys the bijection per spec §10.7.2.
+        // A filter's output has no index function
+        // (comprehension_forms.md §10.7.2).
         Ok(EvaluatedNode {
             tuples: out,
             index_fn: None,
         })
     }
 
-    /// Sample an order over a space with a continuous axis (spec
-    /// §10.2 R2). The child's clauses are the axes: a discrete
+    /// Sample an order over a space with a continuous axis
+    /// (comprehension_forms.md §10.2 R2). The child's clauses are the axes: a discrete
     /// clause is evaluated to its values, a continuous clause keeps
     /// its interval and measure. A sampling strategy (Halton, Sobol,
     /// Lhs, Shuffle) draws `truncation` multi-indices over the
@@ -974,7 +980,8 @@ impl EvalState<'_> {
     /// or inner order) is evaluated and becomes one discrete axis of
     /// its tuples. `bound` is the names bound so far; a discrete
     /// clause may not reference one (a sampled cartesian is
-    /// independent, spec §6.2).
+    /// independent: comprehension_forms.md §5, V4 over a dependent
+    /// cartesian).
     fn collect_sample_space(
         &mut self,
         c: &Comprehension,
@@ -1024,7 +1031,7 @@ impl EvalState<'_> {
                 if let Some(dep) = bound.iter().find(|b| references.contains(*b)) {
                     return Err(RuntimeError::UnsupportedShape(format!(
                         "clause '{name}' references '{dep}' beside a continuous axis; \
-                         a sampled cartesian is independent (comprehension_forms.md §6.2)"
+                         a sampled cartesian is independent (comprehension_forms.md §5, V4)"
                     )));
                 }
                 let node = self.evaluate_clause(name, source, prefix)?;
@@ -1374,7 +1381,7 @@ impl EvalState<'_> {
 
 /// `true` when a child of a cartesian references, in its sources, a
 /// name that an earlier child binds: the child's tuples then depend on
-/// the tuple before it (spec §3.2).
+/// the tuple before it (comprehension_forms.md §3.2).
 fn references_an_earlier_axis(children: &[Comprehension]) -> bool {
     let mut bound: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for child in children {
@@ -1473,7 +1480,8 @@ const SAMPLE_ROUNDS: u32 = 6;
 /// `[0, 1)` as a 53-bit fraction.
 const UNIT_SCALE: f64 = (1u64 << 53) as f64;
 
-/// One axis of a sampled space (spec §10.2 R2): a discrete child
+/// One axis of a sampled space (comprehension_forms.md §10.2 R2): a
+/// discrete child
 /// evaluated to its tuples, or a continuous clause's interval and
 /// measure.
 enum SampleAxis {
@@ -1956,9 +1964,9 @@ mod tests {
         );
     }
 
-    /// PR α bug regression: a Generator-evaluated source can
-    /// now claim an IndexFn::Lattice via SourceEval, so
-    /// Extrema's indexed path fires and the 2-D Lattice case
+    /// A Generator-evaluated source claims an IndexFn::Lattice
+    /// through SourceEval, so Extrema's indexed path fires and the
+    /// 2-D Lattice case
     /// (cartesian of two clauses) gives the 2x2 corners, not
     /// just first/last of the cartesian product.
     #[test]
@@ -1987,9 +1995,9 @@ mod tests {
                 },
             ]),
             StrategyName::Extrema,
-            // SRD-18d §214: `extrema/1` = the corner stratum. (Bare
-            // `extrema`/`None` is now the full 9-tuple space reordered
-            // corners-first; `/1` selects just the corners.)
+            // `extrema/1` is the corner stratum (comprehension_forms.md
+            // §3.6); bare `extrema` is the whole 9-tuple space ordered
+            // corners first.
             Some(1),
         );
         let canonical = empty_kernel();

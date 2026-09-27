@@ -1,8 +1,8 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! `CoordinateStream` — first-order consumption surface (spec
-//! §9.5.1).
+//! `CoordinateStream` — first-order consumption surface
+//! (comprehension_forms.md §9.5.1).
 //!
 //! Dispenses coordinate tuples (`Tuple` from the strategies
 //! layer). Each instance holds its own dispense state — the
@@ -30,7 +30,7 @@ pub struct CoordinateStream {
     #[allow(dead_code)]
     program: Arc<Program>,
     /// The per-streamer interpreter — independent dispense
-    /// state per spec §9.5.2.
+    /// state per comprehension_forms.md §9.5.2.
     stream: Box<dyn TupleStream>,
     /// The error that ended the stream, returned again by every later
     /// `advance`.

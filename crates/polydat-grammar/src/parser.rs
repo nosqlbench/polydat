@@ -11,9 +11,9 @@
 //!
 //! ## String interpolation
 //!
-//! Per SRD 10 §"String Interpolation", string literals containing
-//! `{ … }` placeholders are desugared to a `printf` call over
-//! the placeholder bodies. The bodies are parsed as full GK
+//! String literals containing `{ … }` placeholders
+//! (polydat_grammar.md §9) are desugared to a `printf` call over
+//! the placeholder bodies. The bodies are parsed as full Polydat
 //! expressions via [`parse_expression`] — same entry the rest of
 //! the language uses — so anything that can appear on a binding
 //! right-hand side can appear inside a placeholder.
@@ -107,7 +107,8 @@ impl Parser {
                 self.advance();
                 Ok("input".to_string())
             }
-            // SRD 71: `cursor` is a soft keyword. At statement start
+            // `cursor` is a soft keyword (cursor_partitions.md §7.2).
+            // At statement start
             // it opens a `cursor q = …` decl; in identifier position
             // (param names, binding LHS, body references) it's the
             // workload-level cursor parameter.
@@ -115,10 +116,10 @@ impl Parser {
                 self.advance();
                 Ok("cursor".to_string())
             }
-            // SRD 71: `over` is a soft keyword used only by the
-            // cursor-decl syntax. In identifier position it's a
-            // plain identifier — pre-SRD-71 workloads that happened
-            // to name a wire `over` keep working.
+            // `over` is a soft keyword used only by the cursor-decl
+            // syntax (cursor_partitions.md §7.2). In identifier
+            // position it's a plain identifier, so a wire may be
+            // named `over`.
             TokenKind::Over => {
                 self.advance();
                 Ok("over".to_string())
@@ -238,11 +239,7 @@ fn parse_statement_into(p: &mut Parser, out: &mut Vec<Statement>) -> Result<(), 
     Ok(())
 }
 
-/// `pragma <name>` — first-class module directive. The pragma name
-/// is a bare identifier; arguments are not currently supported (the
-/// recognised set in SRD 15 has none, and adding them later is
-/// non-breaking). See SRD 15 §"Module-Level Pragmas".
-/// `for <source> { statements }` — SRD 113 §2.
+/// `for <source> { statements }` (for_traversal.md §2).
 ///
 /// The lexer already captured the source text. A bare identifier names
 /// a bound producer; anything else is comprehension text handed to the
@@ -276,7 +273,7 @@ fn parse_for_statement(p: &mut Parser) -> Result<Statement, String> {
     Ok(Statement::For(ForStmt { source, body, span }))
 }
 
-/// `tile name [: encoding] [(options)] := body` — SRD 114 §2.1.
+/// `tile name [: encoding] [(options)] := body` (polytile.md §2.1).
 ///
 /// The lexer captured block and heredoc bodies raw into a `TileBody`
 /// token; a string-literal body arrives as an ordinary string token.
@@ -379,7 +376,7 @@ fn parse_tile(p: &mut Parser) -> Result<Statement, String> {
 }
 
 /// `name := polytile(...)` or `name := polytile_json(...)`: a tile
-/// whose body arrives as an argument (SRD 114 §5.6).
+/// whose body arrives as an argument (polytile.md §5.6).
 fn is_polytile_binding(p: &Parser) -> bool {
     p.pos + 3 < p.tokens.len()
         && matches!(&p.tokens[p.pos].kind, TokenKind::Ident(_))
@@ -701,7 +698,7 @@ fn parse_input_decl(p: &mut Parser, out: &mut Vec<Statement>) -> Result<(), Stri
 
 /// `cursor name = Cursor()` or `cursor name = expr [over partition_source]`
 ///
-/// The trailing `over <expr>` clause (SRD 71) names a partition
+/// The trailing `over <expr>` clause (cursor_partitions.md §7.2) names a partition
 /// source the cursor narrows by — see [`CursorDecl::over`].
 fn parse_cursor_decl(p: &mut Parser) -> Result<Statement, String> {
     let span = p.span();
@@ -863,7 +860,8 @@ fn parse_expr(p: &mut Parser) -> Result<Expr, String> {
 ///   Level 9: `**` (Pow, right)       — bp (22, 21)
 ///   Level 10: `-` `!` (unary, in parse_atom)
 ///
-/// SRD-84 Part 1: `||` / `&&` sit *below* comparison (the lowest
+/// `||` / `&&` sit *below* comparison (polydat_grammar.md §6.1,
+/// §7; the lowest
 /// bands) so `a > b && c > d` parses as `(a > b) && (c > d)`, and
 /// `||` binds looser than `&&` (C/Rust convention). Comparison ops
 /// sit below arithmetic/bitwise so `a + b < c * d` parses as
@@ -871,7 +869,7 @@ fn parse_expr(p: &mut Parser) -> Result<Expr, String> {
 /// parses as `(a < b) == c`.
 fn parse_expr_bp(p: &mut Parser, min_bp: u8) -> Result<Expr, String> {
     let mut lhs = parse_atom(p)?;
-    // SRD-84 Part 1b — `as <type>` postfix cast binds tightly to the
+    // The `as <type>` postfix cast (polydat_grammar.md §10) binds tightly to the
     // atom (Rust convention): `a + b as u64` is `a + (b as u64)`;
     // parenthesise to cast a whole sub-expression.
     lhs = parse_postfix_as(p, lhs)?;
@@ -917,8 +915,8 @@ pub fn binary_operator(kind: &TokenKind) -> Option<BinOpKind> {
 }
 
 /// The binding powers `(left, right)` of a binary operator: the one
-/// precedence table of the language, whose levels [`parse_expr_bp`]
-/// lists. Expressions and comprehension `where` predicates
+/// precedence table of the language (polydat_grammar.md §6.1), whose
+/// levels `parse_expr_bp` lists. Expressions and comprehension `where` predicates
 /// ([`crate::comprehension::predicate`]) both parse with it. A higher
 /// power binds tighter; `left < right` associates to the left and
 /// `left > right` to the right. The unary operators `-` and `!` bind
@@ -940,7 +938,7 @@ pub fn binding_power(op: BinOpKind) -> (u8, u8) {
     }
 }
 
-/// SRD-84 Part 1b — parse trailing `as <type>` casts on an expression.
+/// Parse trailing `as <type>` casts on an expression (polydat_grammar.md §10).
 /// `as` is a *soft* keyword (contextual): only the postfix `as <type>`
 /// form is a cast; `as` is otherwise a normal identifier.
 fn parse_postfix_as(p: &mut Parser, mut expr: Expr) -> Result<Expr, String> {
@@ -1123,7 +1121,7 @@ fn parse_atom(p: &mut Parser) -> Result<Expr, String> {
             }
         }
         // `cursor` is also a soft keyword in expression position:
-        // SRD 71's `over cursor.partitions` form names the
+        // the `over cursor.partitions` form (cursor_partitions.md §7.2) names the
         // workload's `cursor` parameter. The statement-level
         // `cursor q = …` decl is handled by `parse_statement_into`
         // before expression parsing kicks in.
@@ -1137,9 +1135,8 @@ fn parse_atom(p: &mut Parser) -> Result<Expr, String> {
             }
         }
         // `over` is a soft keyword used only by the cursor-decl
-        // syntax; in expression position it's a plain identifier.
-        // (Useful if a workload reuses the name `over` for a
-        // wire — backward compat with anything pre-SRD-71.)
+        // syntax; in expression position it's a plain identifier,
+        // so a wire may be named `over`.
         TokenKind::Over => {
             p.advance();
             let name = "over".to_string();
@@ -1161,7 +1158,7 @@ fn parse_atom(p: &mut Parser) -> Result<Expr, String> {
 /// Desugar a string literal that contains `{ … }` placeholders
 /// into a `printf` call.
 ///
-/// SRD 10 §"String Interpolation": `{name}` references resolve
+/// String interpolation (polydat_grammar.md §9): `{name}` references resolve
 /// to other bindings or workload parameters; the compiler
 /// splits the template into a format string and the placeholder
 /// expressions, then wires them into a `Printf` node that
@@ -1220,7 +1217,7 @@ fn parse_interpolated_string(s: String, span: Span) -> Expr {
                     // Unparseable body → bail out, keep the
                     // string literal untouched. The user may
                     // have written a printf format spec or
-                    // some other non-GK content.
+                    // some other content that is not Polydat.
                     Err(_) => return Expr::StringLit(s, span),
                 };
                 placeholder_exprs.push(expr);
@@ -1248,7 +1245,7 @@ enum Segment {
     /// `parse_format` pass turns them into single-brace output.
     Literal(String),
     /// A `{ … }` placeholder body, with the surrounding braces
-    /// stripped. Will be lexed + parsed as a Polydat expression.
+    /// stripped, which is lexed and parsed as a Polydat expression.
     Placeholder(String),
 }
 
@@ -1733,7 +1730,7 @@ mod tests {
 
     #[test]
     fn parse_string_lit_nested_call() {
-        // SRD 10 example: function calls inside placeholders
+        // Function calls inside placeholders (polydat_grammar.md §9)
         // parse as full expressions and become printf args.
         let f = parse_str(r#"email := "{format_u64(hash(cycle), 10)}@example.com""#);
         let call = match &f.statements[0] {
@@ -2312,7 +2309,7 @@ mod tests {
 
     #[test]
     fn parse_chained_field_access_flattens_intermediate_levels() {
-        // SRD 71 scalar projections: `q.cursor.idx` reads the
+        // Cursor scalar projections (cursor_partitions.md §7.2): `q.cursor.idx` reads the
         // wire `q__cursor__idx` — intermediate dot levels
         // flatten into the FieldAccess source using the same
         // `__` convention one-level access lowers to.

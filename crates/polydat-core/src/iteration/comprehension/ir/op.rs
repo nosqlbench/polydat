@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Operator IR — spec §9.1.
+//! Operator IR — comprehension_forms.md §9.1.
 //!
 //! Every well-formed comprehension AST compiles to a finite
 //! sequence of these 8 opcodes. Every operator is a stream
@@ -18,7 +18,7 @@ use crate::iteration::comprehension::metadata::{CycleOperand, cycle_plan_is_empt
 use crate::iteration::comprehension::source::Source;
 use crate::iteration::comprehension::strategy::{StrategyName, ZipMode};
 
-/// The 8-opcode IR set (spec §9.1).
+/// The 8-opcode IR set (comprehension_forms.md §9.1).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Op {
@@ -40,7 +40,8 @@ pub enum Op {
 
     /// Replace the top-N stream operands with their lockstep
     /// diagonal. Streaming under Strict/Truncate; under `Cycle`
-    /// each operand is held as `operands` plans (spec §6.2):
+    /// each operand is held as `operands` plans
+    /// (comprehension_forms.md §3.3, §6.2):
     /// indexed, streamed, or buffered.
     Zip {
         /// Operands combined.
@@ -71,7 +72,7 @@ pub enum Op {
     },
 
     /// Wrap the top operand with a counter / pass-through.
-    /// Used for `order(Lex, _)` per spec §10.2 R1; this is
+    /// Used for `order(Lex, _)` per comprehension_forms.md §10.2 R1; this is
     /// the "streaming" order opcode.
     OrderStreaming {
         /// The streaming order's kind.
@@ -89,13 +90,16 @@ pub enum Op {
     /// on the first pull, in the empty scope: the strategy selects
     /// positions from the input's evaluated shape and length, and
     /// the stream computes each selected tuple as it emits it. Per
-    /// spec §10.2 R2, over an index-addressable input the working set
-    /// is the selection, O(output); over any other input it is the
-    /// input's tuples. An order over a continuous axis samples the
-    /// input's space and holds the samples.
+    /// comprehension_forms.md §10.2 R2, over an index-addressable
+    /// input the working set is the selection, O(output); over a
+    /// filter it is the filter's input and the positions of the
+    /// survivors the strategy keeps (§5 V5); over any other input it
+    /// is the input's tuples. An order over a continuous axis samples
+    /// the input's space and holds the samples. No IR is emitted for
+    /// `input`: the op pops nothing and pushes one stream.
     ///
     /// `input_index_fn` is the input's addressing scheme as the
-    /// metadata propagator claims it at compile time (spec §10.7.6),
+    /// metadata propagator claims it at compile time (§10.7.6),
     /// which the bounds checker reads; `None` when it claims none.
     OrderMaterialize {
         /// The strategy applied.
@@ -116,10 +120,10 @@ pub enum Op {
     Dispense,
 }
 
-/// Variant marker for [`Op::OrderStreaming`]. Today only Lex
-/// is streaming (per spec §6.2's "streaming order" table);
-/// the enum exists so future streaming strategies can land
-/// without changing the IR opcode set.
+/// Variant marker for [`Op::OrderStreaming`]. Lex is the one
+/// streaming strategy (comprehension_forms.md §6.2's footprint
+/// table); the kind is an enum so the opcode set stays fixed
+/// whatever strategies stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OrderStreamingKind {
@@ -146,7 +150,7 @@ impl Op {
     }
 
     /// `true` if this opcode is a materialization barrier per
-    /// spec §6.2 + §6.3. Used by the bounds checker. A `Cycle` zip
+    /// comprehension_forms.md §6.2 and §6.3. Used by the bounds checker. A `Cycle` zip
     /// is one when it buffers an operand, or when it carries no plan
     /// and may have to; one with an operand known empty holds nothing.
     pub fn is_barrier(&self) -> bool {

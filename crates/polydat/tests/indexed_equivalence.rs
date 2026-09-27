@@ -703,8 +703,9 @@ fn an_empty_operand_empties_a_cycle_zip() {
         assert_eq!(assert_equivalent(shape, &scope), 0, "{shape:?}");
         assert_eq!(evaluate_indexed(shape, &scope).unwrap().len(), 0);
         // The streaming surface yields nothing where it compiles the
-        // shape; it refuses a non-Lex order over an operand that is not
-        // addressable.
+        // shape; the validator refuses a non-Lex order over a zip with
+        // an operand that has no index function (V4), which the
+        // traversal, reading the zip's evaluated shape, accepts.
         let streamed = streamed(shape);
         assert!(
             streamed

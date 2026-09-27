@@ -1,7 +1,8 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! `ReducibilityFinding` and related types — spec §10.10.2.
+//! `ReducibilityFinding` and related types — comprehension_forms.md
+//! §10.10.2.
 //!
 //! A finding represents either "no rewrite applies" (empty) or
 //! "this rule rewrites C into the witness AST C'." Findings
@@ -32,18 +33,21 @@ pub enum RuleId {
     R5,
     /// A chain of filters folds into one.
     R6,
-    /// A chain of orders folds into one when the inner is untruncated.
+    /// A chain of orders folds into one when the inner is untruncated
+    /// and the outer strategy selects from its input's shape.
     R7,
-    // Deferred per spec §14.1:
-    /// Range narrowing from a bounded predicate (deferred).
+    // The catalog ends at R7 (comprehension_forms.md §14.1); R8–R10
+    // name rewrites outside it, which no finding carries.
+    /// Range narrowing from a bounded predicate; outside the catalog.
     R8,
-    /// Discrete-set substitution from an `in` predicate (deferred).
+    /// Discrete-set substitution from an `in` predicate; outside the
+    /// catalog.
     R9,
-    /// Monotonic-cutoff truncation (deferred).
+    /// Monotonic-cutoff truncation; outside the catalog.
     R10,
 }
 
-/// Output of the reducibility analyzer (spec §10.10.2).
+/// Output of the reducibility analyzer (comprehension_forms.md §10.10.2).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReducibilityFinding {
     /// `Some` if a rewrite applies; `None` is the empty
@@ -75,7 +79,8 @@ pub enum Reduction {
 }
 
 /// Strict-improvement vector along the (compute, memory)
-/// dimensions (spec §10.10.2 + §10.10.3 catalog table).
+/// dimensions (comprehension_forms.md §10.10.2 and §10.10.3's catalog
+/// table).
 ///
 /// A non-empty finding must have at least one dimension
 /// `Less` and the other ≤ `Equal`. The optimizer rejects
@@ -141,7 +146,7 @@ impl ComplexityDelta {
     }
 
     /// `true` if at least one dimension is strictly Less and
-    /// the other is at most Equal. Per spec §10.10.2 this is
+    /// the other is at most Equal. Per comprehension_forms.md §10.10.2 this is
     /// the condition for a non-empty finding to be valid.
     pub fn is_strict_improvement(&self) -> bool {
         matches!(

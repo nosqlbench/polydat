@@ -1,14 +1,14 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Operator-tree comprehension AST — spec §3.
+//! Operator-tree comprehension AST (comprehension_forms.md §3).
 //!
 //! Six constructors closed under composition: one source
 //! (`clause`), three combinators (`cartesian`, `zip`, `union`),
 //! two modifiers (`filter`, `order`). Every comprehension AST is
 //! a tree whose nodes are one of these six variants.
 //!
-//! Closure (spec §4.1):
+//! Closure (comprehension_forms.md §4.1):
 //!
 //! - C1 — every constructor returns and consumes
 //!   `Comprehension`. There is no auxiliary value type at the
@@ -24,7 +24,7 @@ use super::strategy::{StrategyName, ZipMode};
 
 /// The six-variant operator-tree comprehension.
 ///
-/// Closure under composition (spec §4.1 C1): every variant
+/// Closure under composition (comprehension_forms.md §4.1 C1): every variant
 /// holds one or more `Comprehension` operands plus
 /// constructor-specific scalar parameters (predicate, strategy,
 /// truncation, zip mode, source).
@@ -35,7 +35,7 @@ use super::strategy::{StrategyName, ZipMode};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Comprehension {
-    /// Leaf source per spec §3.1. Binds `name` to one value
+    /// Leaf source (comprehension_forms.md §3.1). Binds `name` to one value
     /// per dispense, drawn from `source`.
     Clause {
         /// The name bound.
@@ -44,14 +44,14 @@ pub enum Comprehension {
         source: Source,
     },
 
-    /// Cross-product combinator per spec §3.2. Children must
+    /// Cross-product combinator (comprehension_forms.md §3.2). Children must
     /// have disjoint name sets (V1).
     Cartesian {
         /// The factors.
         children: Vec<Comprehension>,
     },
 
-    /// Lockstep combinator per spec §3.3. Children must be
+    /// Lockstep combinator (comprehension_forms.md §3.3). Children must be
     /// discrete (V7) and have disjoint name sets (V1).
     Zip {
         /// The streams zipped.
@@ -60,7 +60,7 @@ pub enum Comprehension {
         mode: ZipMode,
     },
 
-    /// Concatenation combinator per spec §3.4. Children must
+    /// Concatenation combinator (comprehension_forms.md §3.4). Children must
     /// share an identical tuple shape (V2) and all be discrete
     /// (V9).
     Union {
@@ -68,8 +68,9 @@ pub enum Comprehension {
         children: Vec<Comprehension>,
     },
 
-    /// Selection modifier per spec §3.5. Predicate is a GK
-    /// boolean expression; names must close over the child's
+    /// Selection modifier (comprehension_forms.md §3.5). The
+    /// predicate is a Polydat boolean expression (§10.9.1); names
+    /// must close over the child's
     /// coordinates plus the parent scope (V3).
     Filter {
         /// The stream filtered.
@@ -78,7 +79,7 @@ pub enum Comprehension {
         predicate: String,
     },
 
-    /// Permutation modifier per spec §3.6. `strategy` must
+    /// Permutation modifier (comprehension_forms.md §3.6). `strategy` must
     /// accept the child's IndexFn (V4); `truncation` limits the
     /// dispensed count; `seed` is the authored seed a seeded
     /// strategy (`Shuffle`, `Lhs`) derives its state from, with a
@@ -153,7 +154,7 @@ impl Comprehension {
 
     /// Compute the comprehension's coordinate name set,
     /// recursively. The result preserves declaration order
-    /// (per spec §3.2 + §3.4's "in declaration order" tuple
+    /// (comprehension_forms.md §3.2 and §3.4's "in declaration order" tuple
     /// shape rules). Used by V1, V2, V3, and the predicate
     /// analyzer's coord-set input.
     pub fn coordinate_names(&self) -> Vec<String> {
@@ -164,8 +165,8 @@ impl Comprehension {
 
     /// Compute `(coordinate_name, source_text)` pairs in
     /// declaration order, deduplicated by name (first
-    /// occurrence wins). Source text is the round-trip-to-
-    /// legacy form — `IntRange { 1, 10, 1 }` → `"1..10"`,
+    /// occurrence wins). Source text is the clause text form —
+    /// `IntRange { 1, 10, 1 }` → `"1..10"`,
     /// `Literal { [10, 100] }` → `"10, 100"`, etc.
     ///
     /// Gives a consumer a `[(var, spec_expr)]` list for type
@@ -305,14 +306,14 @@ impl Comprehension {
 
     /// Count of nodes in the AST (this node + all descendants).
     /// Used by the optimizer's well-founded measure for
-    /// termination (spec §10.6.3).
+    /// termination (comprehension_forms.md §10.6, property 3).
     pub fn node_count(&self) -> usize {
         1 + self.children().map(|c| c.node_count()).sum::<usize>()
     }
 
     /// Maximum depth of the AST. Constant for flat composition,
     /// O(log N) for balanced trees. Bounds the operator stack
-    /// per spec §9.3.
+    /// (comprehension_forms.md §9.3).
     pub fn depth(&self) -> usize {
         1 + self.children().map(|c| c.depth()).max().unwrap_or(0)
     }

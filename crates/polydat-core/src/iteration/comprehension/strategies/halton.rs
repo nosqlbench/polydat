@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! `Halton` strategy — spec §3.6.
+//! `Halton` strategy — comprehension_forms.md §3.6.
 //!
 //! Low-discrepancy sequence. For K-D, uses the first K primes
 //! as bases; the i-th Halton point is `(phi_2(i), phi_3(i),
@@ -10,7 +10,7 @@
 //! interpret as a fractional value in `[0, 1)`.
 //!
 //! Native to continuous K-D boxes (the canonical use case per
-//! spec §3.6). Over discrete inputs, the continuous draws are
+//! §3.6). Over discrete inputs, the continuous draws are
 //! discretized to integer multi-indices.
 //!
 //! ## References

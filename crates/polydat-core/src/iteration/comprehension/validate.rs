@@ -1,37 +1,35 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Validation — spec §5 (V1-V9) + §5.8 (modes).
+//! Validation — comprehension_forms.md §5 (V1-V9) and §5.8 (modes).
 //!
 //! [`validate`] is the single entry point. Walking the AST
 //! bottom-up, every variant's V-axiom checks fire; any failure
 //! produces a typed [`ValidationError`]. Degenerate-but-defined
 //! compositions emit a [`ValidationWarning`] in Permissive mode
-//! and become hard errors in Strict mode.
+//! and become hard errors in Strict mode. The compile stage
+//! (`CompiledComprehension::from_ast` and the `for` lowering) runs it
+//! on the tree as written, before any rewrite, so acceptance is a
+//! property of the source text, and every rewrite keeps an accepted
+//! tree accepted.
 //!
-//! V4 (per-strategy input-shape contract) fires in two
-//! tiers per spec §10.7.8:
+//! V4 (per-strategy input-shape contract) fires at two times
+//! (comprehension_forms.md §10.7.8):
 //!
-//! 1. **Compile-time** — this module, run by the compile stage
-//!    (`CompiledComprehension::from_ast` and the `for` lowering)
-//!    on the AST, against the AST's static
-//!    metadata-derived [`IndexFn`]; catches shape violations
-//!    the static estimate can prove. For
+//! 1. **Compile time** — this module, against the AST's static
+//!    metadata-derived [`IndexFn`]. For
 //!    [`crate::iteration::comprehension::eval_source::EvalClass::Static`]
-//!    sources the static IndexFn equals the runtime IndexFn,
-//!    so this fire is exact; for `ContextRequired` sources
-//!    (Generator without registry recognition,
-//!    WorkloadParamList) the static estimate may be
-//!    conservative (uses `cardinality_hint`, or `None` if
-//!    absent) and the strategy-invocation-time fire below
-//!    is load-bearing.
-//! 2. **Strategy-invocation-time (load-bearing)** —
-//!    [`crate::iteration::comprehension::runtime::evaluate_for_iteration`]'s
-//!    `apply_order` fires
+//!    sources the static IndexFn equals the runtime IndexFn, so a
+//!    tree accepted here is never refused at a strategy. A
+//!    `ContextRequired` source (a Generator that references a name, a
+//!    WorkloadParamList) is judged by what its text declares: its
+//!    `cardinality_hint`, or an unknown count.
+//! 2. **Strategy invocation** — the runtime evaluator
+//!    ([`crate::iteration::comprehension::runtime::evaluate_indexed`])
+//!    calls
 //!    [`crate::iteration::comprehension::strategies::Strategy::accepts_input`]
-//!    against the [`crate::iteration::comprehension::eval_source::EvaluatedSource`]'s
-//!    actual `index_fn` after source evaluation. This is the
-//!    definitive V4 check per spec §10.7.8.
+//!    against the evaluated input's `index_fn`. For a context-required
+//!    source this is the authoritative check.
 
 use serde::{Deserialize, Serialize};
 
@@ -41,7 +39,7 @@ use super::metadata::{IndexFn, Metadata};
 use super::source::Source;
 use super::strategy::{StrategyName, ZipMode};
 
-/// Validation mode per spec §5.8.
+/// Validation mode (comprehension_forms.md §5.8).
 ///
 /// `Permissive` (default) enforces V1-V9 as errors and surfaces
 /// degenerate-composition warnings non-blockingly. `Strict`
@@ -101,8 +99,10 @@ pub enum ValidationError {
 
     /// V4 — strategy applied to an input whose metadata-derived
     /// [`IndexFn`] it cannot accept (per-strategy table in
-    /// `check_strategy_input_shape`). V5's one-filter
-    /// look-through is honoured; nested filters are rejected.
+    /// `check_strategy_input_shape`). A strategy that selects from
+    /// the shape reads through the untruncated orders under it, and
+    /// V5 looks through one filter layer; nested filters are
+    /// rejected.
     V4InputShape {
         /// The strategy applied.
         strategy: StrategyName,
@@ -143,7 +143,7 @@ pub enum ValidationError {
         reason: String,
     },
 
-    /// Strict mode (spec §5.8): a degenerate composition the
+    /// Strict mode (comprehension_forms.md §5.8): a degenerate composition the
     /// permissive mode only warns about.
     StrictWarning(ValidationWarning),
     /// A source that needs a scope, on the scope-less surfaces
@@ -166,9 +166,8 @@ pub enum ValidationError {
     },
     /// A context-free source that could not be evaluated, on the
     /// scope-less surfaces. Its only evaluation is the compile's, in
-    /// the empty scope, so its failure is the comprehension's error.
-    /// It used to be kept for a traversal that a coordinate stream
-    /// never has, and the clause silently dispensed nothing.
+    /// the empty scope, so its failure is the comprehension's error
+    /// rather than a clause that dispenses nothing.
     SourceFailed {
         /// The clause.
         name: String,
@@ -250,7 +249,7 @@ impl std::error::Error for ValidationError {}
 
 #[derive(Debug, Clone, PartialEq)]
 /// Non-blocking warning for degenerate-but-defined compositions
-/// per spec §5.8.
+/// (comprehension_forms.md §5.8).
 pub enum ValidationWarning {
     /// Lattice-geometric strategy (`Extrema` / `Shells` /
     /// `Diagonal` / `Antidiagonal`) over a 1-axis input.
@@ -295,8 +294,9 @@ pub enum ValidationWarning {
     },
 
     /// Singleton variant of a combinator: `zip([c], _)`,
-    /// `cartesian(c)`, `union(c)`. Identity per spec §4.2 I1-I3;
-    /// the optimizer's R0a elides it.
+    /// `cartesian(c)`, `union(c)`. Identity per
+    /// comprehension_forms.md §4.2 I1-I3; the optimizer's R0a
+    /// elides it.
     SingletonCombinator {
         /// The combinator with one child.
         combinator: &'static str,
@@ -336,7 +336,7 @@ impl std::fmt::Display for ValidationWarning {
     }
 }
 
-/// Validate a comprehension AST per spec §5.
+/// Validate a comprehension AST as written (comprehension_forms.md §5).
 ///
 /// In `Permissive` mode, V1-V9 errors abort with a typed
 /// [`ValidationError`] and degenerate-composition warnings
@@ -350,7 +350,7 @@ pub fn validate(c: &Comprehension, mode: Mode) -> Result<ValidationReport, Valid
     if mode == Mode::Strict
         && let Some(warning) = report.warnings.first()
     {
-        // Strict-mode promotion (spec §5.8): the first degenerate
+        // Strict-mode promotion (§5.8): the first degenerate
         // composition is the error.
         return Err(ValidationError::StrictWarning(warning.clone()));
     }
@@ -359,7 +359,7 @@ pub fn validate(c: &Comprehension, mode: Mode) -> Result<ValidationReport, Valid
 
 fn visit(c: &Comprehension, report: &mut ValidationReport) -> Result<(), ValidationError> {
     // Bottom-up: validate children first so each node sees
-    // already-well-formed operands per spec C2.
+    // already-well-formed operands (comprehension_forms.md §4.1 C2).
     for child in c.children() {
         visit(child, report)?;
     }
@@ -384,7 +384,7 @@ fn visit_clause(
     source: &Source,
     report: &mut ValidationReport,
 ) -> Result<(), ValidationError> {
-    // Degenerate composition (spec §5.8): a source the construction
+    // Degenerate composition (§5.8): a source the construction
     // can already count, and the count is zero. Read off the
     // cardinality algebra rather than matched shape by shape, so a
     // source whose count is unknown is `Unbounded` and says nothing
@@ -531,28 +531,22 @@ fn visit_filter(
 ) -> Result<(), ValidationError> {
     // V3: name closure — every `{name}` reference in the
     // predicate must be in the child's coords OR resolved by
-    // the parent scope. The parent-scope half is the consumer's
-    // job; here we accumulate the unresolved-at-this-layer
-    // names and let the consumer decide.
+    // the parent scope. A name the tuple does not bind may be the
+    // scope's, which this layer does not see, so the validator
+    // raises no error for it: the traversal resolves it in the
+    // scope it opens in, and the scope-less surfaces refuse it
+    // (`PredicateContextRequired`, comprehension_forms.md §9.5.2).
     let coords = child.coordinate_names();
     let referenced = extract_interpolated_names(predicate);
     let unresolved: Vec<String> = referenced
         .into_iter()
         .filter(|n| !coords.contains(n))
         .collect();
-
-    // The consumer is responsible for the link-time check;
-    // we only error here when there's clearly nothing the
-    // parent could possibly provide. For now, emit no error —
-    // just record candidates for downstream consumption.
-    // (A structured "carry the unresolved set to the consumer"
-    // hand-off is not implemented.)
     let _ = unresolved;
 
     // §5.8 warnings for trivially-true / trivially-false
-    // predicates. We recognize the literal strings "true" and
-    // "false" as the bug-shaped cases; richer recognition
-    // happens when the predicate analyzer (Phase 5) lands.
+    // predicates: the literal texts "true" and "false" are the
+    // bug-shaped cases this check recognizes.
     let trimmed = predicate.trim();
     if trimmed.eq_ignore_ascii_case("true") {
         report.warnings.push(ValidationWarning::TriviallyTrueFilter);
@@ -581,15 +575,16 @@ fn visit_order(
         other => other,
     };
 
-    // If we'd need to look through more than one filter layer
-    // (nested filters), V5 says fold first.
+    // V5 looks through one filter layer only: nested filters under a
+    // non-Lex order are refused as written, before R6 could fold them.
     if !matches!(strategy, StrategyName::Lex)
         && matches!(metadata_target, Comprehension::Filter { .. })
     {
         return Err(ValidationError::V4InputShape {
             strategy,
-            reason: "non-Lex strategy applied to nested filter; \
-                     fold filters first (spec F1 / R6)"
+            reason: "non-Lex strategy applied to nested filters; \
+                     write them as one filter, `where p && q` \
+                     (comprehension_forms.md §5 V5)"
                 .to_string(),
         });
     }
@@ -639,7 +634,7 @@ fn visit_order(
 
 /// Per-strategy V4 input-shape check using the metadata
 /// algebra's `IndexFn` variants. Implements the per-strategy
-/// table from spec §3.6:
+/// table from comprehension_forms.md §3.6:
 ///
 /// | Strategy | Accepted IndexFn |
 /// |---|---|
@@ -665,8 +660,8 @@ fn check_strategy_input_shape(
             return Err(ValidationError::V4InputShape {
                 strategy,
                 reason: "input has no closed-form index function \
-                         (raw filter output, dependent cartesian, or \
-                         nested non-Lex order)"
+                         (a filter's output, a dependent cartesian, or \
+                         an order other than an untruncated Lex)"
                     .to_string(),
             });
         }
@@ -681,7 +676,7 @@ fn check_strategy_input_shape(
             | StrategyName::Halton
             | StrategyName::Sobol
             | StrategyName::Lhs => {}
-            // Extrema accepts continuous boxes (per spec §3.6).
+            // Extrema accepts continuous boxes (§3.6).
             StrategyName::Extrema => {}
             // Everything else rejects continuous.
             StrategyName::ReverseLex

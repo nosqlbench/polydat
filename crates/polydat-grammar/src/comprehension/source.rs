@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Clause source values — spec §3.1.
+//! Clause source values (comprehension_forms.md §3.1).
 //!
 //! A `clause(name, source)` binds a name to the values
 //! produced by its source. Sources split into two families:
@@ -17,7 +17,7 @@
 //!
 //! Sources are stream producers — they do not pre-materialize
 //! into `Vec<Value>`. This is the load-bearing model property
-//! per spec §3.1 + §6.2.
+//! of comprehension_forms.md §3.1 and §6.2.
 
 use serde::{Deserialize, Serialize};
 
@@ -50,7 +50,7 @@ pub enum Source {
     },
 
     /// Generator function call expressed as a Polydat source string.
-    /// Its eval class follows its free names (spec §10.7.0): an
+    /// Its eval class follows its free names (comprehension_forms.md §10.7.0): an
     /// expression that references no name is context-free and is
     /// evaluated at compile, so a clause over it becomes a literal of
     /// its values; one that references a name (an outer coordinate,
@@ -128,7 +128,7 @@ pub enum LiteralValue {
 }
 
 impl Source {
-    /// The names this source references (spec §10.7.0): a generator
+    /// The names this source references (comprehension_forms.md §10.7.0): a generator
     /// expression's parsed free identifiers (`concat(foo)`) and its
     /// `{name}` interpolation placeholders, and a workload parameter
     /// list's own name. Literals, ranges, and intervals reference
@@ -212,9 +212,11 @@ impl Source {
     }
 }
 
-// ── SRD-18f: iteration interior + string-comprehension striping ──
+// ── iteration interior and string-comprehension striping
+//    (comprehension_forms.md §3.1.2, §3.1.3) ──
 
-/// The SRD-18f string-comprehension separator rule, in one place
+/// The string-comprehension separator rule (comprehension_forms.md
+/// §3.1.3), in one place
 /// so the parse-time (`source_parser`) and runtime (`eval`)
 /// striping can never drift: split on runs of comma / semicolon /
 /// ASCII whitespace, trim, drop empties. Every other character

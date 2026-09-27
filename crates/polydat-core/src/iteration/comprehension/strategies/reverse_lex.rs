@@ -1,10 +1,10 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! `ReverseLex` strategy — spec §3.6.
+//! `ReverseLex` strategy — comprehension_forms.md §3.6.
 //!
 //! Reverses the input's Lex enumeration order. Index-sampling
-//! family: accepts any non-`None` IndexFn (per spec §3.6's
+//! family: accepts any non-`None` IndexFn (per §3.6's
 //! per-strategy table). Continuous input is rejected (no
 //! canonical reverse over a measure).
 //!

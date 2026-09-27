@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! `Extrema` strategy — spec §3.6.
+//! `Extrema` strategy — comprehension_forms.md §3.6.
 //!
 //! Enumerates the whole index space of a discrete `Lattice`,
 //! stratified by *interior count* — the number of axes whose
@@ -14,14 +14,17 @@
 //! - Discrete `Lattice` with N≥2 axes is the native shape; 1-D
 //!   collapses to `{first, last}` (degenerate).
 //! - A continuous box contributes two ends per axis, and a hybrid its
-//!   discrete axes beside them (spec §10.2 R2): the runtime's sampler
+//!   discrete axes beside them (§10.2 R2): the runtime's sampler
 //!   draws the strata through `extrema_multi_indices` and carries each
 //!   continuous code onto its interval's end.
+//! - Over a filter, the strata keep only the survivors, a stratum no
+//!   survivor is in is dropped, and `/N` keeps the first N strata that
+//!   remain (§5 V5, [`Strategy::select_surviving`]).
 //!
 //! **Truncation is by complete strata, never mid-stratum.** Every
 //! corner of a hypercube has interior count 0, so all
-//! `2^N` corners form a *single* stratum. Consequently `extrema` is
-//! the whole corner SET and `extrema/N` for any `N ≥ 1` yields all of
+//! `2^N` corners form a *single* stratum. Consequently `extrema/1` is
+//! the whole corner set, and `extrema/N` for any `N ≥ 1` yields all of
 //! it — the `/N` selects strata, and partial counts within a
 //! stratum are not a meaningful subset (use `lex/N` /
 //! `halton/N` / `sobol/N` for count subsampling, `shells/N` for
@@ -48,7 +51,7 @@ impl Strategy for Extrema {
     }
 
     fn accepts_input(&self, idx: Option<&IndexFn>) -> bool {
-        // Per spec §3.6: discrete Lattice (any axis count;
+        // Per §3.6: discrete Lattice (any axis count;
         // 1-axis is degenerate but defined) OR continuous box.
         // Lockstep / Modular / Concatenation also accepted as
         // degenerate forms (per V4's per-strategy table).
@@ -137,13 +140,13 @@ fn naive_extrema_positions(total: u64, truncation: Option<u64>) -> Vec<u64> {
 
 /// Extrema multi-indices over `idx`. Public to crate for tests.
 ///
-/// SRD-18d §214: tuples are grouped into **strata by *interior
+/// Tuples are grouped into **strata by *interior
 /// count*** — the number of axes whose index is NOT at `0` or
 /// `len-1` (i.e. not at an extreme value). Stratum 0 = corners
 /// (all-extreme), 1 = edges (one interior axis), 2 = faces (two),
 /// …, N = the single all-interior point. Strata are emitted
 /// corners-first (interior count ascending), Lex within a stratum;
-/// `/N` keeps the first N strata.
+/// `/N` keeps the first N strata (comprehension_forms.md §3.6).
 ///
 /// This is a *combinatorial-shell* (k-face) decomposition of the
 /// index hypercube, not a metric one — it depends only on how many
@@ -152,8 +155,9 @@ fn naive_extrema_positions(total: u64, truncation: Option<u64>) -> Vec<u64> {
 /// `C(N,k)·2^(N-k)` k-faces, and here a value list of size `s`
 /// contributes `s-2` interior positions to each interior axis. See
 /// the n-cube face lattice (Coxeter, *Regular Polytopes*, 3rd ed.,
-/// 1973, §7.2; <https://en.wikipedia.org/wiki/Hypercube>) and
-/// SRD-18d §214 for the worked 3×3×3 example.
+/// 1973, §7.2; <https://en.wikipedia.org/wiki/Hypercube>); the test
+/// `a_3x3x3_lattice_strata_are_corners_edges_faces_then_interior`
+/// works the 3×3×3 case.
 pub(crate) fn extrema_multi_indices(idx: &IndexFn, truncation: Option<u64>) -> Vec<MultiIndex> {
     if index_fn_dim(idx) == 0 {
         return Vec::new();
@@ -189,9 +193,9 @@ fn extrema_axis_sizes(idx: &IndexFn) -> Vec<u64> {
 }
 
 /// Interior count of `mi`: the number of axes whose position is
-/// strictly between the two extremes `0` and `size-1` (SRD-18d
-/// §214). A `size-1` axis has only position `0`, which is both
-/// extremes at once, so it never counts as interior; for a
+/// strictly between the two extremes `0` and `size-1`. A `size-1`
+/// axis has only position `0`, which is both extremes at once, so it
+/// never counts as interior; for a
 /// 2-value axis every position is an extreme, so its interior
 /// count is always 0.
 fn interior_count(mi: &[u64], axis_sizes: &[u64]) -> u64 {
@@ -209,11 +213,10 @@ fn interior_count(mi: &[u64], axis_sizes: &[u64]) -> u64 {
 /// keep the first `truncation` complete strata. `None` keeps every
 /// stratum (the whole space, just reordered); `Some(0)` keeps none.
 ///
-/// Enumerates the whole space (`Π sizes`), which is exactly the
-/// already-materialized tuple set the strategy indexes into — so it
-/// adds no asymptotic cost over the comprehension's own
-/// materialization. (A by-stratum generator that emits only the
-/// outer k-faces would be `O(2^N)` for `extrema/1`; deferred.)
+/// Enumerates the whole index space (`Π sizes`), so the working set
+/// is that space while the strata are ranked (comprehension_forms.md
+/// §6.3), even for `extrema/1`, whose `2^N` corners a generator of
+/// the outer k-faces alone could emit directly.
 fn extrema_strata(axis_sizes: &[u64], truncation: Option<u64>) -> Vec<MultiIndex> {
     take_n_strata(extrema_scored(axis_sizes), truncation)
 }
