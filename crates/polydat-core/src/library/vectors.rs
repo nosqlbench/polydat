@@ -449,20 +449,15 @@ type Group = crate::derive_support::Resolved<crate::derive_support::GroupResolve
 /// which is what the reader needs to see when a workload asks a
 /// facet for a count it cannot give.
 fn facet_record_count(h: &DatasetHandle, who: &str, facet: &str) -> u64 {
-    match h {
+    match h.resolve_facet(facet).as_ref() {
         DatasetHandle::F32(d) => d.count as u64,
         DatasetHandle::I32(d) => d.count as u64,
         DatasetHandle::Ivvec32(d) => d.count as u64,
         DatasetHandle::Generic(d) => d.count as u64,
-        DatasetHandle::Group(_) => panic!("{who}: expected facet handle, got Group"),
-        DatasetHandle::Prebuffered { source, .. } => match DatasetHandle::open(source, facet) {
-            Ok(DatasetHandle::F32(d)) => d.count as u64,
-            Ok(other) => panic!(
-                "{who}: expected F32 {facet} facet, got {}",
-                dataset_handle_kind(&other)
-            ),
-            Err(e) => panic!("{who}: failed to open '{facet}' from prebuffered '{source}': {e}"),
-        },
+        other => panic!(
+            "{who}: expected a facet handle, got {}",
+            dataset_handle_kind(other)
+        ),
     }
 }
 
@@ -673,7 +668,7 @@ fn filtered_neighbor_distances_at(
 /// Signature: `vector_dim(handle) -> (u64)`
 #[crate::polydat_node(category = RealData)]
 fn vector_dim(handle: Facet<BaseFacet>) -> u64 {
-    match &*handle {
+    match handle.resolve_facet(BaseFacet::FACET).as_ref() {
         DatasetHandle::F32(d) => d.dim as u64,
         DatasetHandle::I32(d) => d.dim as u64,
         _ => 0,
@@ -712,7 +707,7 @@ fn query_count(handle: Facet<QueryFacet>) -> u64 {
 /// Signature: `neighbor_count(handle) -> (u64)`
 #[crate::polydat_node(category = RealData)]
 fn neighbor_count(handle: Facet<NeighborIndicesFacet>) -> u64 {
-    match &*handle {
+    match handle.resolve_facet(NeighborIndicesFacet::FACET).as_ref() {
         DatasetHandle::I32(d) => d.dim as u64,
         _ => 0,
     }
@@ -814,7 +809,7 @@ fn metadata_results_len_at(handle: Facet<MetadataResultsFacet>, index: u64) -> u
 /// sets). Expects an Ivvec32 handle.
 #[crate::polydat_node(category = RealData)]
 fn metadata_results_count(handle: Facet<MetadataResultsFacet>) -> u64 {
-    match &*handle {
+    match handle.resolve_facet(MetadataResultsFacet::FACET).as_ref() {
         DatasetHandle::Ivvec32(d) => d.count as u64,
         _ => 0,
     }
@@ -1446,7 +1441,7 @@ fn predicate_value_at(handle: Facet<MetadataPredicatesFacet>, index: u64) -> Str
 /// Signature: `metadata_content_count(handle) -> (u64)`
 #[crate::polydat_node(category = RealData)]
 fn metadata_content_count(handle: Facet<MetadataContentFacet>) -> u64 {
-    match &*handle {
+    match handle.resolve_facet(MetadataContentFacet::FACET).as_ref() {
         DatasetHandle::Generic(d) => d.count as u64,
         _ => 0,
     }

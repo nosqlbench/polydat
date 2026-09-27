@@ -3107,6 +3107,14 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
         JsonRef,
         JsonArc,
         Ext,
+        /// `Arc<T>` for a concrete `T`: the `Value::Handle` the pair
+        /// points at, downcast to `T` as the interpreter downcasts it.
+        HandleArc(Box<Type>),
+        /// Any other `Wire` type, admitted only when its port is
+        /// `Handle` (the kit checks `Wire::PORT` when it is built, and
+        /// declines otherwise): read through `Wire::extract` from the
+        /// `Value` the pair points at.
+        HandleWire,
         Poly,
         Variadic(VariadicElement),
         Const(ConstShape),
@@ -3133,10 +3141,19 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
     enum SlotElem {
         Jit(JitType),
         Vec(&'static str),
+        /// A `SliceArc<T>`, its elements copied into the scratch
+        /// vector.
+        VecShared(&'static str),
         Str,
         Bytes,
         Json,
         Ext,
+        /// `Arc<T>` for a concrete `T`, written as `Value::Handle`.
+        HandleArc,
+        /// Any other `Wire` type whose port is `Handle`, written
+        /// through `Wire::inject`; the kit checks the port when it is
+        /// built. A `None` is written as the empty pair.
+        HandleWire,
     }
     impl SlotElem {
         fn is_ref(self) -> bool {
@@ -3151,10 +3168,12 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
         fn scratch_elem(self) -> Option<TokenStream2> {
             let name = match self {
                 SlotElem::Jit(_) => return None,
-                SlotElem::Vec(e) => e,
+                SlotElem::Vec(e) | SlotElem::VecShared(e) => e,
                 SlotElem::Str => "Str",
                 SlotElem::Bytes => "Bytes",
-                SlotElem::Json | SlotElem::Ext => "Value",
+                SlotElem::Json | SlotElem::Ext | SlotElem::HandleArc | SlotElem::HandleWire => {
+                    "Value"
+                }
             };
             let id = syn::Ident::new(name, proc_macro2::Span::call_site());
             Some(quote!(polydat::ast::ScratchElem::#id))
@@ -3202,19 +3221,46 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
             _ => None,
         }
     };
+    // A shared typed vector, `SliceArc<T>`, written by copying its
+    // elements into the step's scratch vector.
+    let slice_arc_ret_elem = |ty: &Type| -> Option<&'static str> {
+        let flat: String = type_to_string(ty).split_whitespace().collect();
+        let elem = flat
+            .strip_suffix('>')?
+            .rsplit_once("SliceArc<")
+            .map(|(_, e)| e)?;
+        match elem {
+            "f32" => Some("F32"),
+            "f64" => Some("F64"),
+            "half::f16" | "f16" => Some("F16"),
+            "i8" => Some("I8"),
+            "i16" => Some("I16"),
+            "i32" => Some("I32"),
+            "i64" => Some("I64"),
+            _ => None,
+        }
+    };
     let classify_elem = |ty: &Type| -> Option<SlotElem> {
         if classify_wrapper_wire(ty) == Some(WrapperWire::Json) {
             Some(SlotElem::Json)
+        } else if classify_wrapper_wire(ty) == Some(WrapperWire::Handle) {
+            Some(SlotElem::HandleArc)
         } else if is_ext_wire(ty) {
             Some(SlotElem::Ext)
         } else if let Some(e) = vec_ret_elem(ty) {
             Some(SlotElem::Vec(e))
+        } else if let Some(e) = slice_arc_ret_elem(ty) {
+            Some(SlotElem::VecShared(e))
         } else if owned_str_ty(ty) {
             Some(SlotElem::Str)
         } else if owned_bytes_ty(ty) {
             Some(SlotElem::Bytes)
+        } else if let Some(jt) = wire_type_to_jit_type(ty) {
+            Some(SlotElem::Jit(jt))
+        } else if matches!(ty, Type::Path(_)) && !classify_polywire(ty) {
+            Some(SlotElem::HandleWire)
         } else {
-            wire_type_to_jit_type(ty).map(SlotElem::Jit)
+            None
         }
     };
     // The return shape the kit can write: a carrier, a `Ref2` kind, a
@@ -3275,8 +3321,12 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
                             } else {
                                 ConfigInner::Jit(wire_type_to_jit_type(inner)?)
                             })
+                        } else if classify_wrapper_wire(ty) == Some(WrapperWire::Handle) {
+                            SlotArg::HandleArc(Box::new(extract_handle_inner(ty)?))
+                        } else if let Some(jt) = wire_type_to_jit_type(ty) {
+                            SlotArg::Jit(jt)
                         } else {
-                            SlotArg::Jit(wire_type_to_jit_type(ty)?)
+                            SlotArg::HandleWire
                         }
                     }
                 },
@@ -3325,42 +3375,67 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
     // The write of one element `value` (typed `ty`) at output slot
     // `o`: a carrier as its bits, a `Ref2` kind into scratch entry
     // `k` with its pair republished (axiom S3).
-    let write_elem =
-        |e: SlotElem, ty: &Type, k: usize, o: usize, value: TokenStream2| -> TokenStream2 {
-            let kk = syn::Index::from(k);
-            let publish = publish(k, o);
-            match e {
-                SlotElem::Jit(jt) => jt.write_to_u64_buffer_at(o, value),
-                SlotElem::Vec(elem) => {
-                    let se = syn::Ident::new(elem, proc_macro2::Span::call_site());
-                    quote! {
-                        {
-                            let polydat::ast::ScratchBuf::#se(__buf) = &mut scratch[#kk] else {
-                                unreachable!("scratch element type mismatch");
-                            };
-                            *__buf = #value;
-                        }
-                        #publish
+    let write_elem = |e: SlotElem,
+                      ty: &Type,
+                      k: usize,
+                      o: usize,
+                      value: TokenStream2|
+     -> TokenStream2 {
+        let kk = syn::Index::from(k);
+        let publish = publish(k, o);
+        match e {
+            SlotElem::Jit(jt) => jt.write_to_u64_buffer_at(o, value),
+            SlotElem::Vec(elem) => {
+                let se = syn::Ident::new(elem, proc_macro2::Span::call_site());
+                quote! {
+                    {
+                        let polydat::ast::ScratchBuf::#se(__buf) = &mut scratch[#kk] else {
+                            unreachable!("scratch element type mismatch");
+                        };
+                        *__buf = #value;
                     }
+                    #publish
                 }
-                SlotElem::Str => quote! {
-                    scratch[#kk].set_str(::core::convert::AsRef::<str>::as_ref(&#value));
-                    #publish
-                },
-                SlotElem::Bytes => quote! {
-                    scratch[#kk].set_bytes(::core::convert::AsRef::<[u8]>::as_ref(&#value));
-                    #publish
-                },
-                SlotElem::Json => quote! {
-                    scratch[#kk].set_value(polydat::ast::Value::Json(#value));
-                    #publish
-                },
-                SlotElem::Ext => quote! {
-                    scratch[#kk].set_value(<#ty as polydat::derive_support::Wire>::inject(#value));
-                    #publish
-                },
             }
-        };
+            SlotElem::Str => quote! {
+                scratch[#kk].set_str(::core::convert::AsRef::<str>::as_ref(&#value));
+                #publish
+            },
+            SlotElem::Bytes => quote! {
+                scratch[#kk].set_bytes(::core::convert::AsRef::<[u8]>::as_ref(&#value));
+                #publish
+            },
+            SlotElem::Json => quote! {
+                scratch[#kk].set_value(polydat::ast::Value::Json(#value));
+                #publish
+            },
+            SlotElem::VecShared(elem) => {
+                let se = syn::Ident::new(elem, proc_macro2::Span::call_site());
+                quote! {
+                    {
+                        let polydat::ast::ScratchBuf::#se(__buf) = &mut scratch[#kk] else {
+                            unreachable!("scratch element type mismatch");
+                        };
+                        __buf.clear();
+                        __buf.extend_from_slice((#value).as_slice());
+                    }
+                    #publish
+                }
+            }
+            SlotElem::Ext => quote! {
+                scratch[#kk].set_value(<#ty as polydat::derive_support::Wire>::inject(#value));
+                #publish
+            },
+            SlotElem::HandleArc => quote! {
+                scratch[#kk].set_value(polydat::ast::Value::handle(#value));
+                #publish
+            },
+            SlotElem::HandleWire => quote! {
+                scratch[#kk].set_ref_value(<#ty as polydat::derive_support::Wire>::inject(#value));
+                #publish
+            },
+        }
+    };
     // The write of `result` (typed `ret_ty`) by shape.
     let write_for = |shape: &SlotRet| -> TokenStream2 {
         match shape {
@@ -3395,6 +3470,34 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
                     #( #writes )*
                 }
             }
+        }
+    };
+    // A `HandleWire` element is admitted by its `Wire` port, which is a
+    // constant of the type the macro cannot read: the kit checks it
+    // when it is built and declines a port other than `Handle`.
+    let handle_port_check = |ty: &Type| -> TokenStream2 {
+        quote! {
+            if <#ty as polydat::derive_support::Wire>::PORT != polydat::ast::PortType::Handle {
+                return None;
+            }
+        }
+    };
+    let ret_port_checks = |shape: &SlotRet| -> TokenStream2 {
+        match shape {
+            SlotRet::Elem(SlotElem::HandleWire) => handle_port_check(&ret_ty),
+            SlotRet::Tuple(elems) => {
+                let types = tuple_ret_elems
+                    .as_ref()
+                    .expect("a tuple shape comes from a tuple return");
+                let checks: Vec<TokenStream2> = elems
+                    .iter()
+                    .zip(types.iter())
+                    .filter(|(e, _)| matches!(e, SlotElem::HandleWire))
+                    .map(|(_, t)| handle_port_check(t))
+                    .collect();
+                quote!( #( #checks )* )
+            }
+            _ => quote!(),
         }
     };
     // The scratch entries a return shape owns, in port order.
@@ -3508,6 +3611,8 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
                         | SlotArg::JsonRef
                         | SlotArg::JsonArc
                         | SlotArg::Ext
+                        | SlotArg::HandleArc(_)
+                        | SlotArg::HandleWire
                         | SlotArg::Poly
                 )
             })
@@ -3627,10 +3732,22 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
                         __i += 2;
                         __p += 1;
                     },
-                    SlotArg::Ext => quote! {
+                    SlotArg::Ext | SlotArg::HandleWire => quote! {
                         let #n: #ty = <#ty as polydat::derive_support::Wire>::extract(
                             polydat::derive_support::ref_value(&inputs[__i..]),
                         );
+                        __i += 2;
+                        __p += 1;
+                    },
+                    SlotArg::HandleArc(inner) => quote! {
+                        let #n: std::sync::Arc<#inner> =
+                            match polydat::derive_support::ref_value(&inputs[__i..]) {
+                                polydat::ast::Value::Handle(__h) => __h
+                                    .clone()
+                                    .downcast::<#inner>()
+                                    .expect("Handle type mismatch — wiring bug"),
+                                __other => panic!("expected Handle, got {__other:?}"),
+                            };
                         __i += 2;
                         __p += 1;
                     },
@@ -3697,9 +3814,18 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
         let write = write_for(ret_shape);
         let scratch = scratch_for(ret_shape);
         let out_type = out_type_for(ret_shape, fixed_ports);
+        let arg_port_checks: Vec<TokenStream2> = args
+            .iter()
+            .zip(shapes.iter())
+            .filter(|(_, s)| matches!(s, SlotArg::HandleWire))
+            .map(|(a, _)| handle_port_check(&a.declared_ty))
+            .collect();
+        let ret_checks = ret_port_checks(ret_shape);
         quote! {
             #[allow(unused_mut, unused_variables, unused_assignments, clippy::unused_unit)]
             fn compiled_slot(&self, wire_types: &[polydat::ast::PortType], _engine: polydat::Engine) -> Option<polydat::ast::CompiledSlotKit> {
+                #( #arg_port_checks )*
+                #ret_checks
                 #( #captures )*
                 #out_type
                 let __wire_types: Vec<polydat::ast::PortType> = wire_types.to_vec();
@@ -3723,9 +3849,11 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
         let write = write_for(shape);
         let scratch = scratch_for(shape);
         let out_type = out_type_for(shape, 0);
+        let ret_checks = ret_port_checks(shape);
         quote! {
             #[allow(unused_variables)]
             fn compiled_slot(&self, wire_types: &[polydat::ast::PortType], _engine: polydat::Engine) -> Option<polydat::ast::CompiledSlotKit> {
+                #ret_checks
                 #out_type
                 let __cached = self.__polydat_cached.clone();
                 Some(polydat::ast::CompiledSlotKit {

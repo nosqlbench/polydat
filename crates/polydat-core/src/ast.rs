@@ -1895,6 +1895,18 @@ impl ScratchBuf {
         }
     }
 
+    /// Replace the value this entry holds with a by-reference value
+    /// that may be `None`. A `None` leaves the entry empty, so its
+    /// pair has length zero, which is how a `Ref2` slot reads `None`.
+    /// The entry must be a `Value` entry.
+    #[inline]
+    pub fn set_ref_value(&mut self, value: Value) {
+        match (self, value) {
+            (ScratchBuf::Value(v), Value::None) => v.clear(),
+            (entry, value) => entry.set_value(value),
+        }
+    }
+
     /// An empty buffer of the element type.
     pub fn new(elem: ScratchElem) -> Self {
         match elem {

@@ -1191,6 +1191,56 @@ fn macro_string_arg_node_has_a_slot_kit_and_no_u64_op() {
     );
 }
 
+/// A handle wire that yields no handle for an empty key.
+#[polydat::polydat_node(category = Diagnostic)]
+fn macro_pilot_maybe_handle(
+    input: Arc<dyn std::any::Any + Send + Sync>,
+    keep: bool,
+) -> Option<Arc<dyn std::any::Any + Send + Sync>> {
+    keep.then_some(input)
+}
+
+#[test]
+fn macro_handle_nodes_have_a_slot_kit() {
+    use polydat::ast::{PolydatNode, PortType, ScratchBuf};
+    let engine = polydat::Engine::Closures(polydat::Provenance::Auto);
+    let h = Value::Handle(Arc::new(TestHandle { value: 42 }));
+    let pair = |v: &Value| [v as *const Value as usize as u64, 1];
+    let held = |scratch: &ScratchBuf| -> Option<u64> {
+        match scratch.to_value() {
+            Value::Handle(arc) => Some(arc.downcast::<TestHandle>().unwrap().value),
+            Value::None => None,
+            other => panic!("expected a handle, got {other:?}"),
+        }
+    };
+
+    // `Arc<T>` in and out: the pair points at the input's `Value`, and
+    // the output is the same handle in the step's own entry.
+    let node = MacroPilotHandlePassthrough::default();
+    let kit = node
+        .compiled_slot(&[PortType::Handle], engine)
+        .expect("an Arc<T> handle in and out takes the slot kit");
+    let mut scratch: Vec<ScratchBuf> = kit.scratch.iter().map(|e| ScratchBuf::new(*e)).collect();
+    let mut outputs = [0u64; 2];
+    (kit.op)(&pair(&h), &mut outputs, &mut scratch);
+    assert_eq!(held(&scratch[0]), Some(42));
+    assert_eq!((outputs[0], outputs[1]), scratch[0].ptr_len());
+
+    // A `Wire` whose port is `Handle`, in and out; a `None` return is
+    // the empty pair, which a `Ref2` slot reads as `None`.
+    let node = MacroPilotMaybeHandle::default();
+    let kit = node
+        .compiled_slot(&[PortType::Handle, PortType::Bool], engine)
+        .expect("a Handle-port wire in and out takes the slot kit");
+    let mut scratch: Vec<ScratchBuf> = kit.scratch.iter().map(|e| ScratchBuf::new(*e)).collect();
+    let [p, l] = pair(&h);
+    (kit.op)(&[p, l, 1], &mut outputs, &mut scratch);
+    assert_eq!(held(&scratch[0]), Some(42));
+    (kit.op)(&[p, l, 0], &mut outputs, &mut scratch);
+    assert_eq!(held(&scratch[0]), None);
+    assert_eq!(outputs[1], 0, "a None handle is the empty pair");
+}
+
 #[test]
 fn macro_jit_ineligible_setup_arg_node_skips_compiled_u64() {
     use polydat::ast::PolydatNode;

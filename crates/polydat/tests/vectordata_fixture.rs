@@ -25,7 +25,8 @@ use std::sync::OnceLock;
 
 use polydat::ast::{SliceArc, Value};
 use polydat::dsl::compile::{compile_polydat_interpreter, compile_polydat_to_assembler};
-use polydat::{Engine, JitMode, KernelError, Provenance};
+use polydat::dsl::registry::DefaultResolver;
+use polydat::{Engine, JitMode, Kernel, Provenance};
 
 /// The dataset and profile the fixture catalog names.
 const SOURCE: &str = "polydat-tiny:default";
@@ -129,28 +130,6 @@ fn engines() -> Vec<Engine> {
     all
 }
 
-/// The dataset nodes these programs call. None of them has a compiled
-/// form in this build, so the compiled engines refuse a program that
-/// calls one, naming the node, and the program runs on the
-/// interpreter. docs/design/engines.md §8 says every registered node
-/// has a kit; the refusal is tolerated here, by these names only, so
-/// that the checks below cover each compiled engine as soon as it
-/// accepts the program.
-const DATASET_NODES: [&str; 12] = [
-    "dataset_open",
-    "dataset_prebuffer",
-    "metadata_value_at",
-    "predicate_value_at",
-    "metadata_content_count",
-    "metadata_count_of",
-    "predicate_count_of",
-    "vector_at",
-    "query_vector_at",
-    "vector_count",
-    "query_count",
-    "vector_dim",
-];
-
 /// Handles a host opens, by name: each `(name, call)` pair is a
 /// binding pulled from an interpreter kernel, and the handle it holds
 /// is the one the host passes to another kernel as an extern.
@@ -173,9 +152,8 @@ fn opened(bindings: &[(&str, String)]) -> Vec<(String, Value)> {
 
 /// Build `src` on every engine, set `externs`, and check each output
 /// against `expected(output, cycle)` for cycles `0..cycles`, as display
-/// text. Both interpreter modes run the program. A compiled engine that
-/// refuses it names one of the [`DATASET_NODES`]; any other refusal
-/// fails the check.
+/// text. Every engine builds the program, each dataset node running
+/// its kit on the compiled engines, so a refusal fails the check.
 fn check_on_every_engine(
     src: &str,
     externs: &[(String, Value)],
@@ -185,23 +163,7 @@ fn check_on_every_engine(
 ) {
     use_fixture_catalog();
     for engine in engines() {
-        let asm = compile_polydat_to_assembler(src).unwrap_or_else(|e| panic!("{e}\n{src}"));
-        let mut k = match asm.compile_with(engine) {
-            Ok(k) => k,
-            Err(KernelError::Refused { reason, .. })
-                if !matches!(engine, Engine::Interpreter(_))
-                    && DATASET_NODES
-                        .iter()
-                        .any(|n| reason.contains(&format!("node '{n}'"))) =>
-            {
-                continue;
-            }
-            Err(e) => panic!("{engine}: {e}\n{src}"),
-        };
-        for (name, value) in externs {
-            k.set_input(name, value.clone())
-                .unwrap_or_else(|e| panic!("{engine}: set {name}: {e}\n{src}"));
-        }
+        let mut k = kernel_on(engine, src, externs);
         for c in 0..cycles {
             k.set_inputs(&[c]);
             for out in outputs {
@@ -213,6 +175,19 @@ fn check_on_every_engine(
             }
         }
     }
+}
+
+/// `src` built on `engine`, with `externs` set.
+fn kernel_on(engine: Engine, src: &str, externs: &[(String, Value)]) -> Box<dyn Kernel> {
+    let asm = compile_polydat_to_assembler(src).unwrap_or_else(|e| panic!("{e}\n{src}"));
+    let mut k = asm
+        .compile_with(engine)
+        .unwrap_or_else(|e| panic!("{engine}: {e}\n{src}"));
+    for (name, value) in externs {
+        k.set_input(name, value.clone())
+            .unwrap_or_else(|e| panic!("{engine}: set {name}: {e}\n{src}"));
+    }
+    k
 }
 
 fn metadata_at(i: u64) -> String {
@@ -312,23 +287,128 @@ fn facet_accessors_read_the_fixture_through_handle_externs() {
     check_on_every_engine(src, &externs, &FACET_OUTPUTS, 8, facet_answer);
 }
 
-/// The value and count-of accessors through a prebuffered handle,
-/// which each one resolves to its own facet, in the program and as an
-/// extern. `metadata_content_count` does not resolve a prebuffered
-/// handle to its facet and answers 0 for one, so it is not checked
-/// here.
+/// The facets the fixture's profile declares.
+const FIXTURE_FACETS: [&str; 4] = ["base", "query", "metadata_content", "metadata_predicates"];
+
+/// Every facet accessor over a fixture facet: its name, the facet it
+/// resolves, and the arguments after the handle.
+const ACCESSORS: [(&str, &str, &str); 10] = [
+    ("vector_at", "base", ", cycle"),
+    ("vector_count", "base", ""),
+    ("vector_dim", "base", ""),
+    ("query_vector_at", "query", ", cycle"),
+    ("query_count", "query", ""),
+    ("metadata_value_at", "metadata_content", ", cycle"),
+    ("metadata_content_count", "metadata_content", ""),
+    ("metadata_count_of", "metadata_content", ", to_i64(cycle)"),
+    ("predicate_value_at", "metadata_predicates", ", cycle"),
+    (
+        "predicate_count_of",
+        "metadata_predicates",
+        ", to_i64(cycle)",
+    ),
+];
+
+/// Every registered node that resolves a source string to a fixture
+/// facet is in [`ACCESSORS`], so the parity check below covers an
+/// accessor as soon as it is registered.
 #[test]
-fn facet_accessors_read_the_fixture_through_a_prebuffered_handle() {
-    let body = "meta := metadata_value_at(ds, cycle)\n\
-                pred := predicate_value_at(ds, cycle)\n\
-                meta_of := metadata_count_of(ds, to_i64(cycle))\n\
-                pred_of := predicate_count_of(ds, to_i64(cycle))\n";
-    let outputs = ["meta", "pred", "meta_of", "pred_of"];
-    let src = format!("input cycle: u64\nds := dataset_prebuffer(\"{SOURCE}\")\n{body}");
-    check_on_every_engine(&src, &[], &outputs, 8, facet_answer);
-    let externs = opened(&[("ds", format!("dataset_prebuffer(\"{SOURCE}\")"))]);
-    let src = format!("input cycle: u64\nextern ds: handle\n{body}");
-    check_on_every_engine(&src, &externs, &outputs, 8, facet_answer);
+fn every_facet_accessor_over_a_fixture_facet_is_checked() {
+    for sig in polydat::dsl::registry::registry() {
+        let Some(DefaultResolver::Facet(facet)) = sig.default_resolver else {
+            continue;
+        };
+        if !FIXTURE_FACETS.contains(&facet) {
+            continue;
+        }
+        assert!(
+            ACCESSORS
+                .iter()
+                .any(|(name, f, _)| *name == sig.name && *f == facet),
+            "{} resolves the {facet} facet and is not in ACCESSORS",
+            sig.name
+        );
+    }
+}
+
+/// Every accessor answers the same on a prebuffered handle as on the
+/// handle `dataset_open` gives for its own facet, on every engine,
+/// with the handles resolved in the program and passed in as externs,
+/// and every engine gives the interpreter's answer. A prebuffered
+/// handle names the dataset rather than a facet, and each accessor
+/// resolves it to the facet it reads.
+#[test]
+fn every_accessor_agrees_on_a_prebuffered_and_an_opened_handle() {
+    let facet_handle = |facet: &str| format!("f_{facet}");
+    let mut body = String::new();
+    let mut outputs: Vec<(String, String)> = Vec::new();
+    for (name, facet, rest) in ACCESSORS {
+        let (pre, open) = (format!("pre_{name}"), format!("open_{name}"));
+        body.push_str(&format!("{pre} := {name}(pre{rest})\n"));
+        body.push_str(&format!(
+            "{open} := {name}({}{rest})\n",
+            facet_handle(facet)
+        ));
+        outputs.push((pre, open));
+    }
+    let handles: Vec<(String, String)> = std::iter::once((
+        "pre".to_string(),
+        format!("dataset_prebuffer(\"{SOURCE}\")"),
+    ))
+    .chain(FIXTURE_FACETS.iter().map(|facet| {
+        (
+            facet_handle(facet),
+            format!("dataset_open(\"{SOURCE}\", \"{facet}\")"),
+        )
+    }))
+    .collect();
+
+    let in_program: String = handles
+        .iter()
+        .map(|(name, call)| format!("{name} := {call}\n"))
+        .collect();
+    let as_externs: String = handles
+        .iter()
+        .map(|(name, _)| format!("extern {name}: handle\n"))
+        .collect();
+    let refs: Vec<(&str, String)> = handles
+        .iter()
+        .map(|(name, call)| (name.as_str(), call.clone()))
+        .collect();
+    let externs = opened(&refs);
+
+    use_fixture_catalog();
+    for (decls, externs) in [(in_program, Vec::new()), (as_externs, externs)] {
+        let src = format!("input cycle: u64\n{decls}{body}");
+        let mut oracle = kernel_on(Engine::Interpreter(JitMode::Off), &src, &externs);
+        let expected: Vec<Vec<String>> = (0..8)
+            .map(|c| {
+                oracle.set_inputs(&[c]);
+                outputs
+                    .iter()
+                    .map(|(_, open)| oracle.pull(open).to_display_string())
+                    .collect()
+            })
+            .collect();
+        for engine in engines() {
+            let mut k = kernel_on(engine, &src, &externs);
+            for (c, answers) in expected.iter().enumerate() {
+                k.set_inputs(&[c as u64]);
+                for ((pre, open), answer) in outputs.iter().zip(answers) {
+                    assert_eq!(
+                        &k.pull(open).to_display_string(),
+                        answer,
+                        "{engine}: {open} at cycle {c}\n{src}"
+                    );
+                    assert_eq!(
+                        &k.pull(pre).to_display_string(),
+                        answer,
+                        "{engine}: {pre} at cycle {c}\n{src}"
+                    );
+                }
+            }
+        }
+    }
 }
 
 /// The vector answers, by output name.
