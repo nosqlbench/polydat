@@ -1,8 +1,8 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! The structural front end and the host boundary of Polytile (SRD 114
-//! §3, §5.6).
+//! The structural front end and the host boundary of Polytile
+//! (polytile.md §3, §5.6).
 //!
 //! A host may hold a template as text, as JSON text, or as a JSON value
 //! it has already parsed. All three arrive here and leave as a

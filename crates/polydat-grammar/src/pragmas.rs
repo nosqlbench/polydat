@@ -5,8 +5,9 @@
 //!
 //! Pragmas are first-class Polydat statements the module author places at
 //! the head of a `.polydat` file or module body to opt into compile-time
-//! graph transforms. Today they cover assertion-injection modes that
-//! complement the const-constraint metadata (SRD 15):
+//! graph transforms (polydat_grammar.md §14). They cover
+//! assertion-injection modes that complement the const-constraint
+//! metadata (graph_compiler.md §2):
 //!
 //! ```polydat
 //! pragma strict_values
@@ -27,7 +28,7 @@
 //!
 //! - `strict_types` — auto-insert type assertion nodes on wires
 //!   whose source can't be statically proven to deliver the right
-//!   `PortType`. See SRD 15 §"Strict Wire Mode".
+//!   `PortType`.
 //! - `strict_values` — auto-insert value assertion nodes on wires
 //!   whose downstream node declares a value constraint the source
 //!   can't satisfy at compile time.
@@ -35,10 +36,10 @@
 //!
 //! Unknown pragmas are recorded but warned about, not errored:
 //! pragmas are forward-compatible by design so old binaries can
-//! parse modules that opt into newer features they don't yet
+//! parse modules that opt into newer features they don't
 //! support.
 //!
-//! ## Scoping (SRD 15 §"Pragma Scope")
+//! ## Scoping
 //!
 //! Each Polydat program has its own [`PragmaSet`], collected once at
 //! the root by [`collect_from_ast`]. Inner contexts inherit the outer
@@ -46,7 +47,7 @@
 //! parent's set, so an enclosing `strict_values` applies to every
 //! nested body. [`PragmaSet::attach_to`] and [`PragmaConflict`]
 //! model a parent chain with outer-wins conflict resolution; the
-//! compiler does not use them today.
+//! compiler does not use them.
 
 /// One pragma entry parsed from the source.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,9 +63,7 @@ pub struct Pragma {
 /// All pragmas declared in one Polydat scope. Multiple `PragmaSet`s
 /// chain through their `parent` field, set by
 /// [`PragmaSet::attach_to`], to model nested scopes
-/// (program → `for` body). Per SRD 13b
-/// §"Scope composition" + SRD 15 §"Pragma Scope": each scope is
-/// its own `PragmaSet`, the chain is walked at lookup time, and
+/// (program → `for` body). Each scope is its own `PragmaSet`, the chain is walked at lookup time, and
 /// outer scopes win on conflict.
 #[derive(Debug, Clone, Default)]
 pub struct PragmaSet {
@@ -113,8 +112,8 @@ impl PragmaSet {
 
     /// Attach this `PragmaSet` to an outer scope, returning
     /// `(attached, conflicts)`. Conflicts arise when this scope
-    /// declares a pragma whose effective value (currently just
-    /// `args`) differs from a same-named declaration in the
+    /// declares a pragma whose effective value (its `args`)
+    /// differs from a same-named declaration in the
     /// outer chain. Outer wins; the conflict is returned for
     /// diagnostic reporting.
     ///
@@ -122,11 +121,10 @@ impl PragmaSet {
     /// - non-strict: emit warning event(s)
     /// - strict: turn each conflict into a compile error
     ///
-    /// Today's pragma vocabulary is presence-only so `args` is
-    /// always empty; conflicts are degenerate. The framework is
-    /// in place for future value-bearing pragmas. The compiler
-    /// does not call this today: a `for` body inherits a clone of
-    /// its parent's set.
+    /// The pragma vocabulary is presence-only, so `args` is
+    /// always empty and conflicts are degenerate; the mechanism
+    /// serves value-bearing pragmas. The compiler does not call
+    /// this: a `for` body inherits a clone of its parent's set.
     pub fn attach_to(self, outer: std::sync::Arc<PragmaSet>) -> (PragmaSet, Vec<PragmaConflict>) {
         let mut conflicts = Vec::new();
         for entry in &self.entries {
@@ -188,8 +186,7 @@ pub fn collect_from_ast(file: &crate::ast::PolydatFile) -> PragmaSet {
 /// A pragma that disagreed across nested scopes. Used by
 /// [`PragmaSet::attach_to`] to surface conflicts up to the caller
 /// for either advisory logging (non-strict) or hard error (strict).
-/// Per SRD 15 §"Pragma Scope" + SRD 13b §"Scope composition", the
-/// outer scope's value wins; the conflict report is for
+/// The outer scope's value wins; the conflict report is for
 /// diagnostics, not for resolution.
 #[derive(Debug, Clone)]
 pub struct PragmaConflict {
@@ -283,10 +280,9 @@ mod tests {
 
     #[test]
     fn attached_records_arg_conflict() {
-        // Forward-compat scenario: a value-bearing pragma like
-        // `assert_for(name)` that disagrees across scopes. The
-        // keyword grammar doesn't accept args today, so build the
-        // PragmaSet by hand. Outer wins; conflict is reported.
+        // A value-bearing pragma like `assert_for(name)` that
+        // disagrees across scopes. The keyword grammar does not
+        // accept args, so the test builds the PragmaSet by hand. Outer wins; conflict is reported.
         let outer = std::sync::Arc::new(PragmaSet {
             entries: vec![Pragma {
                 name: "assert_for".into(),

@@ -61,8 +61,8 @@ pub enum Statement {
     /// `cursor name = Cursor()` or `cursor name = constructor_expr`
     Cursor(CursorDecl),
     /// `pragma <name>` — a module-level directive opting into a
-    /// compile-time graph transform (SRD 15 §"Module-Level
-    /// Pragmas"). First-class grammar, distinct from line
+    /// compile-time graph transform (polydat_grammar.md §14).
+    /// First-class grammar, distinct from line
     /// comments. Recognised pragmas trigger
     /// `CompileEvent::PragmaAcknowledged`; unknown names trigger
     /// `CompileEvent::UnknownPragma` and are otherwise ignored
@@ -73,16 +73,16 @@ pub enum Statement {
         /// Where the pragma appears.
         span: Span,
     },
-    /// `for <source> { body }` — a traversal scope (SRD 113 §3.2).
+    /// `for <source> { body }` — a traversal scope (for_traversal.md §3.2).
     /// One child scope activates per tuple of the source; the
     /// comprehension's element names are wires inside the body.
     For(ForStmt),
     /// `tile name : encoding (options) := body` — a compiled variate
-    /// template (SRD 114 §2).
+    /// template (polytile.md §2).
     Tile(TileDef),
 }
 
-/// Per-tile template options (SRD 114 §2.3): the hole delimiters, the
+/// Per-tile template options (polytile.md §2.3): the hole delimiters, the
 /// directive sigil, and strictness.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TileOptions {
@@ -308,7 +308,7 @@ pub enum ForSourceKind {
     /// Comprehension text, parsed to the algebra AST.
     Comprehension(crate::comprehension::Comprehension),
     /// A derivation of a bound producer: `base where <pred>`,
-    /// `base order <spec>`, or both (SRD 113 §3.1). Resolved against
+    /// `base order <spec>`, or both (for_traversal.md §3.1). Resolved against
     /// the producer at compile time.
     Derived {
         /// The producer wire the derivation starts from.
@@ -663,7 +663,7 @@ pub struct Binding {
 /// for cardinality. The runtime advances the cursor to drive
 /// phase iteration.
 ///
-/// The optional `over` clause (SRD 71) names a partition source
+/// The optional `over` clause (cursor_partitions.md §7.2) names a partition source
 /// — an in-scope wire that resolves to a `Partition` or a
 /// `PartitionList`. When bound, the cursor's effective extent
 /// narrows to the named partition's `[start_ord, end_ord)`
@@ -674,7 +674,7 @@ pub struct CursorDecl {
     pub name: String,
     /// The constructor call, such as `range(0, 100)`.
     pub constructor: Expr,
-    /// SRD 71 `over <expr>` clause. The expression is parsed
+    /// The `over <expr>` clause (cursor_partitions.md §7.2). The expression is parsed
     /// the same way as any other Polydat expression so authors can
     /// name a workload parameter's `.partitions` projection
     /// (e.g. `cursor.partitions`), an iter-var bound by an
@@ -720,14 +720,15 @@ pub enum Expr {
         /// Where the projection appears.
         span: Span,
     },
-    /// `<expr> as <type>` — SRD-84 Part 1b type-coercion cast. An
-    /// *optional, alignment-only* type-fusion infill: a no-op when the
-    /// inner expression's type already matches the target, otherwise
-    /// the compiler inserts the SRD-79 fusion adapter (or errors if no
-    /// valid fusion exists). The cast's type is its target.
+    /// `<expr> as <type>` — a type-coercion cast (polydat_grammar.md
+    /// §10). An *optional, alignment-only* type-fusion infill: a no-op
+    /// when the inner expression's type already matches the target,
+    /// otherwise the compiler inserts the catalog adapter
+    /// (type_system.md §3), or errors if the catalog has none. The
+    /// cast's type is its target.
     Cast(Box<Expr>, crate::PortType, Span),
     /// `for <comprehension>` in expression position — a comprehension
-    /// producer (SRD 113 §3.1). Binds a `Streamer` wire.
+    /// producer (for_traversal.md §3.1). Binds a `Streamer` wire.
     For(Box<ForSource>),
 }
 
@@ -769,14 +770,13 @@ pub enum BinOpKind {
     Le,
     /// `>=` — desugars to `u64_ge` / `f64_ge`. Output type is `u64`.
     Ge,
-    /// `&&` — eager logical-and (SRD-84 Part 1). Desugars to
+    /// `&&` — eager logical-and (polydat_grammar.md §7). Desugars to
     /// `u64_and(a != 0, b != 0)`: both operands evaluate, each is
     /// normalised to truthiness (`0`/`1`), and the bitwise-and of two
     /// truthiness values is logical-and. Output type is `u64` (`0`/`1`).
-    /// Lowest precedence, below comparison. Short-circuit is a deferred
-    /// optimisation (SRD-84 §"eager").
+    /// Lowest precedence, below comparison.
     And,
-    /// `||` — eager logical-or (SRD-84 Part 1). Desugars to
+    /// `||` — eager logical-or (polydat_grammar.md §7). Desugars to
     /// `u64_or(a != 0, b != 0)`. Output type is `u64` (`0`/`1`). Binds
     /// looser than `&&`.
     Or,

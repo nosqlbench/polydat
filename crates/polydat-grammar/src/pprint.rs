@@ -379,7 +379,7 @@ table := first(profiles)
 
     #[test]
     fn round_trip_cursor_with_over() {
-        // The `over <expr>` partition clause (SRD-71) must survive
+        // The `over <expr>` partition clause (cursor_partitions.md §7.2) must survive
         // projection — pp_cursor emits it so over-bearing cursors
         // round-trip faithfully.
         round_trip("cursor q = range(0, 100) over p\n");

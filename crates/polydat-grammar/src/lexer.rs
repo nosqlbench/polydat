@@ -54,26 +54,25 @@ pub enum TokenKind {
     Volatile,
     /// `cursor` keyword
     Cursor,
-    /// `over` keyword — SRD 71 partition-source binding on
-    /// cursor declarations: `cursor q = range(0, N) over p`.
+    /// `over` keyword — the partition-source binding on cursor
+    /// declarations (cursor_partitions.md §7.2): `cursor q = range(0, N) over p`.
     /// Soft keyword: only recognised at statement level after
     /// a cursor decl's constructor expression; in expression
     /// position it's a plain identifier.
     Over,
-    /// `pragma` keyword (module-level directive opening, SRD 15
-    /// §"Module-Level Pragmas"). Followed by an `Ident` naming the
-    /// pragma. Distinct from line comments so the parser sees
-    /// pragmas as first-class statements rather than scraping them
-    /// out of `// @pragma:` text.
+    /// `pragma` keyword (module-level directive opening,
+    /// polydat_grammar.md §14). Followed by an `Ident` naming the
+    /// pragma. Distinct from line comments, so the parser sees
+    /// pragmas as first-class statements.
     Pragma,
-    /// `for` followed by its raw comprehension text (SRD 113). The
+    /// `for` followed by its raw comprehension text (for_traversal.md §2). The
     /// lexer captures everything after the keyword up to a `{` at
     /// nesting depth zero or the end of a line at nesting depth zero
     /// (a bracketed union runs across lines), whichever comes
     /// first, so the comprehension grammar stays owned by the
     /// comprehension parser rather than being re-tokenized here.
     For(String),
-    /// `tile` keyword (SRD 114). The body after `:=` is captured raw
+    /// `tile` keyword (polytile.md §2.1). The body after `:=` is captured raw
     /// into a [`TokenKind::TileBody`] when it is a block or heredoc.
     Tile,
     /// A raw tile body and how it was written.
@@ -131,11 +130,11 @@ pub enum TokenKind {
     ShiftRight,
     /// `&` (bitwise AND)
     Ampersand,
-    /// `&&` (logical AND — SRD-84 Part 1)
+    /// `&&` (logical AND — polydat_grammar.md §7)
     AmpAmp,
     /// `|` (bitwise OR)
     Pipe,
-    /// `||` (logical OR — SRD-84 Part 1)
+    /// `||` (logical OR — polydat_grammar.md §7)
     PipePipe,
     /// `!` (unary bitwise NOT)
     Bang,
@@ -381,8 +380,8 @@ pub fn lex(source: &str) -> Result<Vec<Token>, String> {
                 }
             }
 
-            // SRD-18c Layer 6 / SRD-18e Push 4: SI suffix
-            // literals. Suffix attaches to the just-lexed
+            // SI suffix literals (polydat_grammar.md §2.3).
+            // Suffix attaches to the just-lexed
             // numeric literal when the next 1-2 chars form
             // a known suffix AND the char after the suffix
             // isn't an identifier-continuation character
@@ -413,8 +412,8 @@ pub fn lex(source: &str) -> Result<Vec<Token>, String> {
                 }
                 // SI-promoted floats become U64 when the
                 // result is exactly integral (`1.5G` →
-                // 1_500_000_000 → U64) — matches SRD-18c
-                // §"Layer 6" type-resolution rule.
+                // 1_500_000_000 → U64), per polydat_grammar.md
+                // §2.3.
                 if suffix_consumed.is_some()
                     && val.fract() == 0.0
                     && val >= 0.0
@@ -839,7 +838,7 @@ pub fn lex(source: &str) -> Result<Vec<Token>, String> {
     Ok(tokens)
 }
 
-/// Capture a raw tile body after `tile ... :=` (SRD 114 §2.1).
+/// Capture a raw tile body after `tile ... :=` (polytile.md §2.1).
 ///
 /// Skips whitespace, then: a `{` or `[` starts a balanced, string-aware
 /// block that includes its brackets; `<<<` starts a heredoc ending at
@@ -1074,8 +1073,7 @@ fn placeholder_len(chars: &[char], pos: usize) -> Option<usize> {
     (chars.get(i) == Some(&'}')).then_some(i + 1 - pos)
 }
 
-/// SRD-18c Layer 6 / SRD-18e Push 4: peek for an SI suffix
-/// at `pos`. Returns `Some((multiplier, len, is_subunit))`
+/// Peek for an SI suffix (polydat_grammar.md §2.3) at `pos`. Returns `Some((multiplier, len, is_subunit))`
 /// on a match, `None` otherwise.
 ///
 /// Two-char binary suffixes (`Ki`, `Mi`, `Gi`, `Ti`, `Pi`)
@@ -1390,7 +1388,7 @@ mod tests {
         assert!(matches!(tokens[3].kind, TokenKind::Eof));
     }
 
-    // ── SRD-18c Layer 6 / SRD-18e Push 4: SI suffixes ──
+    // ── SI suffixes (polydat_grammar.md §2.3) ──
 
     #[test]
     fn lex_si_decimal_k_m_g_t_p() {
@@ -1437,7 +1435,7 @@ mod tests {
 
     #[test]
     fn lex_si_float_base_with_decimal_suffix() {
-        // 1.5K = 1500, integral → IntLit per SRD-18c §"Layer 6"
+        // 1.5K = 1500, integral → IntLit per polydat_grammar.md §2.3
         let tokens = lex("1.5K").unwrap();
         assert!(
             matches!(tokens[0].kind, TokenKind::IntLit(1_500)),
@@ -1478,17 +1476,14 @@ mod tests {
 
     #[test]
     fn lex_si_in_range_expression() {
-        // SI literals work in range positions (SRD-18c
-        // example `1K..1M..100K`). The lexer doesn't know
-        // about ranges yet, but should produce the right
-        // numeric tokens.
+        // SI literals work in range positions, as in
+        // `1K..1M..100K`. The lexer does not interpret
+        // ranges; it produces the numeric tokens.
         let tokens = lex("1K..1M..100K").unwrap();
         assert!(matches!(tokens[0].kind, TokenKind::IntLit(1_000)));
-        // Token 1 is `..` (still parsed as Dot Dot in
-        // pre-Push-3 lexer, but the numeric values are right).
-        // We just verify the IntLits at positions 0, 3, 6.
-        // (Positions depend on how `..` is tokenized today;
-        // we walk the IntLits.)
+        // The IntLits' positions depend on how `..` is
+        // tokenized, so the test walks the IntLits rather than
+        // indexing them.
         let int_lits: Vec<u64> = tokens
             .iter()
             .filter_map(|t| match &t.kind {

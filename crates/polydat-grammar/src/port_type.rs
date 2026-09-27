@@ -266,11 +266,9 @@ impl PortType {
     /// Every port type, once.
     ///
     /// A test that must hold for *all* types can walk this rather than
-    /// name the ones its author thought of. That is the difference
-    /// between a mapping that is complete and one that is complete so
-    /// far: the value↔slot writers were extended three times by finding
-    /// a type they had missed at run time, each found by a program that
-    /// happened to use it (2026-09-22).
+    /// name the ones its author thought of, so a mapping such as the
+    /// value↔slot writers is checked complete rather than complete for
+    /// the types some program happened to use.
     ///
     /// [`Self::every_variant_is_listed`] keeps this honest — it is an
     /// exhaustive `match`, so adding a variant without adding it here

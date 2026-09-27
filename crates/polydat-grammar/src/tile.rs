@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! The tile template grammar (SRD 114 §2.2): holes, projections,
+//! The tile template grammar (polytile.md §2.2): holes, projections,
 //! branches, and the doubled-open escape, parsed over configurable
 //! delimiters and sigil. The textual front end for Polytile; the
 //! structural front end (§3) lowers to the same pieces.
