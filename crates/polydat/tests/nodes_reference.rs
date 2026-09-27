@@ -103,6 +103,139 @@ fn the_node_catalog_is_the_registry() {
     );
 }
 
+/// A constant argument for `p`: its example when it has one a program
+/// can pass, and otherwise a value of its slot's kind.
+fn const_arg_for(p: &polydat::dsl::registry::ParamSpec) -> polydat::dsl::factory::ConstArg {
+    use polydat::ast::SlotType;
+    use polydat::dsl::factory::ConstArg;
+    let e = p.example;
+    let from_example = match p.slot_type {
+        SlotType::ConstU64 => e.parse().ok().map(ConstArg::Int),
+        SlotType::ConstF64 => e.parse().ok().map(ConstArg::Float),
+        SlotType::ConstStr => e
+            .strip_prefix('"')
+            .and_then(|s| s.strip_suffix('"'))
+            .map(|s| ConstArg::Str(s.to_string())),
+        _ => None,
+    };
+    from_example.unwrap_or(match p.slot_type {
+        SlotType::ConstF64 => ConstArg::Float(1.0),
+        SlotType::ConstStr => ConstArg::Str("a".into()),
+        SlotType::ConstVecU64 | SlotType::ConstVec => ConstArg::List(vec![ConstArg::Int(1)]),
+        SlotType::ConstVecF64 => ConstArg::List(vec![ConstArg::Float(1.0)]),
+        _ => ConstArg::Int(3),
+    })
+}
+
+/// How the closure tier takes a node, as `node_step_op` does: a plain
+/// copy, the u64 kit, or the slot kit for the wire types the node was
+/// built over.
+fn has_closure_form(node: &dyn polydat::ast::PolydatNode) -> bool {
+    use polydat::ast::Slot;
+    let meta = node.meta();
+    if (meta.name == "identity" || meta.name.starts_with("__port_")) && meta.outs.len() == 1 {
+        return true;
+    }
+    if node.compiled_u64().is_some() {
+        return true;
+    }
+    let wire_types: Vec<_> = meta
+        .ins
+        .iter()
+        .filter_map(|s| match s {
+            Slot::Wire(p) => Some(p.typ),
+            _ => None,
+        })
+        .collect();
+    node.compiled_slot(
+        &wire_types,
+        polydat::Engine::Closures(polydat::Provenance::Auto),
+    )
+    .is_some()
+}
+
+/// Every registered node, adapters and dataset nodes included, has a
+/// form the closure tier runs. A node is built from its signature,
+/// with each constant its example and every wire of one port type (a
+/// variadic node taking two), over every port type it accepts, and
+/// must have a closure form over at least one of them. A node
+/// whose constants no example supplies (a file path, a weighted spec,
+/// a compiled tile) is built by its hand-written coverage program
+/// instead, which the closure tier must build.
+#[test]
+fn every_registered_node_has_a_closure_form() {
+    use polydat::ast::PortType;
+    use polydat::compile::assembly::WireRef;
+    use polydat::dsl::compile::compile_polydat_to_assembler;
+    use polydat::dsl::factory::build_node;
+    let (csv, jsonl, txt) = super::common::coverage_cases::fixtures();
+    let programs = super::common::coverage_cases::overrides(&csv, &jsonl, &txt);
+    let closures = polydat::Engine::Closures(polydat::Provenance::Auto);
+    let mut gaps = Vec::new();
+    // A build a signature's synthesized constants cannot satisfy
+    // panics, and the walk tries the next wire type; the default hook
+    // would print every one of those.
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    for sig in registry() {
+        let consts: Vec<_> = sig
+            .params
+            .iter()
+            .filter(|p| p.slot_type.is_const())
+            .map(const_arg_for)
+            .collect();
+        let n = if sig.is_variadic() {
+            sig.wire_input_count().max(2)
+        } else {
+            sig.wire_input_count()
+        };
+        let wires: Vec<WireRef> = (0..n).map(|i| WireRef::input(format!("w{i}"))).collect();
+        let built: Vec<bool> = PortType::ALL
+            .iter()
+            .filter_map(|&t| {
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    build_node(sig.name, &wires, &vec![t; n], &consts)
+                }))
+                .ok()
+                .and_then(Result::ok)
+                .map(|node| has_closure_form(node.as_ref()))
+            })
+            .collect();
+        match (built.is_empty(), programs.get(sig.name)) {
+            (false, _) => {
+                if !built.contains(&true) {
+                    gaps.push(format!(
+                        "{}: no closure form over any wire type it builds with",
+                        sig.name
+                    ));
+                }
+            }
+            (true, Some(src)) => {
+                let built = compile_polydat_to_assembler(src)
+                    .map_err(|e| e.to_string())
+                    .and_then(|asm| {
+                        asm.compile_with(closures)
+                            .map(|_| ())
+                            .map_err(|e| e.to_string())
+                    });
+                if let Err(e) = built {
+                    gaps.push(format!("{}: {e}", sig.name));
+                }
+            }
+            (true, None) => gaps.push(format!(
+                "{}: neither its signature nor a coverage program builds it",
+                sig.name
+            )),
+        }
+    }
+    std::panic::set_hook(hook);
+    assert!(
+        gaps.is_empty(),
+        "nodes the closure tier cannot run:\n  {}",
+        gaps.join("\n  ")
+    );
+}
+
 /// Every parameter's example is a value a program can pass: `cycle`
 /// for a wire, and for a constant either nothing or a literal of its
 /// slot's kind that its own declared constraint accepts. The examples

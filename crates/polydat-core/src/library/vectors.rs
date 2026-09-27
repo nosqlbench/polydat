@@ -35,8 +35,6 @@
 
 use std::sync::{Arc, LazyLock};
 
-use crate::derive_support::Ext;
-use crate::iteration::cursor_partition::PartitionList;
 use crate::library::support::cache::OnceCache;
 
 use vectordata::TestDataGroup;
@@ -1056,13 +1054,12 @@ fn profile_facets(
 fn profile_partitions(
     group: crate::derive_support::Resolved<crate::derive_support::GroupResolver, DatasetHandle>,
     pattern: &str,
-) -> Ext<PartitionList> {
-    // The return is written `Ext<_>` by its bare name: the node macro
-    // recognizes an extension return by that spelling, and reads a
-    // path-qualified one as a handle, which leaves the node without a
-    // compiled form.
+) -> crate::derive_support::Ext<crate::iteration::cursor_partition::PartitionList> {
     let group: &TestDataGroup = group.resolve_group();
-    Ext(PartitionList::new(build_profile_partitions(group, pattern)))
+    let parts = build_profile_partitions(group, pattern);
+    crate::derive_support::Ext(crate::iteration::cursor_partition::PartitionList::new(
+        parts,
+    ))
 }
 
 /// Build the cumulative size-tier partitions for the profiles of `group`

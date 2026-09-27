@@ -1077,9 +1077,7 @@ fn classify_type(ty: &Type) -> Option<ConstShape> {
         // concrete `T` is read from the declared type where it is
         // needed; the shape itself carries no type so it stays `Copy`
         // with the rest.
-        _ if s.starts_with("Arc <") || s.starts_with("std :: sync :: Arc <") => {
-            Some(ConstShape::Opaque)
-        }
+        _ if is_generic_named(inner, "Arc") => Some(ConstShape::Opaque),
         _ => None,
     }
 }
@@ -1522,8 +1520,20 @@ enum BorrowWire {
 /// through `Wire::extract`. The generic path already handles it on
 /// the interpreter; this recognizer lets the slot kit carry it too.
 fn is_ext_wire(ty: &Type) -> bool {
-    let s = type_to_string(ty);
-    s.starts_with("Ext <") || s.contains(":: Ext <")
+    is_generic_named(ty, "Ext")
+}
+
+/// Whether `ty` is a path type whose last segment is `name` with
+/// angle-bracketed arguments, however the path is qualified: `Ext<T>`,
+/// `crate::derive_support::Ext<T>`, and `polydat::derive_support::Ext<T>`
+/// all match `"Ext"`. The type is read by its syn path rather than by
+/// its rendered tokens, which space a `::` as `: :`.
+fn is_generic_named(ty: &Type, name: &str) -> bool {
+    let Type::Path(p) = ty else { return false };
+    p.qself.is_none()
+        && p.path.segments.last().is_some_and(|last| {
+            last.ident == name && matches!(last.arguments, syn::PathArguments::AngleBracketed(_))
+        })
 }
 
 fn is_borrow_wire_shape(ty: &Type) -> Option<BorrowWire> {

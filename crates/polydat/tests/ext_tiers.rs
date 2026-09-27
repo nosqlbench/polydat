@@ -59,6 +59,64 @@ fn span_text(span: Ext<Span>) -> String {
     span.display()
 }
 
+/// `span_shift` with its extension argument and return written as
+/// qualified paths, which the macro recognizes as `Ext` by their last
+/// segment as it does the bare name.
+#[polydat::polydat_node(category = Math)]
+fn span_widen(
+    span: polydat::derive_support::Ext<Span>,
+    by: u64,
+) -> polydat::derive_support::Ext<Span> {
+    polydat::derive_support::Ext(Span {
+        lo: span.lo.saturating_sub(by),
+        hi: span.hi + by,
+    })
+}
+
+/// A path-qualified `Ext<…>` argument and return take the slot kit,
+/// so the node runs on the closure tier and native code and answers
+/// as the interpreter does.
+#[test]
+fn a_path_qualified_extension_node_has_a_slot_kit() {
+    use polydat::ast::{PolydatNode, PortType};
+    let kit = SpanWiden::default().compiled_slot(
+        &[PortType::Ext, PortType::U64],
+        polydat::Engine::Closures(polydat::Provenance::Auto),
+    );
+    assert!(
+        kit.is_some(),
+        "a path-qualified Ext argument and return take the slot kit"
+    );
+
+    let src = "input cycle: u64\n\
+               s := span_of(cycle, 2)\n\
+               w := span_widen(s, 3)\n\
+               n := span_len(w)\n\
+               label := span_text(w)\n";
+    let mut p1 = compile_polydat_to_assembler(src).unwrap();
+    p1.set_jit_mode(polydat::JitMode::Off);
+    let mut p1 = p1.compile().expect("P1");
+    for engine in [
+        polydat::Engine::Closures(polydat::Provenance::Raw),
+        polydat::Engine::Native(polydat::Provenance::PushPull),
+    ] {
+        let mut k = compile_polydat_to_assembler(src)
+            .unwrap()
+            .compile_slots(engine)
+            .unwrap_or_else(|_| panic!("{engine} refused a path-qualified extension node"));
+        for cycle in 0..16u64 {
+            p1.set_inputs(&[cycle]);
+            k.eval_at(&[cycle]);
+            assert_eq!(k.get("n"), p1.pull_ref("n").as_u64(), "{engine}: n");
+            assert_eq!(
+                k.get_value("label").as_str(),
+                p1.pull_ref("label").as_str(),
+                "{engine}: label at cycle {cycle}"
+            );
+        }
+    }
+}
+
 const SRC: &str = "input cycle: u64\n\
     h := hash(cycle)\n\
     s := span_of(mod(h, 1000), mod(cycle, 7))\n\
