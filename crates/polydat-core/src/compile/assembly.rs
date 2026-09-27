@@ -253,7 +253,8 @@ pub(crate) struct ResolvedDag {
     pub(crate) context: String,
     /// Output binding modifiers.
     pub(crate) output_modifiers: HashMap<String, crate::dsl::ast::BindingModifier>,
-    /// Names declared with `init` (SRD 11 §"Init Binding Contract").
+    /// Names declared with `const` (evaluation_model.md §"Const Binding
+    /// Contract").
     pub(crate) const_outputs: std::collections::HashSet<String>,
     /// The const bindings a kernel initializes, in dependency order.
     pub(crate) const_inits: Vec<crate::kernel::ConstInit>,
@@ -580,20 +581,18 @@ pub struct PolydatAssembler {
     /// binder, and each kernel bound from it is initialized then.
     pub(crate) template: bool,
     /// Names declared with the `const` keyword. Subject to the
-    /// init-binding contract (SRD 11 §"Init Binding Contract").
+    /// const binding contract (evaluation_model.md §"Const Binding
+    /// Contract").
     const_outputs: std::collections::HashSet<String>,
-    /// SRD 15 §"Strict Wire Mode": when true, the resolver
-    /// auto-inserts `AssertValue` nodes in front of every wire
-    /// input whose declared `Port.constraint` can't be statically
-    /// proven satisfied by the source.
+    /// The `strict_values` pragma (graph_compiler.md §2, strict-wire
+    /// assertions): when true, the resolver auto-inserts `AssertValue`
+    /// nodes in front of every wire input whose declared
+    /// `Port.constraint` can't be statically proven satisfied by the
+    /// source.
     pub(crate) strict_values: bool,
-    /// SRD 15: when true, the resolver auto-inserts `AssertType`
-    /// nodes in front of wires where the source's runtime variant
-    /// can't be statically proven to match the sink's declared
-    /// `PortType`. Today this is mainly latent — the type system
-    /// already proves variants match for nearly every wire — so
-    /// the flag exists for forward compatibility with dynamic
-    /// JSON navigation, `Ext` unwraps, and cross-adapter values.
+    /// The `strict_types` pragma. The resolver inserts no `AssertType`
+    /// node for it: the adapter pass has already made every resolved
+    /// wire's type match the sink's declared `PortType`.
     pub(crate) strict_types: bool,
     /// Strict mode: an implicit type coercion is refused at wire
     /// resolution, and a config wire fed from a cycle-time source, a
@@ -697,9 +696,10 @@ impl PolydatAssembler {
         &self.cursor_schemas
     }
 
-    /// Enable strict-wire-mode auto-insertion of value/type assertion
-    /// nodes (SRD 15 §"Strict Wire Mode"). Off by default — the
-    /// caller (compiler / DSL pragma extractor) opts in.
+    /// Set the `strict_types` and `strict_values` pragmas; under
+    /// `strict_values` the resolver inserts value assertion nodes
+    /// (graph_compiler.md §2). Off by default — the caller (compiler /
+    /// DSL pragma extractor) opts in.
     pub fn set_strict_wires(&mut self, strict_types: bool, strict_values: bool) {
         self.strict_types = strict_types;
         self.strict_values = strict_values;
@@ -714,7 +714,8 @@ impl PolydatAssembler {
         self.strict = strict;
     }
 
-    /// Override the engine-mix mode for this compile (SRD-105).
+    /// Override the interpreter's cone mode for this compile
+    /// (engines.md §2).
     /// Unset means `JitMode::Auto`.
     pub fn set_jit_mode(&mut self, mode: crate::compile::cone::JitMode) {
         self.jit_mode = Some(mode);
@@ -930,8 +931,8 @@ impl PolydatAssembler {
             records.push((name.clone(), name, source, ty, true));
         }
 
-        // What each captured const reads, now that every other captured
-        // const reads as its slot.
+        // What each captured const reads, with every other captured
+        // const read as its slot.
         let slot_owner: HashMap<String, String> = records
             .iter()
             .map(|(name, slot, _, _, _)| (slot.clone(), name.clone()))
@@ -1419,7 +1420,8 @@ impl PolydatAssembler {
     }
 
     /// The slots a pure-P3 kernel's raw readers must refuse and the
-    /// port type of each named output, for typed decode (SRD 115 §5).
+    /// port type of each named output, for typed decode
+    /// (compiled_handles.md §4).
     #[cfg(feature = "jit")]
     fn jit_slot_info(resolved: &ResolvedDag) -> (Vec<bool>, HashMap<String, PortType>) {
         let layout = slot_layout(resolved);
@@ -1604,9 +1606,9 @@ impl PolydatAssembler {
         self.try_compile_pure_jit_raw()
     }
 
-    /// Where each node lives, for the failure path (A7): its name, the
-    /// outputs it feeds, and `(first slot, port type)` per input port,
-    /// so a compiled kernel can report a step's failure as the
+    /// Where each node lives, for the failure path (engines.md §3.4):
+    /// its name, the outputs it feeds, and `(first slot, port type)`
+    /// per input port, so a compiled kernel can report a step's failure as the
     /// interpreter reports the node's.
     pub(crate) fn attribution_of(resolved: &ResolvedDag) -> crate::compile::Attribution {
         let layout = slot_layout(resolved);
@@ -1983,10 +1985,9 @@ impl PolydatAssembler {
                 // A port that takes the wire as it is gets no
                 // adapter and no check: converting the value would
                 // change what the node reads. The port says so
-                // itself (`Port::accepts_any_type`) — this used to be
-                // decided from a list of thirteen node names, which
-                // disabled the check on every port of those nodes,
-                // `pick`'s `Bool` selectors included.
+                // itself (`Port::accepts_any_type`), so the check stays
+                // on for the node's other ports, such as `pick`'s `Bool`
+                // selectors.
                 //
                 // A `Dyn` input feeding a typed port reads through a
                 // converter to that type (input_variance.md §5), placed
@@ -2091,18 +2092,17 @@ impl PolydatAssembler {
                     });
                 }
 
-                // === Strict-wire assertion insertion (SRD 15) ===
+                // === Strict-wire assertion insertion (graph_compiler.md §2) ===
                 //
                 // After a wire is resolved (and any type adapter
                 // inserted), look at the sink port's declared
                 // `constraint`. If strict_values is on, we either
                 // prove the source already satisfies it (skip) or
                 // splice an `AssertValue` node in front of the
-                // sink. The skip cases mirror the four bullets in
-                // SRD 15 §"Strict Wire Mode": static type match is
-                // already handled by the adapter pass above; here
-                // we cover constant sources and upstream-assertion
-                // chains for value constraints.
+                // sink. The adapter pass above has already matched
+                // the static type; the skip cases here are constant
+                // sources and upstream-assertion chains for value
+                // constraints.
                 let sink_port = &all_nodes[node_idx].node.meta().wire_inputs()[port_idx];
                 if let Some(constraint) = sink_port.constraint {
                     let last_source = node_wiring.last().expect("wire just pushed").clone();
@@ -2163,11 +2163,7 @@ impl PolydatAssembler {
                 } else if strict_types && source_type != expected_type {
                     // Type mismatch was already adapted above; the
                     // post-adapter wire is statically the right
-                    // type. No assertion needed. Tracking the skip
-                    // here is forward-compatible — once dynamic
-                    // type cases (JSON nav, Ext unwraps) appear,
-                    // this is where the AssertType insertion would
-                    // hook in.
+                    // type, so no `AssertType` is inserted.
                 }
             }
 
@@ -2184,7 +2180,7 @@ impl PolydatAssembler {
         // --- Node fusion optimization ---
         //
         // Recognize fusible subgraph patterns and replace them with
-        // semantically equivalent fused nodes. See SRD 36.
+        // semantically equivalent fused nodes (graph_compiler.md §5.2).
         {
             let rules = crate::compile::fusion::default_rules();
             if !rules.is_empty() {
@@ -2420,12 +2416,11 @@ impl PolydatAssembler {
             }
         }
 
-        // C6b — structural type-round-trip lint (see
+        // Structural type-round-trip lint (see
         // `compile::roundtrip_lint`): a value modulated `T → Y → … → T`
         // through pure conversion/formatting machinery violates the
         // native-types-stay-native principle. Warning by default; a
-        // hard error under strict-values mode, matching the SRD 15
-        // strict-wire constraint discipline.
+        // hard error under strict-values mode (graph_compiler.md §2).
         for f in crate::compile::roundtrip_lint::lint_type_round_trips(
             &final_nodes,
             &final_wiring,
@@ -2485,16 +2480,15 @@ impl PolydatAssembler {
 /// guarantees the sink's value `constraint` at compile time.
 /// Returns `true` if the assertion can be safely skipped.
 ///
-/// Today we recognise two skip cases (SRD 15 §"Strict Wire Mode"):
+/// Two skip cases apply:
 ///
-/// 1. **Constant source.** The source node has no wire inputs and
-///    its name matches the convention used by `fixed::ConstU64`
-///    et al. Const sources have already been validated against
-///    their `ParamSpec.constraint` at the factory layer, so any
-///    further runtime check would be redundant.
-/// 2. **Upstream assertion.** The source is itself an
-///    `AssertValue` node (its name starts with `__assert_v_`),
-///    which already enforces the same or stronger contract.
+/// 1. **Constant source.** The source node has no wire inputs, as
+///    `fixed::ConstU64` et al. do. Const sources have already been
+///    validated against their `ParamSpec.constraint` at the factory
+///    layer, so any further runtime check would be redundant.
+/// 2. **Upstream assertion.** The source is itself an assertion
+///    node (its name starts with `__assert_v_` or `assert_`), which
+///    is taken to enforce the same or stronger contract.
 fn value_constraint_proven(
     all_nodes: &[PendingNode],
     src: &WireSource,
@@ -2505,7 +2499,7 @@ fn value_constraint_proven(
         WireSource::NodeOutput(idx, _) => {
             let meta = all_nodes[*idx].node.meta();
             // Const-source heuristic: a node with no wire inputs
-            // is a constant. Today's `ConstU64` / `ConstF64` /
+            // is a constant. The `ConstU64` / `ConstF64` /
             // `ConstBool` (in `nodes::fixed`) and the synthesised
             // `ConstNode` from compile-time folding both qualify.
             let no_wire_inputs = meta.wire_inputs().is_empty();
@@ -2513,9 +2507,9 @@ fn value_constraint_proven(
                 return true;
             }
             // Upstream assertion: skip stacking the same guard.
-            // Conservative — any `__assert_v_*` upstream counts as
-            // proof. A fancier analysis would compare constraint
-            // shapes; for now, idempotency is good enough.
+            // Any `__assert_v_*` or `assert_*` upstream counts as
+            // proof, whatever its constraint: the constraint shapes
+            // are not compared.
             if meta.name.starts_with("__assert_v_") || meta.name.starts_with("assert_") {
                 return true;
             }
@@ -2525,8 +2519,8 @@ fn value_constraint_proven(
 }
 
 /// Format the reason a strict-wire assertion was skipped, for the
-/// `AssertionSkipped` advisory event. Mirrors the bullets in SRD 15
-/// §"Strict Wire Mode" so the log is grep-able.
+/// `AssertionSkipped` advisory event. Names the skip case
+/// `value_constraint_proven` matched, so the log is grep-able.
 fn assertion_skip_reason(
     strict_values: bool,
     all_nodes: &[PendingNode],
@@ -2552,7 +2546,7 @@ fn assertion_skip_reason(
 }
 
 /// The `shared` bindings of a resolved graph, by name: each is an
-/// extern the compiled kernels bind to a cell (engine parity, step 9).
+/// extern the compiled kernels bind to a cell (engines.md §3.6).
 pub(crate) fn shared_outputs_of(resolved: &ResolvedDag) -> Vec<&str> {
     let mut shared: Vec<&str> = resolved
         .output_modifiers
@@ -2564,8 +2558,6 @@ pub(crate) fn shared_outputs_of(resolved: &ResolvedDag) -> Vec<&str> {
     shared
 }
 
-/// The port type of each wire input of a node, from its sources: the
-/// type a compiled lowering sees (SRD 115 §6).
 /// Whether the adapter from `from` to `to` is a lossless numeric
 /// widening, the class the adapter table lists first: reported as a
 /// `TypeWidening`, where every other adapter is a `TypeAdapterInserted`.
@@ -2615,10 +2607,8 @@ pub fn auto_adapter(from: PortType, to: PortType) -> Option<Box<dyn PolydatNode>
         (PortType::I32, PortType::I64) => Some(Box::new(I32ToI64::new())),
         (PortType::I32, PortType::F64) => Some(Box::new(I32ToF64::new())),
         // Rounds past 2^24 and never fails, which is class A —
-        // totality, not losslessness. The node existed in `polyfill`
-        // and the element-wise `VecI32 -> VecF32` below was already
-        // auto-inserted; only this wiring was missing, so the scalar
-        // of the same two types fell through to a type mismatch.
+        // totality, not losslessness. It is the scalar counterpart of
+        // the element-wise `VecI32 -> VecF32` below.
         (PortType::I32, PortType::F32) => Some(Box::new(P::I32ToF32::new())),
         (PortType::I64, PortType::F64) => Some(Box::new(I64ToF64::new())),
         (PortType::F32, PortType::F64) => Some(Box::new(F32ToF64::new())),

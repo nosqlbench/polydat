@@ -33,7 +33,7 @@ pub(crate) struct P2Extras {
     /// Per input slot, coordinates and externs alike, the steps that
     /// depend on it: the provenance the plan is derived from.
     pub(crate) input_dependents: Vec<Vec<usize>>,
-    /// Where each step came from, for the failure path (A7).
+    /// Where each step came from, for the failure path (engines.md §3.4).
     pub(crate) attribution: std::sync::Arc<crate::compile::Attribution>,
 }
 
@@ -62,8 +62,8 @@ pub(crate) struct P2Step {
     /// slot→arena map for axiom S9(a)'s validator and the S2
     /// accessors.
     pub(crate) ref_output_starts: Vec<usize>,
-    /// The node handles `None` inputs itself (SRD-74 Rule 2); every
-    /// other node emits `None` when any input is `None` (Rule 1).
+    /// The node handles `None` inputs itself (none_semantics.md Rule 2);
+    /// every other node emits `None` when any input is `None` (Rule 1).
     pub(crate) accepts_none: bool,
     /// The node is nondeterministic or downstream of one (the runtime
     /// model's per-cycle invalidation set): never current.
@@ -82,7 +82,7 @@ struct CompiledStep {
     input_slots: Vec<usize>,
     output_slots: Vec<usize>,
     scratch_range: (usize, usize),
-    /// SRD-74 Rule 2: the closure runs on `None` inputs.
+    /// The closure runs on `None` inputs (none_semantics.md Rule 2).
     accepts_none: bool,
     /// Never current: nondeterministic or downstream of one.
     volatile: bool,
@@ -133,17 +133,17 @@ struct KernelCore {
     output_types: HashMap<String, PortType>,
     /// The extern inputs, written through at every set.
     externs: crate::compile::externs::Externs,
-    /// The traversals the program declares (SRD 113), opened through the
-    /// `Kernel` trait.
+    /// The traversals the program declares (for_traversal.md), opened
+    /// through the `Kernel` trait.
     traversals: std::sync::Arc<[crate::dsl::traversal::Traversal]>,
     /// Per declared output, its slot, type, and cone, resolved on the
-    /// first index-keyed pull (SRD 117 step 3).
+    /// first index-keyed pull (`pull_at`, runtime_model.md §6).
     resolved_outputs: Vec<Option<ResolvedOutput>>,
     /// The coordinates set through the `Kernel` trait, pending
     /// evaluation; `stale` means a write happened since the last
     /// evaluation round.
     drive: crate::compile::Drive,
-    /// Per slot: the slot holds `None` (SRD-74 on a compiled kernel):
+    /// Per slot: the slot holds `None` (none_semantics.md Rule 1):
     /// an unset extern, or an output of a step that propagated one.
     none: Vec<bool>,
     /// Per step: the evaluation round it last ran in, so a new round
@@ -170,7 +170,7 @@ struct KernelCore {
     plan: std::sync::Arc<crate::compile::Invalidation>,
     /// Per slot: the step that writes it, for the validator.
     slot_step: std::sync::Arc<[Option<usize>]>,
-    /// Where each step came from, for the failure path (A7).
+    /// Where each step came from, for the failure path (engines.md §3.4).
     sites: std::sync::Arc<crate::compile::Attribution>,
     /// The step running, for the failure path.
     cur_step: usize,
@@ -184,8 +184,8 @@ struct KernelCore {
     dirty: std::sync::Arc<[Vec<usize>]>,
     /// The steps that are never current.
     volatile_steps: std::sync::Arc<[usize]>,
-    /// Some slot holds `None`: an unset extern, which is
-    /// the only way one enters (SRD-74). When none does, the steps run
+    /// Some slot holds `None`: an unset extern, which is the only way
+    /// one enters (engines.md §3.3). When none does, the steps run
     /// without the mask.
     any_none: bool,
 }
@@ -244,7 +244,7 @@ impl KernelCore {
     }
 
     /// The program node the step now running belongs to, for the
-    /// failure path (A7). On this tier a step is one node, so the
+    /// failure path (engines.md §3.4). On this tier a step is one node, so the
     /// step index is the node index. Read by `run_guarded` and by the
     /// build-time `fold_steps`, so the two always name the same node.
     #[inline]
@@ -896,7 +896,8 @@ crate::compile::impl_slot_kernel!(CompiledKernelPush);
 crate::compile::impl_slot_kernel!(CompiledKernelPull);
 crate::compile::impl_slot_kernel!(CompiledKernelPushPull);
 
-/// One step: SRD-74 Rule 1, then gather, run the closure, scatter. A
+/// One step: none_semantics.md Rule 1, then gather, run the closure,
+/// scatter. A
 /// node that does not accept `None` emits `None` on every output when
 /// any input is `None`, without running.
 #[inline(always)]

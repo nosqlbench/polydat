@@ -1,11 +1,11 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! SRD-105 — cone-level JIT inside the interpreter kernel.
+//! Cone-level JIT inside the interpreter kernel (engines.md §2, §8).
 //!
 //! At assembly time, maximal cones of JIT-eligible nodes with
 //! scalar boundaries collapse into one synthetic `JitConeNode`
-//! each, compiled to native code via the existing P3 codegen. The
+//! each, compiled to native code by the P3 codegen. The
 //! cone node is an ordinary `PolydatNode`: the walker, scope
 //! chains, shared cells, None propagation, node_clean caching, and
 //! the enrich-and-re-raise panic contract all see a plain node.
@@ -53,7 +53,7 @@ mod jit_impl {
     use std::collections::HashMap;
 
     /// A fused subgraph compiled to native code, standing in the
-    /// program as one ordinary node (SRD-105). The node is shared by
+    /// program as one ordinary node (engines.md §2). The node is shared by
     /// every state of the program; the slot buffer its native code
     /// runs over, and the scratch entries its members' kits write
     /// into, belong to the state that evaluates it, which hands them
@@ -65,7 +65,7 @@ mod jit_impl {
         /// The members' scratch entries, after the slot buffer in the
         /// cone's scratch layout, with the validator's pairs.
         scratch: crate::compile::jit::ScratchPlan,
-        /// Where each member lives, for the failure path (A7): the
+        /// Where each member lives, for the failure path (engines.md §3.4): the
         /// member that failed is named as the program names it, with
         /// its outputs under the program's names; the cone is no frame.
         attribution: std::sync::Arc<crate::compile::Attribution>,
@@ -174,7 +174,8 @@ mod jit_impl {
             // Native code names the member it is in before each helper
             // call (the slot past the layout); a failure is re-raised
             // attributed to that member with the program's context and
-            // output names, and the interpreter re-raises it as is (A7).
+            // output names, and the interpreter re-raises it as is
+            // (engines.md §3.4).
             let code_fn = self.code_fn;
             let cp = buf.as_ptr();
             let mp = buf.as_mut_ptr();
@@ -239,7 +240,8 @@ mod jit_impl {
 
     /// A node may join a cone iff the P3 classifier can lower it with
     /// its wire types known, it is pure, and every wire port is a
-    /// single-slot value this push can marshal. The SRD-74 None rule
+    /// single-slot value this push can marshal. The None rule
+    /// (engines.md §3.3)
     /// is applied by the caller, which knows where each input comes
     /// from.
     fn node_eligible(node: &dyn PolydatNode, wire_types: &[PortType]) -> bool {
@@ -250,7 +252,8 @@ mod jit_impl {
             && node.meta().wire_inputs().iter().all(|p| scalar_ok(p.typ))
     }
 
-    /// SRD 11's three evaluation lifecycles, read from the one
+    /// The hoisting classes (compile-constant, scope-init, dynamic;
+    /// graph_compiler.md §3), read from the one
     /// classifier the program carries, so that extraction can
     /// restrict fusion to per-cycle work. Const and scope-init
     /// subgraphs belong to the fold passes (which evaluate them
@@ -259,12 +262,11 @@ mod jit_impl {
     /// `fold_init_constants`' single-output replacement, breaking
     /// `get_constant` consumers like `eval_const_expr`.
     ///
-    /// This was a second copy of the walk, which had drifted: it
-    /// seeded from the inputs and the declared purity but knew
-    /// nothing of the `volatile` output modifier and did not
-    /// propagate volatility downstream, so a node a program declared
-    /// volatile could read here as const and be fused into a cone the
-    /// fold then evaluated once.
+    /// Reading the program's classifier, rather than walking the graph
+    /// again, keeps the `volatile` output modifier and volatility's
+    /// downstream propagation in the answer, so a node a program
+    /// declares volatile never reads here as const and is never fused
+    /// into a cone the fold evaluates once.
     ///
     /// Returns each node's lifecycle and whether it is volatile.
     fn classify_lifecycles(dag: &ResolvedDag) -> (Vec<crate::kernel::EvalLifecycle>, Vec<bool>) {
@@ -312,8 +314,8 @@ mod jit_impl {
         }
 
         let (lifecycles, volatile) = classify_lifecycles(dag);
-        // Eligibility in topological order, because the SRD-74 None
-        // rule for a None-tolerant node depends on its sources: the
+        // Eligibility in topological order, because the None rule
+        // (engines.md §3.3) for a None-tolerant node depends on its sources: the
         // kernel guard makes a fused cone None whenever a boundary
         // input is None, so a node that would have seen the None and
         // produced a value (`tile_encode` writes `null`, `to_json`
@@ -436,9 +438,9 @@ mod jit_impl {
             };
             match build_cone(dag, &plan, &mut nodes_opt) {
                 Ok(cone) => {
-                    // Formation is diagnosable state too — the B2
-                    // sweep and cone-aware bench reporting key on
-                    // this line to verify extraction actually ran.
+                    // Formation is diagnosable state too: cone-aware
+                    // bench reporting keys on this line to verify
+                    // extraction actually ran.
                     crate::library::support::audit::debug(&format!(
                         "jit cone: fused {} members ({} boundary in, {} out): {}",
                         plan.members.len(),
@@ -449,8 +451,8 @@ mod jit_impl {
                     cones.push((plan, cone));
                 }
                 // Members were restored by build_cone; the cone
-                // stays on the interpreter (SRD-105 fallback rule:
-                // a JIT failure never fails a compile). Eligibility
+                // stays on the interpreter: a JIT failure never fails
+                // a compile. Eligibility
                 // prescreens classification, so a codegen error
                 // here is unexpected — surface it.
                 Err(e) => {
@@ -521,7 +523,7 @@ mod jit_impl {
                     return None;
                 }
                 let intra = matches!(src, WireSource::NodeOutput(j, _) if is_member(*j));
-                // SRD-74: a None-tolerant member must not sit on the
+                // engines.md §3.3: a None-tolerant member must not sit on the
                 // boundary, where a None could reach it (see the
                 // eligibility pass); a component split can put it there.
                 if !intra && member.accepts_none_inputs() {
@@ -553,10 +555,9 @@ mod jit_impl {
                 in_types.push(ty);
             }
         }
-        // SRD-105: cones are bounded at 64 boundary inputs. The bound
-        // is a size cap on a cone's boundary, kept from when a
-        // provenance mask was one word (`ProvMask` is now multi-word);
-        // a cone over it is skipped rather than re-split.
+        // Cones are bounded at 64 boundary inputs. The bound is a size
+        // cap on a cone's boundary, not a limit of `ProvMask`, which is
+        // multi-word; a cone over it is skipped rather than re-split.
         if boundary_in.len() > 64 {
             audit_skip(
                 members.len(),
@@ -716,7 +717,8 @@ mod jit_impl {
             source: String::new(),
             // A member's failure is reported against the program the
             // cone stands in, as the same node's failure is reported on
-            // every other engine (A7); the cone is not a frame of its own.
+            // every other engine (engines.md §3.4); the cone is not a
+            // frame of its own.
             context: dag.context.clone(),
             output_modifiers: HashMap::new(),
             const_outputs: std::collections::HashSet::new(),
@@ -810,7 +812,7 @@ mod jit_impl {
             .map(|(j, p)| (local[j], *p))
             .collect();
         // A member's failure names the member's outputs as the program
-        // names them (A7), not as the cone numbers them: the boundary
+        // names them (engines.md §3.4), not as the cone numbers them: the boundary
         // outputs take the program's names for the attribution.
         let mut named = sub.output_map.clone();
         for (k, (j, p)) in plan.boundary_out.iter().enumerate() {

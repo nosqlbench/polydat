@@ -48,11 +48,9 @@ pub fn analyze_graph(
 ) -> GraphAnalysis {
     let total_nodes = nodes.len();
 
-    // Compute per-output cone size: count nodes reachable from each output.
-    // A node is in the cone if its provenance overlaps with the output's.
-    // Actually, we need the transitive upstream set, which is the set of
-    // nodes that can reach this output. We compute this by walking backward
-    // from the output node.
+    // Compute per-output cone size: the transitive upstream set, the
+    // nodes that can reach the output, found by walking backward from
+    // the output node.
     let mut output_cone_sizes = Vec::new();
     for (name, &(node_idx, _port)) in output_map {
         let cone_size = compute_cone_size(node_idx, wiring);
@@ -125,7 +123,7 @@ fn compute_cone_size(node_idx: usize, wiring: &[Vec<WireSource>]) -> usize {
 
 /// Select the optimal provenance mode based on graph analysis.
 ///
-/// Heuristic (`crates/polydat/docs/design/engines.md`):
+/// Heuristic (engines.md §5):
 /// - Pull has zero overhead on all-dirty graphs (cone check ~2ns)
 /// - Pull is the safe default for selective output access
 /// - PushPull when multiple inputs exist (push skip helps within
@@ -153,8 +151,8 @@ pub fn select_prov_mode(analysis: &GraphAnalysis) -> ProvMode {
     // Single input: every node's cone includes the one input, so the
     // pull guard will always see "dirty" and fall through. Pull still
     // has zero overhead (the AND + branch costs ~2ns), so prefer it
-    // over Raw as free insurance for future multi-output scenarios
-    // where not all outputs are pulled every cycle.
+    // over Raw for multi-output programs where not all outputs are
+    // pulled every cycle.
     ProvMode::Pull
 }
 

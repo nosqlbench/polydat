@@ -84,8 +84,9 @@ impl HybridStep {
             HybridStep::Closure(cs) => &cs.output_slots,
         }
     }
-    /// SRD-74 Rule 2: the step runs on `None` inputs. Native code never
-    /// does; a node downstream of an unset extern is a closure.
+    /// The step runs on `None` inputs (none_semantics.md Rule 2). Native
+    /// code never does; a node downstream of an extern unset at build is
+    /// a closure.
     fn accepts_none(&self) -> bool {
         match self {
             #[cfg(feature = "jit")]
@@ -124,7 +125,7 @@ struct ClosureStep {
     output_slots: Vec<usize>,
     /// `[start, end)` into the kernel's scratch arena.
     scratch_range: (usize, usize),
-    /// SRD-74 Rule 2: the closure runs on `None` inputs.
+    /// The closure runs on `None` inputs (none_semantics.md Rule 2).
     accepts_none: bool,
     /// The program node, for the failure path.
     node: usize,
@@ -168,11 +169,11 @@ struct HybridCore {
     output_types: HashMap<String, crate::ast::PortType>,
     /// The extern inputs, written through at every set.
     externs: crate::compile::externs::Externs,
-    /// The traversals the program declares (SRD 113), opened through the
+    /// The traversals the program declares (for_traversal.md), opened through the
     /// `Kernel` trait.
     traversals: std::sync::Arc<[crate::dsl::traversal::Traversal]>,
     /// Per declared output, its slot, type, and cone, resolved on the
-    /// first index-keyed pull (SRD 117 step 3).
+    /// first index-keyed pull (`pull_at`, runtime_model.md §6).
     resolved_outputs: Vec<Option<ResolvedOutput>>,
     /// Keep source nodes alive so JIT-baked pointers remain valid.
     _nodes: std::sync::Arc<Vec<Box<dyn PolydatNode>>>,
@@ -180,7 +181,7 @@ struct HybridCore {
     /// evaluation; `stale` means a write happened since the last
     /// evaluation round.
     drive: crate::compile::Drive,
-    /// Per slot: the slot holds `None` (SRD-74 on a compiled kernel).
+    /// Per slot: the slot holds `None` (none_semantics.md Rule 1).
     none: Vec<bool>,
     /// Per step: the evaluation round it last ran in, so a new round
     /// forgets every run without a scan.
@@ -208,7 +209,7 @@ struct HybridCore {
     side: std::sync::Arc<[bool]>,
     /// Per slot: the step that writes it.
     slot_step: std::sync::Arc<[Option<usize>]>,
-    /// Where each step came from, for the failure path (A7).
+    /// Where each step came from, for the failure path (engines.md §3.4).
     sites: std::sync::Arc<crate::compile::Attribution>,
     /// The step running, for the failure path.
     cur_step: usize,
@@ -223,8 +224,8 @@ struct HybridCore {
     /// channels among them (an optimization over the plan, not a change
     /// to it).
     dirty: std::sync::Arc<[Vec<usize>]>,
-    /// Some slot holds `None`: an unset extern, which is
-    /// the only way one enters (SRD-74). When none does, the steps run
+    /// Some slot holds `None`: an unset extern, which is the only way
+    /// one enters (engines.md §3.3). When none does, the steps run
     /// without the mask.
     any_none: bool,
     /// The steps that are never current, invalidated at every round.
@@ -318,7 +319,7 @@ impl HybridCore {
     }
 
     /// The program node the step now running belongs to, for the
-    /// failure path (A7). A step here can be a run of native code over
+    /// failure path (engines.md §3.4). A step here can be a run of native code over
     /// several nodes, so the tracker slot names the member. Read by
     /// `run_guarded` and by the build-time `fold_steps`, so the two
     /// always name the same node.
@@ -824,7 +825,7 @@ pub(crate) fn build_hybrid(
         .iter()
         .enumerate()
         .map(|(node_idx, node)| {
-            // Classified with the wire types known (SRD 115 §6.1), as
+            // Classified with the wire types known (compiled_handles.md §6), as
             // cones and pure-P3 layouts are: a variadic node whose
             // wires its helper cannot decode falls back to its closure.
             let wire_types: Vec<crate::ast::PortType> = wiring[node_idx]
@@ -857,8 +858,8 @@ pub(crate) fn build_hybrid(
         .collect();
     // A node that would have produced a value from a `None` runs as a
     // closure, always. A segment's answer to a `None` on one of its
-    // boundary inputs is `None` on all of its outputs — SRD-74 Rule 1,
-    // the only answer native code can give, since it cannot carry one.
+    // boundary inputs is `None` on all of its outputs — none_semantics.md
+    // Rule 1, the only answer native code can give, since it cannot carry one.
     // That answer is right for every node that propagates a `None` and
     // wrong for a node that consumes one (`to_json` keeps going, a
     // `printf` with an `Option` arg writes its own text), so such a
@@ -881,10 +882,9 @@ pub(crate) fn build_hybrid(
         eligible[node_idx] = true;
     }
     // A node downstream of an extern with no value runs as a closure
-    // too. This is the narrower case — the extern is already unset at
-    // build — and it stays because it also keeps the `None` out of
-    // segments downstream, where the boundary guard would otherwise be
-    // the only thing catching it.
+    // too. This is the narrower case, the extern already unset at
+    // build, and it keeps the `None` out of segments downstream, where
+    // the boundary guard would otherwise be the only thing catching it.
     let unset = externs.unset_slots();
     if !unset.is_empty() {
         let mut tainted = vec![false; nodes.len()];
@@ -905,9 +905,8 @@ pub(crate) fn build_hybrid(
     // in the graph's order. A constant depends on constants alone, so
     // hoisting them keeps every dependency ahead of its consumer, and
     // it keeps the cycle-time nodes contiguous: a literal between two
-    // cycle-time statements no longer cuts a segment in two (the tile
-    // ladder's twenty-hole case ran as dozens of segments that way,
-    // each paying the segment's catch and step bookkeeping).
+    // cycle-time statements does not cut a segment in two, which would
+    // make each piece pay the segment's catch and step bookkeeping.
     let order: Vec<usize> = (0..nodes.len())
         .filter(|&k| constant[k])
         .chain((0..nodes.len()).filter(|&k| !constant[k]))
@@ -916,7 +915,7 @@ pub(crate) fn build_hybrid(
     for (pos, &k) in order.iter().enumerate() {
         rank[k] = pos;
     }
-    // Segments are the fusion units (SRD-105, compile::fusion_units):
+    // Segments are the fusion units (engines.md §8, compile::fusion_units):
     // connected, convex groups of native nodes, so two chains that share
     // nothing are two segments and a pull runs only its own. Nodes fuse
     // within one lifecycle: a segment is folded at build only if every
@@ -1015,7 +1014,7 @@ pub(crate) fn build_hybrid(
             // are Ref2 slots to the S2/S9 validator, which a segment
             // may only load, store, and pass. Native code names the
             // member it is in through the tracker slot, for the failure
-            // path (A7).
+            // path (engines.md §3.4).
             let batch: Vec<(JitOp, Vec<usize>, Vec<usize>)> = members
                 .iter()
                 .map(|&k| classifications[k].clone())
@@ -1330,7 +1329,7 @@ fn build_pushpull_from_steps(
         v.dedup();
         v
     };
-    // One slot past the layout is the tracker (A7).
+    // One slot past the layout is the tracker (engines.md §3.4).
     let mut buffer = vec![0u64; total_slots + 1];
     let mut none = vec![false; total_slots];
     let any_none = externs.seed(&mut buffer, Some(&mut none));
@@ -1524,12 +1523,12 @@ crate::compile::impl_slot_kernel!(HybridKernelRaw);
 crate::compile::impl_slot_kernel!(HybridKernelPull);
 crate::compile::impl_slot_kernel!(HybridKernelPushPull);
 
-/// One step: SRD-74 Rule 1, then the segment or the closure. A step
-/// that does not accept `None` emits `None` on every output when any
-/// input is `None`, without running.
+/// One step: none_semantics.md Rule 1, then the segment or the
+/// closure. A step that does not accept `None` emits `None` on every
+/// output when any input is `None`, without running.
 ///
-/// A segment is such a step and always was — native code cannot carry
-/// a `None` — so a `None` on one of its boundary inputs makes all of
+/// A segment is such a step, since native code cannot carry a `None`,
+/// so a `None` on one of its boundary inputs makes all of
 /// its outputs `None`, which is the same answer the closure tier and
 /// the interpreter give. It reaches a segment only when a host cleared
 /// an extern after the build; an extern unset at build already keeps

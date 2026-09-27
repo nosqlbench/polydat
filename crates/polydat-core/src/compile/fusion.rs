@@ -110,7 +110,7 @@ pub struct MatchResult {
     pub constants: Vec<(String, Vec<u64>)>,
 
     /// Bound typed constants from the slot model.
-    /// Empty for nodes not yet migrated to slots.
+    /// A bound node with no const slots contributes no entry.
     pub typed_constants: Vec<(String, Vec<ConstValue>)>,
 
     /// The set of node indices consumed by this match. These nodes

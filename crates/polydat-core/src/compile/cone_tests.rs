@@ -12,13 +12,13 @@
 //! property of each compile, so the tests need no serialization.
 
 /// Reduced from the workspace fuzz (`fuzz_type_adapters`, seed
-/// 0xDEADBEEF, iteration 261): connected-component cone selection
-/// grouped eligible nodes whose only path between them ran
-/// through INELIGIBLE nodes, so the kept middle became both a
-/// consumer of the cone and one of its producers — a cycle in
-/// the spliced graph that tripped the rebuild topo-sort assert.
-/// A non-convex component must take the SRD-105 fallback (stay
-/// on the interpreter), never panic the compile.
+/// 0xDEADBEEF, iteration 261): eligible nodes whose only path
+/// between them runs through ineligible nodes form a non-convex
+/// component. Spliced as one cone, the kept middle would be both a
+/// consumer of the cone and one of its producers, a cycle in the
+/// spliced graph that trips the rebuild topo-sort assert. A
+/// non-convex component stays on the interpreter and never panics
+/// the compile.
 #[test]
 fn non_convex_components_stay_on_the_interpreter() {
     let src = "input cycle: u64\n\

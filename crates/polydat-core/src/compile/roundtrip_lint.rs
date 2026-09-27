@@ -1,8 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Structural type-round-trip lint (C6b; governing principle:
-//! `feedback_no_auto_string_conversion`).
+//! Structural type-round-trip lint (graph_compiler.md §2).
 //!
 //! Detects DAG paths where a value's type is modulated to another type
 //! and then restored — `T → Y → … → T` — purely through conversion /
@@ -10,9 +9,9 @@
 //! native through data passing; a round trip means some hand-off point
 //! was expressed in a foreign type (usually text) and re-parsed, which
 //! loses type fidelity, costs work, and turns downstream type checks
-//! into liars. The canonical instance is the retired identity-shadow
-//! bug (`VecF32 → printf → Str → parse → VecF32`); this lint subsumes
-//! that string case in one structural rule.
+//! into liars. The canonical instance is a value shadowed through text
+//! (`VecF32 → printf → Str → parse → VecF32`); this lint covers that
+//! string case and every other round trip in one structural rule.
 //!
 //! **Classification is derived from the adapter catalogs themselves**
 //! ([`boundary_adapter`] enumerated over the closed `PortType`

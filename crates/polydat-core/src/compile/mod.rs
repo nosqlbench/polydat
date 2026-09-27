@@ -19,8 +19,9 @@
 //!
 //! The host names the engine ([`select::Engine`]); under
 //! `Provenance::Auto` the selector picks the provenance mode from the
-//! graph's shape. Pure native code (`jit::JitKernel*`) is the
-//! differential tier behind the hybrid kernel.
+//! graph's shape. `Engine::PureNative` builds the pure native kernels
+//! (`jit::JitKernel*`): Cranelift code for the whole program, with no
+//! closure fallback (engines.md §1).
 //!
 //! - [`assembly`]: the public construction surface
 //!   ([`assembly::PolydatAssembler`] + [`assembly::WireRef`]) and
@@ -30,7 +31,7 @@
 //! - [`roundtrip_lint`]: the structural type-round-trip lint run at
 //!   resolution.
 //! - [`cone`]: cone-level JIT inside the interpreter kernel
-//!   (SRD-105), under a [`cone::JitMode`].
+//!   (engines.md §2), under a [`cone::JitMode`].
 //! - [`lattice`]: the engine-mix report of a compiled program.
 //! - [`select`]: the engine and provenance enums, and the heuristic
 //!   that picks a provenance mode under `Provenance::Auto`.
@@ -249,14 +250,15 @@ macro_rules! kernel_accessors {
 }
 pub(crate) use kernel_accessors;
 
-/// SRD-74's fusion rule: whether a node may join the run of fused
-/// code being formed, as far as `None` is concerned. The one predicate
+/// The None rule for fusion (engines.md §3.3): whether a node may join
+/// the run of fused code being formed, as far as `None` is concerned.
+/// The one predicate
 /// both fusers apply — the interpreter's cone planner and the hybrid's
 /// segment batcher — so that what one admits the other admits.
 ///
 /// Fused code answers a `None` on a boundary input by making every one
 /// of its outputs `None`, because native code cannot carry one. That is
-/// SRD-74 Rule 1 and it is the right answer for a node that propagates
+/// none_semantics.md Rule 1 and it is the right answer for a node that propagates
 /// a `None`. It is the wrong answer for a node that *consumes* one and
 /// keeps going — `to_json` writes `null`, a `printf` with an `Option`
 /// argument writes its own text — so such a node may join only when
@@ -834,25 +836,14 @@ pub(crate) use impl_kernel_trait;
 /// what a write dirties, the extern writes and the cell refresh, the
 /// reference pairs a step publishes, and reading an output back.
 ///
-/// Both compiled cores carry the same fields for these and, until this
-/// macro, the same eighteen method bodies byte for byte. None of them
-/// touches the step list, which is the one thing the two tiers
-/// genuinely differ about: a step on the closure tier is always a
-/// closure, and on the native tier it is a closure or a run of native
-/// code. That difference lives in the run loops, which stay per tier.
+/// Both compiled cores carry the same fields for these, and this macro
+/// gives them one copy of the methods. None of them touches the step
+/// list, which is the one thing the two tiers genuinely differ about:
+/// a step on the closure tier is always a closure, and on the native
+/// tier it is a closure or a run of native code. That difference lives
+/// in the run loops, which stay per tier (engines.md §8).
 macro_rules! shared_core_methods {
     () => {
-        /// Axiom S9: every reference pair in the buffer names the
-        /// scratch entry that owns it. A slot is skipped when nothing
-        /// has been published into it — its step has not run, or it
-        /// carries `None`.
-        ///
-        /// The two tiers wrote this assertion separately and their
-        /// skip predicates had drifted apart: one skipped a `None`
-        /// slot only when a step owned it, the other whenever the
-        /// slot was `None`. Nothing is published either way, so the
-        /// looser test is the right one and is now the only one.
-        ///
         /// Axiom S2 typed accessor core: resolve a Ref pair's first
         /// slot to its kernel-owned scratch entry. The returned
         /// borrow ties to `&self`, so holding it across the next
@@ -871,8 +862,8 @@ macro_rules! shared_core_methods {
 
         /// Run `body` with the failure path armed: a panic inside a
         /// step is recorded quietly and re-raised enriched, as the
-        /// interpreter re-raises a node's (A7), and every reference
-        /// pair is checked afterwards in a debug build.
+        /// interpreter re-raises a node's (engines.md §3.4), and every
+        /// reference pair is checked afterwards in a debug build.
         ///
         /// `#[inline]` is load-bearing: this wraps every `eval`, and
         /// without it the native rung of the ladder pays a call and
@@ -891,6 +882,11 @@ macro_rules! shared_core_methods {
             self.validate_refs();
         }
 
+        /// Axiom S9: every reference pair in the buffer names the
+        /// scratch entry that owns it. A slot is skipped when nothing
+        /// has been published into it — its step has not run, or it
+        /// carries `None`.
+        ///
         /// Gated to `debug_assertions` to match its call sites, which
         /// compile out in release.
         #[cfg(debug_assertions)]
@@ -1282,10 +1278,9 @@ pub(crate) use shared_core_methods;
 
 /// The dirty-register plan of a compiled kernel: which steps each input
 /// slot invalidates when it changes, and which steps each named output
-/// needs. The evaluation loops consume only this; provenance derives it
-/// today, and a host that knows its write and read patterns may supply
-/// a narrower plan later without touching the loops
-/// (docs/design/engines.md §3.1).
+/// needs. The evaluation loops consume only this, and provenance derives
+/// it, so a narrower plan would need no change to the loops
+/// (engines.md §3.1).
 pub(crate) struct Invalidation {
     /// Per input slot (coordinates and externs alike), the steps that
     /// depend on it, transitively.

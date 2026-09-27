@@ -159,12 +159,9 @@ pub(crate) fn carrier_port(ty: PortType) -> PortType {
 /// The read is chosen by the type's slot color, as `write_poly`'s
 /// write is, so every compiled read of a value (an output a host
 /// pulls, and an input a polymorphic node takes) is the inverse of
-/// the one write. This used to match on the type with a `U64`
-/// fallback. The `Imm2` limb reassembly lived only in
-/// `decode_output`, so a register or 128-bit value reaching a
-/// polymorphic node's input fell through to the fallback and arrived
-/// as its low limb, typed `U64`. The type system knew better at every
-/// step; only the fallback arm did not.
+/// the one write. An `Imm2` value, a register word or a 128-bit
+/// integer, is reassembled from both limbs here too, so it reaches a
+/// polymorphic node's input whole and typed, never as its low limb.
 pub(crate) fn decode_slot(slots: &[u64], ty: PortType) -> Value {
     use crate::ast::{Bits128, RegLanes, SlotColor};
     match ty.slot_color() {

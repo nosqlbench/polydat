@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Fusion units: how nodes are grouped into native code, one rule for
-//! every engine that fuses (SRD-105; engines.md §2, §8).
+//! every engine that fuses (engines.md §2, §8).
 //!
 //! A unit is a connected, convex set of fusible nodes of one class. The
 //! interpreter's cone planner fuses such components into cones, the

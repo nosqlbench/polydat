@@ -26,7 +26,7 @@
 //!   port type, stores it, and writes it through; the kernel that owns
 //!   the buffer marks the slot's dependents dirty.
 //! - **Cells.** A `shared` binding's slot is bound to a `SharedCell`
-//!   (engine parity, step 9), the same cell type the interpreter
+//!   (engines.md §3.6), the same cell type the interpreter
 //!   attaches: the cell is the register. `set` publishes through it,
 //!   every run and every pull refresh the slot from it when its
 //!   revision moved, and a host attaches one kernel's cell to another
@@ -136,22 +136,17 @@ pub(crate) fn unset_read_inputs(
 /// Behind one pointer because `Externs` is embedded **by value** in all
 /// three compiled cores (`KernelCore`, `HybridCore`, `JitCore`): inline,
 /// the three cost about a hundred bytes of every core, and `Externs`
-/// measured 328 bytes against 224 for the boxed form.
+/// measures 328 bytes unboxed against 224 boxed.
 ///
-/// The indirection is for size, not for a measured win. It was written
-/// to test whether that hundred bytes explained a three-to-eight percent
-/// regression on the native rungs, and `engine_ladder` says it does not:
-/// bracketed against the unboxed form in thermal steady state, every
-/// native rung moved less than the `p1_interpreter` canary's own noise
-/// (2026-09-22). Keep it for the cold/hot separation; do not cite it as
-/// a speedup, and do not assume the regression is explained.
-///
-/// It did matter on 2026-09-24: about forty bytes added to `Externs` by
-/// value, with a rare cell-refresh path grown inline beside it, cost the
-/// `p3_native_dyn` rung about 5% in paired rounds, and moving the
-/// per-input origins in here, narrowing the coordinate counts to `u32`,
-/// and taking the refresh work out of line brought it back within noise.
-/// Put what is not read per cycle in here, not beside it.
+/// The indirection keeps cold data apart from hot data; it is not a
+/// speedup on its own. On `engine_ladder`, the boxed and unboxed forms
+/// differ by less than the `p1_interpreter` canary's noise on every
+/// native rung. Growing `Externs` by value does cost: about forty bytes
+/// more, with a rare cell-refresh path inline beside it, measured about
+/// 5% slower on the `p3_native_dyn` rung in paired rounds. That is why
+/// the per-input origins live here, the coordinate counts are `u32`,
+/// and the refresh work is out of line. Put what is not read per cycle
+/// in here, not beside it.
 #[derive(Default)]
 struct ScopeCells {
     /// The binding modifiers of the named outputs, so a compiled
@@ -197,7 +192,8 @@ pub(crate) struct Externs {
     /// checks this one count rather than scanning the externs.
     unset_read: u32,
     /// Per input index, the extern slot it names; `None` for a
-    /// coordinate. The index-keyed set (SRD 117 step 3).
+    /// coordinate. The index-keyed set (`set_input_at`,
+    /// runtime_model.md §6).
     by_index: Vec<Option<usize>>,
     /// Every named output in declaration order, as the interpreter
     /// program lists them.
@@ -833,9 +829,11 @@ impl Externs {
             .any(|s| s.slot == slot && s.value == Value::None)
     }
 
-    /// Whether any extern has no value (A12): the kernel that keeps a
-    /// `None` mask propagates it as the interpreter does; a native
-    /// kernel, which cannot, refuses to run.
+    /// Whether any extern has no value: a kernel that keeps a `None`
+    /// mask reads the mask only then, and propagates the `None` as the
+    /// interpreter does (engines.md §3.3). Pure native, which keeps no
+    /// mask, uses `any_unset_read` and refuses only the pulls that
+    /// depend on an unset extern.
     pub(crate) fn any_unset(&self) -> bool {
         self.slots.iter().any(|s| s.value == Value::None)
     }
@@ -1076,13 +1074,10 @@ fn write_through(s: &ExternSlot, buffer: &mut [u64]) {
 
 /// A carrier value's slot bits; an unset carrier reads as zero.
 ///
-/// The catch-all used to be `0`, which answered zero for an unset
-/// extern and *also* for a value of a type that is not a carrier at
-/// all — a wrong answer with no error, which is the worse half of the
-/// two. `None` is the case that means zero and says so; anything else
-/// reaching here is a slot coloured `Imm1` holding something that does
-/// not fit one, which the type system does not allow and the caller
-/// should hear about rather than read a zero from.
+/// `None` is the only case that means zero. Anything else reaching the
+/// catch-all is a slot coloured `Imm1` holding something that does not
+/// fit one, which the type system does not allow, so it panics rather
+/// than answer a zero with no error.
 fn carrier_bits(v: &Value) -> u64 {
     match v {
         Value::U64(n) => *n,
