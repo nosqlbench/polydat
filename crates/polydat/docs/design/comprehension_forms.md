@@ -637,6 +637,13 @@ The §3.6 table is the per-strategy reference. The summary:
   be non-`None` — i.e. the input must be a `cartesian`, a `zip`
   (any mode), a `union` of index-addressable children, or a
   `clause` (which is a 1-axis `Lattice`).
+- An untruncated `Lex` order passes its input's `IndexFn` through;
+  a truncated one keeps a prefix, which has none, and so does every
+  other order's output.
+- A strategy that selects from the shape reads through the
+  untruncated orders directly under it (§7.4 O1), so
+  `order(order(c, shuffle), halton, 4)` is judged as
+  `order(c, halton, 4)`.
 - Under V5, a `filter` wrapping an index-addressable
   input does NOT destroy the underlying addressability for V4's
   purposes. V4's check looks through one filter layer.
@@ -646,18 +653,30 @@ compositions (e.g. `Extrema` over a 1-D `Lattice` yielding
 `{first, last}`) pass V4 and are flagged by §5.8's warning
 mechanism, not rejected.
 
-**V4 enforcement timing (per §10.7.8).** V4 fires at
-strategy-invocation time against the
-[`EvaluatedSource`](#1076-the-evaluatedsource-contract) the strategy receives. For
-comprehensions whose sources are all statically evaluable
-(per §10.7.0's eval-class partitioning — `Literal` /
-`IntRange` / `ContinuousInterval` / context-free
-generators flattened per §10.7.7), the compile stage (`validate`, run by
-`CompiledComprehension::from_ast` and by the `for` lowering) fires
-V4 early so that malformed shapes error at parse time. For
-context-required sources, the early check is skipped, and the
-runtime check at strategy invocation is the authoritative one.
-The axiom is the same at both times.
+**V4 enforcement timing (per §10.7.8).** V4, like every axiom
+in this section, is decided on the **tree as written**, before any
+rewrite. The compile stage (`validate`, run by
+`CompiledComprehension::from_ast` and by the `for` lowering) judges
+the tree after flattening its context-free sources (§10.7.7) and
+before the optimizer (§10) sees it, so acceptance is a property of
+the source text: the stream, which compiles the optimizer's rewrite,
+and the traversal, which evaluates the tree as written, accept and
+refuse the same comprehensions. Every rewrite keeps an accepted tree
+accepted (§10.2), and a judgment never depends on how a node is
+wrapped: an operand under an untruncated `Lex` order, which R0a
+drops, is judged as it is judged bare.
+
+V4 fires again at strategy-invocation time against the
+[`EvaluatedSource`](#1076-the-evaluatedsource-contract) the strategy
+receives. For statically evaluable sources (per §10.7.0's
+eval-class partitioning — `Literal` / `IntRange` /
+`ContinuousInterval` / context-free generators flattened per
+§10.7.7) the evaluated shape is the one the validator judged, and a
+tree the validator accepts is never refused at a strategy. A
+context-required source is judged by what its text declares (a
+cardinality hint, or an unknown count), and the invocation-time
+check against its evaluated shape is the authoritative one. The
+axiom is the same at both times.
 
 **V4 + dependent Cartesian.** When a `cartesian`'s children
 have cross-references (dependent product per §3.2), the
@@ -681,9 +700,32 @@ operating over an independent inner product.
 `order(c, strategy, t)` is valid. The intermediate `filter`
 node has `index_addressable: None` per §10.7's propagation
 rules, but V4 looks through one filter layer when computing
-the strategy's input `IndexFn`. The ordering operates on the
-filter-surviving tuples while reasoning about their *original*
-index-space positions.
+the strategy's input `IndexFn`.
+
+**What an order over a filter means.** The strategy ranks only the
+tuples that pass the filter, by their **original** positions in the
+filter's input, and keeps its truncation's worth of them:
+
+- A strategy that truncates by count keeps `n` survivors in the order
+  it ranks them, so `halton/n` yields `n` survivors whenever at least
+  `n` exist, and fewer only when fewer survive.
+- `extrema/k` keeps the first `k` strata that hold a survivor, each
+  with only its survivors, so `extrema/1` is the most extreme stratum
+  any survivor is in: never empty while anything survives.
+- When every tuple survives, the order selects exactly what it
+  selects without the filter.
+
+Over `a in 0..3, b in 0..3`, `where {a} == 1 || {b} == 1 order
+extrema/1` removes every corner, so it yields the four edge midpoints
+`(0,1), (1,0), (1,2), (2,1)`; `where {a} != 0 || {b} != 0 order
+extrema/1` removes one corner and yields the other three.
+
+The order is a materialization barrier sized by the survivors on both
+paths: the traversal and the stream's `ORDER_MATERIALIZE` (§9.1) test
+the predicate on every tuple of the filter's input, then hold that
+input and the positions the strategy keeps. The metadata counts at
+most the smaller of the filter's bound and the truncation (at most
+the bound for `extrema` and `shells`, which truncate by strata).
 *Reason:* extrema-of-survivors and shells-of-survivors are
 meaningful when the user wrote "extrema of (k, limit) where
 k*limit ≤ 50"; the surviving corners are still corners of the
@@ -693,9 +735,10 @@ filtering, losing N1's filter-then-order vs. order-then-filter
 distinction.
 
 V5's transparency is **one filter layer**, not arbitrarily deep.
-`order(filter(filter(c, p), q), strategy, t)` requires F1
-folding (§7.2) to collapse to one filter first, then V4's
-look-through applies.
+Validation judges the tree as written, so
+`order(filter(filter(c, p), q), strategy, t)` is refused rather than
+folded first; `order(filter(c, p && q), strategy, t)`, which the text
+form `where p && q` writes, is accepted.
 
 V5 applies **uniformly across cardinality classes**: V4's check
 also sees the underlying `IndexFn::Continuous` / `IndexFn::Hybrid`
@@ -992,6 +1035,10 @@ to produce correct output:
   positions, so the working set is the whole index space while
   the selection is built. Afterwards the order holds only the
   selected positions.
+- `order(filter(c, p), strategy, t)` — a barrier sized by the
+  survivors: the predicate is tested on every tuple of `c`, and the
+  order holds `c` and the positions of the survivors it keeps (§5
+  V5).
 - `zip(Cycle)` — barrier of size = the sum of the buffered
   children's bounds; unbounded if a buffered child has no bound,
   and no barrier if no child is buffered.
@@ -1079,10 +1126,33 @@ D2.
 
 ### 7.4 Order chaining
 
-**O1 — outer order wins, modulo truncation:**
-`order(order(c, s1, None), s2, t)` ≡ `order(c, s2, t)`.
-The inner full-permutation is wasted; the outer redoes it.
-The optimizer SHOULD fold.
+**O1 — a strategy that selects from the shape reads through an
+untruncated order:** `order(order(c, s1, None), s2, t)` ≡
+`order(c, s2, t)` when `s2` selects from its input's shape.
+
+A strategy **selects from the shape** when it places each tuple by
+its position in the input's index space: `halton`, `sobol`, and
+`lhs` sample that space, and `extrema`, `shells`, `diagonal`, and
+`antidiagonal` walk its geometry. An untruncated order under such a
+strategy only permutes the tuples of the shape beneath it, each of
+which keeps its position there, so the strategy chooses the same
+tuples in the same order, and its own truncation `t` applies. A
+strategy that **selects from the sequence** chooses by where a tuple
+arrives: `lex` takes a prefix, `reverse_lex` reverses, and `shuffle`
+permutes the positions it is given. After a permutation it chooses
+differently, and both orders run:
+
+```text
+order(order(c, shuffle), halton, 4)   ≡ order(c, halton, 4)
+order(order(c, shuffle), lex, 2)      = the first two shuffled tuples, not the first two of c
+```
+
+Which kind a strategy is belongs to the strategy
+(`Strategy::selects_from_shape`), not to a list kept elsewhere. The
+validator's V4 check and both evaluators read through the untruncated
+orders under a strategy that selects from the shape, so the left
+side is accepted wherever the right side is, and the optimizer folds
+it (R7).
 
 **O2 — outer order over truncated inner is NOT redundant:**
 `order(order(c, s1, Some(n)), s2, t)` is meaningful: the inner
@@ -1353,17 +1423,23 @@ ORDER_STREAMING(Lex, truncation)
     the cartesian enumeration order, so the strategy adds
     nothing. Streaming.
 
-ORDER_MATERIALIZE(strategy, truncation, seed)
-    MATERIALIZATION BARRIER. On first pull the operator builds
-    a working set sufficient to satisfy the strategy: either
-    (a) the strategy's full domain (input cardinality) if the
-    naïve form is emitted, or (b) a closed-form working set
-    of size determined by the strategy and truncation if §10's
-    push-down optimizer fused the strategy into the input's
-    enumeration. Once built, the operator emits permuted
-    tuples (then truncated) from the working set as a stream;
-    subsequent pulls are O(log size) for selection-strategy
-    cases, O(1) for permutation-strategy cases.
+ORDER_MATERIALIZE(strategy, truncation, seed, input)
+    MATERIALIZATION BARRIER. The operator holds its input, the
+    comprehension it orders, rather than taking a stream operand:
+    it pops nothing and pushes one stream, and no IR is emitted
+    for the input. On first pull it evaluates the order as a
+    traversal evaluates it (the runtime evaluator of §9.0), in
+    the empty scope: the strategy selects positions from the
+    input's evaluated shape and length, V4 refuses a shape the
+    strategy does not accept, and the operator emits the selected
+    tuples as a stream, computing each one as it is emitted. What
+    it holds is the traversal's working set: over an
+    index-addressable input, the selection alone, O(output)
+    (§10.2 R2); over a filter, the filter's input and the
+    positions of the survivors the strategy keeps (§5 V5); over
+    any other input, the input's tuples; over a continuous axis,
+    the samples. A failure is returned on that pull and on every
+    pull after it.
 
     Allowed strategies: the full §3.6 taxonomy minus `Lex`
     (Lex compiles to `ORDER_STREAMING`, not this opcode) —
@@ -1384,7 +1460,9 @@ DISPENSE
 Compilation from AST to IR is a bottom-up tree walk: each AST
 node emits its children's IR sequences in left-to-right order,
 then its own operator(s). `cartesian`, `zip`, `union` use
-N-arity opcodes; `filter`, `order` use unary wrappers.
+N-arity opcodes; `filter` and a `Lex` order use unary wrappers;
+a non-`Lex` order emits one `ORDER_MATERIALIZE` holding its
+input's subtree, and nothing for the subtree itself.
 
 **IR as immutable public API.** The compiled IR sequence is
 exposed via `polydat::iteration::comprehension::ir::Program` as a
@@ -1562,9 +1640,14 @@ parent. A `StreamerValue`, the value on a producer wire, exposes
 surfaces bind no names: a comprehension with a context-required
 source (§10.7.0: a source that references a coordinate, parameter,
 or wire) has no coordinate stream, and `compile` / `from_ast`
-refuse it with an error naming the clause and the names it needs.
-Those names are resolved on the traversal surface below. A
-`StreamerValue` holds the same comprehension in either case.
+refuse it with an error naming the clause and the names it needs
+(`ValidationError::ContextRequired`). A filter whose predicate names
+what its tuples do not bind, as `{k} > {limit}` over a comprehension
+that binds only `k`, needs a scope the same way, and the compile
+refuses it with `ValidationError::PredicateContextRequired`, naming
+the predicate and those names. Those names are resolved on the
+traversal surface below. A `StreamerValue` holds the same
+comprehension in either case.
 
 The following diagram shows the consumption surfaces and what each
 one produces.
@@ -1843,7 +1926,8 @@ The optimizer applies the following catalog. R0a, R0b, and
 R3–R7 are AST rewrites; R1 and R2 are metadata-driven IR
 compilation eligibilities and do not emit a replacement AST.
 Each rule preserves the dispense sequence per §7's
-equivalences. The guards are
+equivalences, and each keeps a valid tree valid: the validator
+judges the tree as written (§5), and its rewrite is accepted too. The guards are
 predicates over the **metadata algebra** specified in §10.7;
 each rule's "when does it fire?" reduces to a pattern match on
 the node's metadata bundle plus its operator and a small fixed
@@ -1959,10 +2043,12 @@ to a strategy-aware streaming source. The barrier disappears.
 R2 is executed on both paths. On the streaming surfaces
 `ORDER_MATERIALIZE` over an addressable input holds only the
 strategy's `Selection` and computes each selected tuple from its
-position as it is emitted; over any other input it buffers the
-input first. On the traversal path (`runtime::evaluate_indexed`) an
-order holds its operand and the selected positions, and each
-activation computes its tuple. Extrema and Shells rank the input's
+position as it is emitted; over a filter of an addressable input it
+holds that input and the positions of the survivors it keeps (§5
+V5); over any other input it buffers the input first. On the
+traversal path (`runtime::evaluate_indexed`) an order holds its
+operand and the selected positions, and each activation computes its
+tuple. Extrema and Shells rank the input's
 whole index space while they select, so their working set is that
 index space, not the selection (§6.3).
 
@@ -1977,17 +2063,56 @@ sub-pipeline; downstream barriers (if any) get smaller inputs.
 
 **R5 — `cartesian(c1, ..., cN) where {var-of-ci} == K` →
 `cartesian(c1, ..., filter(ci, {var-of-ci} == K), ..., cN)`**
-when the predicate factorizes per-axis. Per-axis filters are
-applied before the cartesian sees the surviving rows, shrinking
-the lattice the cartesian enumerates over.
+when the predicate factorizes per-axis and every per-axis
+sub-predicate is **total** over the axis it moves to. Per-axis
+filters are applied before the cartesian sees the surviving rows,
+shrinking the lattice the cartesian enumerates over.
+
+A moved sub-predicate tests values the filter as written may never
+test: every value of its axis, including those of a tuple an
+earlier conjunct rejects (`&&` stops at the first false operand,
+§10.9.1) and those of a product another axis empties. It moves only
+when no evaluation of it can fail over those values, which the
+optimizer reads off the compiled predicate tree against the kind of
+value each element's source declares (a range yields integers, a
+literal list of one kind yields that kind, a continuous interval
+yields floats; any other source's kind is unknown). A predicate is
+total when:
+
+- every `{name}` has a known kind;
+- `&&`, `||`, and `!` apply to operands with a truth value (a
+  boolean or a number, never a string);
+- an ordering comparison (`< <= > >=`) compares numbers with
+  numbers, strings with strings, or booleans with booleans, while
+  `==`, `!=`, and `in` compare anything;
+- arithmetic (`+ - * ** / %`) has numeric operands and divides only
+  by a non-zero constant;
+- it calls no function, casts nothing, and uses no bitwise operator,
+  since each of those can fail.
+
+Otherwise the filter stays where it is written. Over `k in 1..9,
+w in ["a", "b"]`, the filter `{k} > 5 && {w} == "a"` moves both
+conjuncts, and `{k} > 5 && {w} > 2` moves neither: ordering a string
+against a number fails, and the filter as written tests `{w} > 2`
+only where `{k} > 5`.
+
+**R4 and R5 keep a ranked filter as written.** A non-`Lex` order over
+a filter ranks the survivors by their positions in the filter's
+input (§5 V5), so reshaping that input would move the positions it
+ranks by. Neither rule fires on a filter a non-`Lex` order ranks,
+whether directly or through the untruncated orders a strategy that
+selects from the shape reads through (R7).
 
 **R6 — chained filter folding** (F1): `filter(filter(c, p), q)`
 → `filter(c, p && q)`. One predicate is one expression evaluation
-per tuple instead of two.
+per tuple instead of two, and since `&&` stops at the first false
+operand, the fold tests `q` on exactly the tuples the chain did.
 
 **R7 — order chain folding** (O1): `order(order(c, s1, None),
-s2, t)` → `order(c, s2, t)`. The inner full-permutation is
-wasted; drop it.
+s2, t)` → `order(c, s2, t)` when `s2` selects from its input's
+shape (§7.4). The inner permutation has no effect on such a
+strategy; drop it. Under `lex`, `reverse_lex`, or `shuffle` both
+orders stay.
 
 ### 10.3 Worked example: zip with computed permutations
 
@@ -2167,8 +2292,10 @@ The optimizer is a function `Ast → Ast` with these properties:
 4. **Bounds-improving.** For every C, `peak_memory(optimize(C))
    ≤ peak_memory(C)` per §9.3's formula.
 5. **No rejections.** The optimizer never rejects an AST; rules
-   that don't apply are simply skipped. Validity is decided
-   pre-optimizer (V1-V9 per §5); rejections happen there.
+   that don't apply are simply skipped. Validity is decided on the
+   tree as written, before the optimizer runs (V1-V9 per §5);
+   rejections happen there, and every rewrite keeps an accepted
+   tree accepted.
 
 Together, properties 1 and 4 mean the optimizer can only shrink
 memory, never inflate it, and never changes the dispense sequence.
@@ -2365,7 +2492,7 @@ construction, not in a guard predicate.
 
 `order(c, Lex, t)`:
 - cardinality: per §6.1
-- index_addressable: inherited from `c` (Lex doesn't reshape the index space)
+- index_addressable: inherited from `c` when `t` is `None` (Lex doesn't reshape the index space); `None` under a truncation, since a prefix of an index space is not one
 - natural_order: `Lex`
 - materialization: `c.materialization` (counter wrapper at most)
 
@@ -2373,7 +2500,30 @@ construction, not in a guard predicate.
 - cardinality: per §6.1 — note that `order(Continuous, sampling-strategy, Some(n))` produces `Bounded(n)` (V8's discharge mechanism: sampling materializes a continuous measure into n discrete points)
 - index_addressable: **`None`** at the AST level. R2 (§10.2) rewrites this node into an `indexed_order` IR opcode that *is* index-addressable through the strategy's draw function, but the AST-level metadata stops here. If a parent operator chains over this output, it sees `None` and falls back to streaming consumption.
 - natural_order: `Strategy(strategy_name)`
-- materialization: over an addressable input, `BoundedBarrier { working_set_size: strategy.working_set_for(c.index_addressable, t) }` per §6.3's strategy-specific sizing: `n` for Halton, Sobol, Shuffle, ReverseLex, Diagonal, and Antidiagonal; `n · dim` for Lhs; the whole index space for Extrema and Shells, which rank it while selecting. For Continuous input + sampling strategy + `Some(n)`, the working set is O(n) — the n drawn sample points, not the (uncountable) input measure. Over an input with no `IndexFn` the order buffers its input: `BoundedBarrier { working_set_size: |c| }` when `c` has a bound, else `UnboundedBarrier`.
+- materialization: over an addressable input, `BoundedBarrier { working_set_size: strategy.working_set_for(c.index_addressable, t) }` per §6.3's strategy-specific sizing: `n` for Halton, Sobol, Shuffle, ReverseLex, Diagonal, and Antidiagonal; `n · dim` for Lhs; the whole index space for Extrema and Shells, which rank it while selecting. For Continuous input + sampling strategy + `Some(n)`, the working set is O(n) — the n drawn sample points, not the (uncountable) input measure. Over an input with no `IndexFn` the order buffers its input: `BoundedBarrier { working_set_size: |c| }` when `c` has a bound, else `UnboundedBarrier`. Over a filter that bound is the filter's, the most survivors there can be (§5 V5).
+
+**Counting by kind.** A count is one of three kinds: **exact**
+(`Bounded(n)`), **at most** (`BoundedAtMost(n)`), or **unknown**
+(`Unbounded`); at most zero is exactly zero. Each combinator combines
+its operands' counts by kind through one rule, so it never claims more
+than it knows:
+
+| Constructor | Count |
+|---|---|
+| `cartesian` | exactly 0 when an operand is exactly empty; unknown when an operand is unknown; otherwise the product, exact when every operand is exact and at most otherwise |
+| `zip(Truncate)` | exactly 0 when an operand is exactly empty; otherwise the least bound, exact when every operand is exact and at most otherwise, since an at-most or unknown operand may end before it; unknown only when no operand has a bound |
+| `zip(Strict)` | an exact operand's count exactly, since every operand must match it or the zip fails; otherwise at most the least bound, or unknown |
+| `zip(Cycle)` | exactly 0 when an operand is exactly empty; unknown when an operand is unknown; otherwise the longest bound, exact when every operand is exact and at most otherwise, since an at-most operand may be empty at open |
+| `union` | unknown when an operand is unknown; otherwise the sum, exact when every operand is exact and at most otherwise |
+| `filter` | at most its input's bound; exactly 0 over an exactly empty input |
+| `order(c, s, n)` | `min(count, n)` of the same kind for a strategy that truncates by count; at most `c`'s bound for `extrema` and `shells`, which keep whole strata; over a continuous space, exactly `n` samples unless a filter or a discrete axis of inexact count may leave fewer, and at most the corners of the box for `extrema` |
+
+So `cartesian(k in 1..10 where {k} > 3, c in ["a", "b"])` counts at
+most 18 and yields 12. The metadata's count is a claim about every
+evaluation: an exact count is what a traversal yields, and an at-most
+count is never exceeded. A traversal's own length is what its
+evaluation kept when it opened: `len()` on a `TraversalStream` over
+that comprehension is 12, never the bound.
 
 #### 10.7.3 Closure property
 
@@ -2400,10 +2550,10 @@ values.
 | R1 (`order(Lex)` is a counter wrapper) | `node.op == Order(Lex, _) && child.natural_order == Lex` |
 | R2 (push-down to `indexed_order`) | `node.op == Order(strategy, Some(n)) && child.index_addressable.is_some() && strategy.has_closed_form_for(child.index_addressable)` |
 | R3 (Lex / filter commute, untruncated) | `node.op == Order(Lex, None) && child.op == Filter` — structural; safety from N2 |
-| R4 (filter distributes over union) | `node.op == Filter && child.op == Union` — structural; safety from D1 + V2 |
-| R5 (per-axis filter pushdown) | `node.op == Filter && child.op == Cartesian` (structural) + `PredicateInfo.factorization == PerAxis(_)` from the predicate analyzer (§10.9). Metadata is not consulted. |
+| R4 (filter distributes over union) | `node.op == Filter && child.op == Union` and no non-`Lex` order ranks the filter (§10.2) — structural; safety from D1 + V2 |
+| R5 (per-axis filter pushdown) | `node.op == Filter && child.op == Cartesian` (structural), no non-`Lex` order ranks the filter, `PredicateInfo.factorization == PerAxis(_)` from the predicate analyzer (§10.9), and every per-axis sub-predicate total over its axis (§10.2). Metadata is not consulted. |
 | R6 (filter chain folding) | structural; safety from F1 |
-| R7 (order chain folding) | `node.op == Order && child.op == Order && child.truncation == None` |
+| R7 (order chain folding) | `node.op == Order && child.op == Order && child.truncation == None && node.strategy.selects_from_shape()`; safety from O1 |
 
 R0a, R0b, R3, R4, R6, and R7 are structural patterns whose
 safety is guaranteed by §4.2 identities or §7's equivalences.
@@ -2554,15 +2704,29 @@ enum Selection {
 
 trait Strategy {
   fn name(&self) -> StrategyName;
+  fn selects_from_shape(&self) -> bool;                     // O1, R7
   fn accepts_input(&self, idx: Option<&IndexFn>) -> bool;   // V4
   fn has_closed_form_for(&self, idx: &IndexFn) -> bool;     // R2 eligibility
   fn select(&self, index_fn: &IndexFn, cardinality: u64,
             truncation: Option<u64>, seed: Option<u64>) -> Selection;
+  fn select_surviving(&self, index_fn: &IndexFn, cardinality: u64,
+            truncation: Option<u64>, seed: Option<u64>,
+            survivors: &[u64]) -> Selection;                // V5
   fn apply(&self, input: &EvaluatedInput, truncation: Option<u64>) -> Vec<Tuple>;
 }
 ```
 
-`name` returns the strategy's identity. `accepts_input` reports
+`name` returns the strategy's identity. `selects_from_shape` reports
+whether the strategy places tuples by their positions in the input's
+index space rather than by the sequence they arrive in, which decides
+whether it reads through an untruncated order under it (§7.4 O1).
+`select_surviving` is the selection over a filter's input of which
+only `survivors` (ascending positions) pass (§5 V5): a strategy that
+truncates by count selects `n` positions, then twice as many, up to
+the whole input, until `n` survivors are among them, and at the whole
+input the survivors it did not reach follow in ascending order;
+`Extrema` drops its empty strata and keeps whole strata of the rest.
+`accepts_input` reports
 whether the strategy accepts an input with the given addressing
 scheme (the V4 check). `has_closed_form_for` reports whether the
 strategy can select tuples directly from that addressing scheme
@@ -2576,15 +2740,16 @@ observed length, and a zip or a union is one axis of its own
 enumeration for every strategy.
 
 **§V4 enforcement timing.** V4 ("non-`Lex` strategies require
-the input's `IndexFn` to be non-`None`") fires at
-strategy-invocation time, against the `EvaluatedSource`. The
-compile stage (`validate`, run by `from_ast` and by the `for`
-lowering) *additionally* fires V4 early when an AST's sources are
-all statically evaluable: the static metadata is then exact, and
-V4 failures are reported at compile time. For ASTs with
-context-required sources, the early check is skipped and the
-runtime check is the authoritative one. V4 is the same axiom at
-both times; only the *when* changes.
+the input's `IndexFn` to be non-`None`") is decided by the compile
+stage (`validate`, run by `from_ast` and by the `for` lowering) on
+the tree as written, before any rewrite, and fires again at
+strategy-invocation time against the `EvaluatedSource`. When the
+sources are statically evaluable the static metadata is exact, and
+a tree the compile stage accepts is never refused at invocation. A
+context-required source is judged at compile time by what its text
+declares, and the invocation-time check against its evaluated shape
+is the authoritative one (§5, V4 enforcement timing). V4 is the
+same axiom at both times; only the *when* changes.
 
 #### 10.7.9 Rationale
 
@@ -2651,7 +2816,63 @@ have distinct inputs, outputs, and scopes.
 This section specifies what the predicate analyzer accepts, what it
 produces, and which properties it asserts.
 
-#### 10.9.1 Scope
+#### 10.9.1 The predicate, its evaluation, and the analyzer's scope
+
+A `filter` predicate is a boolean expression over the tuple's
+elements, each written `{name}`. It parses with the language's one
+precedence table ([polydat_grammar.md](polydat_grammar.md) §6.1,
+§16.2) into one tree: `||`, `&&`, `!`, the six comparisons,
+membership `{name} in [v1, v2, …]`, arithmetic, element references,
+literals, and opaque expressions (a function call, a cast, a bitwise
+operator). The traversal and every stream evaluate that tree the
+same way (`predicate::CompiledPredicate`), per tuple:
+
+- **Elements.** `{name}` is the value the tuple binds to `name`. A
+  name the tuple does not bind resolves in the scope the traversal
+  opens in; a scope-less stream has none and refuses such a predicate
+  when it compiles (`ValidationError::PredicateContextRequired`,
+  §9.5.2).
+- **Literals.** Integers, floats, `true`, `false`, and quoted strings,
+  `"us-east"` or `'us-east'`. A bare word is a name, never a string,
+  as everywhere in the language (§3.1.4). A predicate has no names
+  beside its elements, so a bare word fails to resolve, and when the
+  expression that fails reads as words joined by hyphens, the error
+  shows it quoted: `{region} == us-east` fails with "`us-east` is a
+  name, not a string: a string in a predicate is quoted, as in
+  `"us-east"`".
+- **Connectives.** `&&` and `||` evaluate their operands left to
+  right and stop at the first that decides the result; `!` negates.
+  A value's truth is a boolean's own, or a number's being non-zero;
+  a string has none, and using one as a truth value is an error.
+- **Comparisons.** Values compare as scalars. Integers and floats
+  compare numerically with each other, strings with strings (ordered
+  comparisons included), and booleans with booleans. A value is never
+  equal to a value of another kind, so `==`, `!=`, and `in` across
+  kinds are false, true, and false rather than errors; ordering values
+  of different kinds is an error naming both. A NaN is unordered: no
+  ordering comparison with it holds.
+- **Everything else.** Arithmetic, a call, a cast, or a bitwise
+  operator is evaluated as a Polydat expression: its text, with each
+  element's value written in, under the language's own rules
+  ([polydat_grammar.md](polydat_grammar.md) §6.2), charged to the
+  scope's ledger. A predicate the tree grammar does not accept is
+  evaluated whole the same way.
+- **Result.** A tuple passes when the predicate's value is true. An
+  evaluation that fails is the comprehension's error,
+  `RuntimeError::FilterEval`, naming the predicate.
+
+| Predicate | Tuple | Result |
+|---|---|---|
+| `{w} != 2` | `w = "s0"` | true |
+| `{w} > 2` | `w = "s0"` | error: cannot order `"s0"` and `2` |
+| `{w} == 2 && {w} > 2` | `w = "s0"` | false; `{w} > 2` is never evaluated |
+| `!{done} \|\| {retry}` | `done = true, retry = false` | false |
+
+A predicate is **total** over tuples whose elements have known kinds
+when no evaluation of it can fail; R5 moves only total predicates
+(§10.2), and reads totality off this tree.
+
+The analyzer wraps the same tree.
 
 **In scope:**
 
@@ -3133,28 +3354,29 @@ for k in 1..100, limit in 1..100
 
 AST: `order(filter(cartesian(clause(k, 1..100), clause(limit, 1..100)), "{k} * {limit} <= 1000"), Extrema, Some(1))`
 
-- Cardinality: `BoundedAtMost(4)` (the corner stratum, less filter
-  casualties).
+- Meaning (§5 V5, the Form B of §11.6): Extrema ranks only the
+  tuples that pass, by their positions in the 99 × 99 lattice, and
+  `/1` keeps the most extreme stratum any of them is in. Three of
+  the four corners pass (`(99, 99)` has product 9,801), so the
+  order yields `(1, 1)`, `(1, 99)`, `(99, 1)`. Had no corner passed,
+  it would yield the passing tuples of the edge stratum instead;
+  it yields nothing only when nothing passes.
+- Cardinality: `BoundedAtMost(9801)`: the filter's bound, since
+  Extrema keeps whole strata and how many tuples a stratum keeps
+  depends on the predicate.
 - Validity: V4 passes — Extrema requires a non-`None` Lattice
   with ≥2 axes; V5's look-through rule lets the filter sit
   between Extrema and its cartesian input without breaking the
-  check. The strategy reasons about original lattice positions.
-- Footprint (naïve, pre-optimizer): O(1) per cursor for sources;
-  the filter holds no state; `ORDER_MATERIALIZE(Extrema, 1)`
-  inspects all surviving tuples to find extrema, so the barrier
-  holds up to 10,000 candidates in the worst case.
-- Footprint (post-R2): Extrema over a 2-axis Lattice has a
-  closed-form push-down — enumerate the 2² = 4 lattice corners
-  (stratum 0) and emit them: `/1` keeps the first stratum and
-  no part of the next. Working set:
-  O(2^N · log 2^N) = O(N · 2^N) = O(2 · 4) = ~8 cells,
-  independent of input size. The filter still runs per
-  emitted-candidate tuple (V5 transparency), but the candidate
-  set is the small corner set, not the 10,000-element filtered
-  survivors.
-- IR (after R2): `PUSH_CLAUSE k` + `PUSH_CLAUSE limit` +
-  `CARTESIAN(2)` + `FILTER("{k} * {limit} <= 1000")` +
-  `ORDER_MATERIALIZE(IndexedExtrema, 1)` + `DISPENSE`.
+  check.
+- Footprint: a barrier sized by the survivors (§6.3). The order
+  tests the predicate on each of the 9,801 tuples, ranks the
+  survivors' positions by stratum, and then holds the cartesian's
+  two axes and the three positions it keeps. R4 and R5 leave the
+  filter as written, since the order ranks positions in its input
+  (§10.2).
+- IR: `ORDER_MATERIALIZE(Extrema, 1, input)` + `DISPENSE`, where
+  `input` is the filtered cartesian the operator evaluates on its
+  first pull (§9.1).
 
 ### 11.3 Union of differently-modified sub-spaces
 
@@ -3256,23 +3478,24 @@ for [
 ```text
 // Form A — order, then filter
 fast_corner := for k in 1..10, limit in 1..10 order extrema/1
-filtered    := for fast_corner where {k} * {limit} > 50
+filtered    := for fast_corner where {k} * {limit} > 50 && {k} * {limit} < 80
 
 // Form B — filter, then order
-high_product   := for k in 1..10, limit in 1..10 where {k} * {limit} > 50
-corner_of_high := for high_product order extrema/1
+mid_product   := for k in 1..10, limit in 1..10 where {k} * {limit} > 50 && {k} * {limit} < 80
+corner_of_mid := for mid_product order extrema/1
 ```
 
-AST A: `filter(order(cartesian(...), Extrema, Some(1)), "{k} * {limit} > 50")`
-AST B: `order(filter(cartesian(...), "{k} * {limit} > 50"), Extrema, Some(1))`
+AST A: `filter(order(cartesian(...), Extrema, Some(1)), "{k} * {limit} > 50 && {k} * {limit} < 80")`
+AST B: `order(filter(cartesian(...), "{k} * {limit} > 50 && {k} * {limit} < 80"), Extrema, Some(1))`
 
-- Form A: pick the corner stratum of (k, limit), its 4 corners, then drop
-  those whose product ≤ 50. Could emit 0-4 tuples depending on
-  which corners survive.
-- Form B: filter to high-product tuples first, then pick the
-  corner stratum of *those*. The "corners" are computed relative to
-  the surviving set (which still uses original lattice
-  positions per V5, but the survivors are a different set).
+- Form A: pick the corner stratum of the 9 × 9 lattice, its 4
+  corners with products 1, 9, 9, and 81, then drop those outside
+  the band. None passes, so Form A emits nothing.
+- Form B: filter to the band first, then pick the most extreme
+  stratum any passing tuple is in, by the passing tuples' original
+  lattice positions (§5 V5). No corner passes, and six edge tuples
+  do, so Form B emits `(6, 9)`, `(7, 9)`, `(8, 9)`, `(9, 6)`,
+  `(9, 7)`, `(9, 8)`. It emits nothing only when nothing passes.
 - Both are valid. They emit different tuples. The user's
   authored form is the intended semantic; N1 says the optimizer
   does NOT rewrite.
@@ -3711,4 +3934,7 @@ materializes every node. The equivalence harness
 (`polydat/tests/indexed_equivalence.rs`) is the oracle for the
 position-addressed evaluator: over every comprehension shape the two
 yield the same tuples in the same order, fail with the same error,
-and report the same clause yields.
+and report the same clause yields. It holds the stream to the same
+evaluation: on every shape the validator accepts, the optimizer's
+rewrite is accepted too and ends as the tree as written does, and
+the stream yields the traversal's tuples. No rewrite is excused.

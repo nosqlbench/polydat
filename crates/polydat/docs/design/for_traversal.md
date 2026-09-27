@@ -532,6 +532,7 @@ axis sizes.
 | order `shells/n` | ranking of the whole index space | the first n positions | the same |
 | order `lex/n`, `reverse_lex/n` | O(1) | its bounds | the same |
 | order over a continuous or hybrid space | n samples | the n sampled tuples | O(1) |
+| non-`lex` order over a filter | a scan of the filter's input, then the ranking of its survivors | the filter's input and the kept survivors' positions | the input's per-activation cost |
 
 Extrema and Shells hold the whole index space only while they rank it;
 the order then keeps the selected positions. A cycle zip with an empty

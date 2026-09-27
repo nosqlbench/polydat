@@ -1507,6 +1507,49 @@ fn an_order_over_a_filter_ranks_the_survivors() {
     assert_eq!(sums, vec![1, 1, 3, 3]);
 }
 
+/// The worked examples of comprehension_forms.md §11.2 and §11.6: an
+/// `extrema/1` over a filter keeps the most extreme stratum any
+/// survivor is in, and the same order before the filter keeps the
+/// corners the filter then drops.
+#[test]
+fn the_filter_and_order_examples_of_section_11_yield_what_they_say() {
+    let scope = scope();
+    let pairs = |c: &Comprehension| -> Vec<(u64, u64)> {
+        evaluate_indexed(c, &scope)
+            .unwrap()
+            .iter()
+            .map(|t| (t[0].1.as_u64(), t[1].1.as_u64()))
+            .collect()
+    };
+    let grid =
+        |n: i64| Comprehension::cartesian(vec![range("k", 1, n, 1), range("limit", 1, n, 1)]);
+    // §11.2
+    let corners = Comprehension::order(
+        Comprehension::filter(grid(100), "{k} * {limit} <= 1000"),
+        StrategyName::Extrema,
+        Some(1),
+    );
+    assert_eq!(pairs(&corners), vec![(1, 1), (1, 99), (99, 1)]);
+    // §11.6
+    let band = "{k} * {limit} > 50 && {k} * {limit} < 80";
+    let form_a = Comprehension::filter(
+        Comprehension::order(grid(10), StrategyName::Extrema, Some(1)),
+        band,
+    );
+    let form_b = Comprehension::order(
+        Comprehension::filter(grid(10), band),
+        StrategyName::Extrema,
+        Some(1),
+    );
+    assert_eq!(pairs(&form_a), vec![]);
+    assert_eq!(
+        pairs(&form_b),
+        vec![(6, 9), (7, 9), (8, 9), (9, 6), (9, 7), (9, 8)]
+    );
+    assert_equivalent(&form_a, &scope);
+    assert_equivalent(&form_b, &scope);
+}
+
 /// An order over an untruncated order (comprehension_forms.md §7.4
 /// O1): a strategy that selects from the shape chooses what it chooses
 /// over the shape beneath the inner order, which has no effect, and a

@@ -1089,8 +1089,51 @@ when followed by `<ident> in`, so value-list and argument commas stay
 inside one clause. Tuple clauses `(a, b) in (…)` zip in parallel;
 `zip_truncate(…)` and `zip_cycle(…)` choose the zip mode.
 
-`where <predicate>` filters tuples; the predicate names elements as
-`{name}`. `order <strategy>[/<n>]` permutes and optionally truncates;
+`where <predicate>` keeps the tuples for which the predicate is true.
+A predicate is a boolean expression over the tuple's elements, each
+written `{name}`; a `{name}` the tuple does not bind resolves in the
+scope the traversal opens in. It groups by the language's one
+precedence table (§[6.1](#sec-precedence)):
+
+| Binds | Operators in a predicate |
+|---|---|
+| tightest | unary `!` and `-` |
+| | arithmetic (`**`, then `* / %`, then `+ -`), then the bitwise operators, in §6.1's order |
+| | comparisons: `< <= > >=` and membership `{name} in [v1, v2, …]`, then `== !=` |
+| | `&&` |
+| loosest | `\|\|` |
+
+So `!{done} || {retry}` is `(!{done}) || {retry}`, `{a} || {b} && {c}`
+is `{a} || ({b} && {c})`, and `{x} + 1 > {y} * 2` compares the two
+sums. Parentheses group as anywhere else.
+
+A predicate evaluates per tuple, and three of its rules differ from the
+statement language's operators of §[7](#sec-comparison). `&&` and `||`
+evaluate their operands left to right and stop at the operand that
+decides the result, so `{n} != 0 && {total} / {n} > 2` never evaluates
+the division when `{n}` is zero. `!` negates a truth value (a boolean,
+or a number that is true when non-zero) rather than inverting bits.
+Values compare as scalars: numbers with numbers, strings with strings
+(ordered comparisons included), booleans with booleans; a value is
+never equal to a value of another kind, so `{name} != 2` holds for a
+string, and ordering values of different kinds is an error.
+comprehension_forms.md §10.9.1 specifies the evaluation in full.
+
+A string in a predicate is quoted, as everywhere in the language:
+`{region} == "us-east"` or `{region} == 'us-east'`. A bare word is a
+name, never a string, and a predicate has no names beside its elements,
+so `{region} == us-east` fails at the first tuple it tests, reading
+`us - east` as a subtraction of two names; the error shows the word
+quoted.
+
+```polydat compile
+input cycle: u64
+for k in 1..10, region in ["us-east", "eu-west"] where {k} > 3 && {region} == "us-east" {
+    x := hash(k)
+}
+```
+
+`order <strategy>[/<n>]` permutes and optionally truncates;
 the strategy names the text grammar accepts are `lex`, `reverse_lex`,
 `diagonal`, `antidiagonal`, `extrema`, `shells`, `halton`, `sobol`, `lhs`,
 and `shuffle`, plus the meta-form `space_filling(<halton|sobol|lhs>, …)`, as a
@@ -1099,7 +1142,10 @@ form carries `seed=<u64>` for `shuffle` and `lhs`, the authored seed those
 strategies derive their permutation from; any other strategy refuses a
 seed. The set is closed: a name outside it is a parse error that lists
 the set and says so, and there is no form that names a function of the
-author's own.
+author's own. An order after a `where` ranks only the tuples that pass,
+by their positions in the unfiltered space, and keeps its truncation's
+worth of them: `where {k} != 5 order extrema/1` is the most extreme
+stratum any passing tuple is in (comprehension_forms.md §5 V5).
 
 <a id="sec-for-elements"></a>
 ### 16.3 Element types
