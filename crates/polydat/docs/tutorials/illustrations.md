@@ -501,7 +501,7 @@ println!("programs built after the first activation: {}", ledger.programs() - bu
 ```
 
 ```text
-body program: 16 nodes, compiled once
+body program: 18 nodes, compiled once
 8 activations from `p in partitions("*/4", {total}), scale in 1, 100`
 
 act  p          scale  cycles  first row  first v
