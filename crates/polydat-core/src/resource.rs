@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Dependency-inverted resource-accessor bridge (SRD-104, Phase 0).
+//! Dependency-inverted resource-accessor bridge.
 //!
 //! A polydat kernel node sometimes needs a **live, host-owned resource**
 //! (the first consumer is a CQL `Session`) addressed by its configuration

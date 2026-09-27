@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Cursor partition specs — SRD 71.
+//! Cursor partition specs (cursor_partitions.md).
 //!
 //! Value types and a small spec language following the token
 //! grammar `chunking [in window] [order]`:
@@ -311,7 +311,7 @@ impl Partition {
 
 /// Parse a partition spec string into a [`PartitionSpec`].
 ///
-/// Accepts all three forms documented in SRD 71:
+/// Accepts all three forms documented in cursor_partitions.md §3:
 ///
 /// - Form 1 — single sub-range: `0..53%`, `[0..53%)`, `100..1000`,
 ///   `0.05..0.5`, `100..50%`. Bracket placement and closure

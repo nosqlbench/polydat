@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Lowering a `tile` statement to a program (SRD 114 §6).
+//! Lowering a `tile` statement to a program (polytile.md §6).
 //!
 //! Each hole becomes a binding of its expression in the enclosing
 //! scope (or the wire itself); the render node carries the hole's
@@ -75,13 +75,11 @@ impl Compiler {
                 projections: shape.projections,
                 bodies: spec.children.iter().map(|c| c.source.clone()).collect(),
             });
-        // The skeleton goes to the node as the value it is. It used to
-        // be serialized to JSON, written into the program as a string
-        // literal, and parsed back at node construction — which lost
-        // everything about a projection body that JSON cannot carry,
-        // the source directory, library paths, strict flag, pragmas
-        // and resolved modules among them, and made a malformed
-        // payload a panic at construction rather than a compile error.
+        // The skeleton goes to the node as the value it is, not as
+        // serialized text, so it keeps everything about a projection
+        // body that JSON cannot carry (the source directory, library
+        // paths, strict flag, pragmas and resolved modules among
+        // them), and node construction has no payload to fail on.
         let bodies = lowering.bodies.clone();
         let program = std::sync::Arc::new(
             crate::library::tile_render::TileProgram::from_parts(spec, bodies)
@@ -129,7 +127,7 @@ impl Compiler {
         Ok(())
     }
 
-    /// SRD 114 §5.2: a `json` skeleton must be valid JSON once every
+    /// polytile.md §5.2: a `json` skeleton must be valid JSON once every
     /// hole is a placeholder. Every hole stands in as `0`, which is a
     /// value in value position and text inside a string or a key; a
     /// projection body appears once; a branch shows its first arm. A
@@ -252,12 +250,12 @@ struct TileLowering {
     /// Whether the static text so far leaves a `json` skeleton inside a
     /// string literal.
     in_string: bool,
-    /// Reject implicit adapters at holes (SRD 114 §4.4).
+    /// Reject implicit adapters at holes (polytile.md §4.4).
     strict: bool,
     span: super::lexer::Span,
 }
 
-/// How one hole was typed (SRD 114 §4): the wire's compile-time type,
+/// How one hole was typed (polytile.md §4): the wire's compile-time type,
 /// the declared type if any, the type the encoder sees, and the
 /// adapter between them when the declaration asks for one.
 struct HoleTyping {
@@ -497,7 +495,7 @@ impl TileLowering {
         Ok(ops)
     }
 
-    /// The compile-time type of a hole expression (SRD 114 §4.2): the
+    /// The compile-time type of a hole expression (polytile.md §4.2): the
     /// same inference every binding gets, with projection elements and
     /// cascaded outer wires resolved from the body context.
     fn infer_type(
@@ -537,7 +535,7 @@ impl TileLowering {
         }
     }
 
-    /// Type one hole (SRD 114 §4): the declared type wins and must be
+    /// Type one hole (polytile.md §4): the declared type wins and must be
     /// reachable from the wire type through the assembler's own adapter
     /// catalog; otherwise the wire type stands. Strict mode rejects the
     /// adapter a declaration would need.
@@ -616,7 +614,7 @@ impl TileLowering {
         })
     }
 
-    /// Record how a hole was typed for `explain tiles` (SRD 114 §4.4).
+    /// Record how a hole was typed for `explain tiles` (polytile.md §4.4).
     fn record(&self, compiler: &mut Compiler, text: &str, typing: &HoleTyping, enc: &HoleEncoding) {
         let kw = typing.effective.to_keyword();
         let mut encoder = if enc.cond {
@@ -661,7 +659,7 @@ impl TileLowering {
     /// the enclosing program, `__tile_<name>_hN := expr`, with the
     /// declaration's adapter node between when one is needed; a hole
     /// that names a wire uses the wire itself. The render node takes
-    /// the value and encodes it at the hole (SRD 117 step 1).
+    /// the value and encodes it at the hole (polytile.md §7.1).
     fn wire_hole(
         &mut self,
         compiler: &mut Compiler,
@@ -776,7 +774,7 @@ impl TileLowering {
         }
     }
 
-    /// SRD 114 §5.4: a projection's comprehension must have bounded
+    /// polytile.md §5.4: a projection's comprehension must have bounded
     /// cardinality.
     fn check_bounded(
         &self,
@@ -846,7 +844,7 @@ impl TileLowering {
         Ok(())
     }
 
-    /// A projection inside a projection body (SRD 114 §5.4). The body
+    /// A projection inside a projection body (polytile.md §5.4). The body
     /// program is Polydat source, so the nested projection becomes a
     /// `tile` statement inside it, compiled by this same lowering one
     /// level down; the outer body reads the nested tile's text through a

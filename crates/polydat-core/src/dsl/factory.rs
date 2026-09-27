@@ -32,7 +32,7 @@ pub enum ConstArg {
     Float(f64),
     /// A string literal.
     Str(String),
-    /// SRD-80b Phase C — workload-list const carrier for the
+    /// Workload-list const carrier for the
     /// `Const<Vec<C>>` shape. Each inner [`ConstArg`] is one
     /// element; the macro emits the walk over the list and the
     /// per-element extraction for the element type it read out of
@@ -42,12 +42,10 @@ pub enum ConstArg {
     ///
     /// The other variants are what a literal in the source parses to.
     /// This one is for what the compiler makes: a tile's skeleton with
-    /// its projection bodies already lowered, for instance. It used to
-    /// travel as a `Str` holding JSON, which the node parsed back —
-    /// so a malformed payload was a panic at node construction rather
-    /// than a compile error, the body's source lived in three places,
-    /// and everything the compiler knew that JSON cannot carry was
-    /// lost on the way.
+    /// its projection bodies already lowered, for instance. Carried as
+    /// the value itself rather than as serialized text, it cannot fail
+    /// to parse at node construction, and it keeps everything the
+    /// compiler knows that JSON cannot carry.
     ///
     /// The receiving node names the concrete type, which
     /// [`ConstArg::as_opaque`] downcasts to.
@@ -180,15 +178,13 @@ pub fn build_node(
         // each per-param check. Constraints declared on individual
         // params cover the bulk of "must be in [0,1]" /
         // "must be one of {2,8,10,16}" / "spec must parse" cases.
-        // SRD 15 §"Const Constraint Metadata".
         if let Err(msg) = check_param_constraints(sig, consts) {
             return Err(format!("bad constant {func}: {msg}"));
         }
 
         // Pass 2: per-module imperative validator for relational
-        // and cross-param rules (e.g. `n_of`'s n ≤ m). Eventually
-        // migrates onto a `FuncSig.validator` field; until then,
-        // each module declares its relational constraint here.
+        // and cross-param rules (e.g. `n_of`'s n ≤ m). Each module
+        // declares its relational constraint here.
         if let Some(validator) = reg.validate
             && let Err(reason) = validator(func, consts)
         {
@@ -199,15 +195,6 @@ pub fn build_node(
             return result;
         }
     }
-
-    // --- Sampling functions without a dedicated node module ---
-    //
-    // `identity` migrated to `#[polydat_node]` per SRD-80 PR B.8.
-    // `dist_*` / `icd_*` / `histribution` / `dist_empirical`
-    // migrated to `#[polydat_node]` via `#[poly_const]` setup
-    // (SRD-80b Phase E); the inventory-registered build closure
-    // now handles each name, so the hand-dispatch arms here are
-    // gone.
 
     // --- Registry variadic fallback ---
     if let Some(sig) = registry::lookup(func)

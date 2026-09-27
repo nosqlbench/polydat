@@ -1,16 +1,18 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Compile-time support for the `for` construct (SRD 113 steps 2 and
-//! 3): element typing, body-to-child-program lowering, and the
-//! metadata a parent program carries for each traversal and producer.
+//! Compile-time support for the `for` construct (for_traversal.md §4):
+//! element typing, body-to-child-program lowering, and the metadata a
+//! parent program carries for each traversal and producer.
 //!
-//! A `for` body compiles exactly once, at parent compile time, into a
-//! child [`PolydatProgram`] keyed by the statement's lexical position.
-//! Its element names become `IterationExtern` inputs typed from the
-//! comprehension's sources; outer wires it references become cascade
-//! externs typed from the parent's manifest. Activation (step 4) only
-//! ever allocates state over that program.
+//! A `for` body compiles once, at parent compile time, into the
+//! interpreter's child [`PolydatProgram`] keyed by the statement's
+//! lexical position, and once per other engine, at the first
+//! activation on that engine (for_traversal.md §5.1). Its element names
+//! become `IterationExtern` inputs typed from the comprehension's
+//! sources; outer wires it references become cascade externs typed from
+//! the parent's manifest. Activation otherwise only allocates state
+//! over that program.
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
@@ -50,7 +52,7 @@ pub struct Traversal {
     /// interpreter activation shares it.
     pub program: Arc<PolydatProgram>,
     /// The body as the parent compiled it, for activations on the other
-    /// engines (engine parity, step 8): compiled once per engine, on the
+    /// engines (engines.md §3.6): compiled once per engine, on the
     /// first activation that asks.
     pub body: Arc<BodySource>,
 }
@@ -58,7 +60,7 @@ pub struct Traversal {
 /// A traversal body as its parent compiled it: the child file and the
 /// compiler settings the parent used, so the same body compiles on any
 /// engine, once, keyed by the engine as the interpreter's program is
-/// keyed by the body's position (SRD 113 §5.1).
+/// keyed by the body's position (for_traversal.md §5.1).
 pub struct BodySource {
     pub(crate) file: PolydatFile,
     pub(crate) source_text: String,
@@ -93,10 +95,8 @@ impl BodySource {
     /// One body, one carrier. A `for` body and a tile's projection
     /// body are the same thing — a statement list compiled once per
     /// engine against the settings the parent compiled under — and
-    /// they reach it through here. The tile path used to compile each
-    /// body twice at node construction, once for the interpreter and
-    /// once on `Engine::default()`, and then render on the default
-    /// engine whatever engine the kernel was running.
+    /// they reach it through here, so a tile body renders on the engine
+    /// of the kernel rendering it (polytile.md §7.2).
     pub fn program_on(
         &self,
         engine: crate::Engine,
@@ -179,7 +179,7 @@ impl std::fmt::Debug for BodySource {
 impl Traversal {
     /// The body's program on `engine`, compiled on the first call for
     /// that engine and shared by every activation after it, as the
-    /// interpreter's program is (SRD 113 §5.1, §5.2), its own `for`
+    /// interpreter's program is (for_traversal.md §5.1, §5.2), its own `for`
     /// statements included: an activation on any engine opens them.
     pub fn program_on(
         &self,
@@ -212,7 +212,7 @@ pub struct Producer {
 ///
 /// Producer bindings stay in the parent as `const name := streamer(...)`
 /// calls carrying the resolved comprehension, so the wire exists with a
-/// `Streamer` value on it (SRD 113 §3.1). Derivations resolve against
+/// `Streamer` value on it (for_traversal.md §3.1). Derivations resolve against
 /// producers bound earlier in the file, in document order.
 pub fn strip_for_forms(
     file: &PolydatFile,
@@ -326,7 +326,7 @@ pub fn resolve_source_with(
     let comprehension = match &source.kind {
         ForSourceKind::Comprehension(c) => {
             // A source has one comprehension and renders its text from
-            // it, so there is no longer a text that could disagree.
+            // it, so there is no separate text that could disagree.
             // What remains worth checking is the pair that makes the
             // rendering trustworthy: writing this tree and reading it
             // back must give this tree. A failure here is a gap between

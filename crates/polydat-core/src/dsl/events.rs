@@ -58,14 +58,15 @@ pub enum CompileEvent {
         /// The adapter node inserted between them.
         adapter: String,
     },
-    /// Init-time constant folded (SRD 44).
+    /// Init-time constant folded (evaluation_model.md, "Compile-Time
+    /// Constant Folding").
     ConstantFolded {
         /// The node folded.
         node: String,
         /// The constant's rendered value.
         value: String,
     },
-    /// Fusion pattern matched and applied (SRD 36).
+    /// Fusion pattern matched and applied (graph_compiler.md §5.2).
     FusionApplied {
         /// The fusion pattern's name.
         pattern: String,
@@ -156,7 +157,7 @@ pub enum CompileEvent {
         line: usize,
     },
     /// Strict-wire mode auto-inserted an assertion node between
-    /// `from_node` and `to_node`. SRD 15 §"Strict Wire Mode".
+    /// `from_node` and `to_node` (graph_compiler.md §2).
     AssertionInserted {
         /// The producing node.
         from_node: String,
@@ -176,7 +177,7 @@ pub enum CompileEvent {
         /// The skip rule that applied.
         reason: String,
     },
-    /// A tile hole was typed (SRD 114 §4): its expression, the wire
+    /// A tile hole was typed (polytile.md §4): its expression, the wire
     /// type the compiler inferred, the declared type if any, the
     /// contextual expectation of its position, the encoder chosen, and
     /// the adapter inserted between wire and declared type if one was.
@@ -196,7 +197,7 @@ pub enum CompileEvent {
         /// The adapter inserted between wire and declared type, if any.
         adapter: Option<String>,
     },
-    /// A tile's skeleton (SRD 114 §6, §10): how many static runs it
+    /// A tile's skeleton (polytile.md §6, §10): how many static runs it
     /// copies and their byte total, its holes, branches, and
     /// projections, and the source of each projection body program.
     TileCompiled {

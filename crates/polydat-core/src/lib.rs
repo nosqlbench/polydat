@@ -65,7 +65,8 @@
 //!   lowering and the node's closure elsewhere. Needs the `jit`
 //!   feature.
 //! - [`Engine::PureNative`]: Cranelift machine code and nothing else,
-//!   refusing the program where `Native` would fall back to a closure.
+//!   calling a node's kit where it has no lowering and refusing the
+//!   program when a node has neither.
 //!   A host asks for it to learn whether its program is fully native.
 //!   Needs the `jit` feature.
 //!
@@ -158,10 +159,9 @@
 #![cfg_attr(test, allow(clippy::approx_constant))]
 #![warn(missing_docs)]
 
-// SRD-80 PR B.3 — let the `#[polydat_node]` macro's emitted
-// `polydat::...` paths resolve when the macro is invoked from
-// INSIDE the polydat crate itself (library nodes migrating to
-// the macro form). External callers don't need this — they
+// Let the `#[polydat_node]` macro's emitted `polydat::...` paths
+// resolve when the macro is invoked from INSIDE the polydat crate
+// itself (the library's own nodes). External callers don't need this — they
 // reference `polydat` via the regular crate-name lookup.
 extern crate self as polydat;
 
@@ -176,7 +176,7 @@ pub mod library;
 pub mod numeric;
 pub use polydat_grammar::viz;
 
-/// Polytile at the host boundary (SRD 114 §5.6): build a tile from
+/// Polytile at the host boundary (polytile.md §5.6): build a tile from
 /// template text, from structural JSON text, or from a parsed JSON
 /// value, then add it to a program with [`tile::add_tiles`].
 ///
@@ -223,18 +223,18 @@ pub mod tile {
     pub use crate::dsl::transform::add_tiles;
 }
 
-// SRD-104 — dependency-inverted resource-accessor bridge. A
+// Dependency-inverted resource-accessor bridge. A
 // type-erased trait + process-global install point by which a
 // kernel node reaches a live, host-owned resource by fingerprint,
 // without polydat depending on the host runtime.
 pub mod resource;
 
-// SRD-80 — proc-macro trait surface. The `polydat-derive`
+// Proc-macro trait surface (library_catalog.md, "Registration"). The `polydat-derive`
 // crate emits paths like `polydat::derive_support::FromValue` /
 // `IntoValue` that resolve here.
 pub mod derive_support;
 
-// SRD-80 PR B.5 — `Const<T>` wrapper re-exported at crate root
+// `Const<T>` wrapper re-exported at crate root
 // for ergonomic use in `#[polydat_node]` function signatures.
 pub use derive_support::Const;
 
@@ -253,17 +253,17 @@ pub use compile::select::{Engine, EnginePlan, KernelError, Provenance};
 /// building a kernel, one for writing to it.
 pub use kernel::{Kernel, KernelProgram, ProgramId, WriteError};
 
-// SRD-82 §"Panic reporting: one full render" — host runtimes with
+// Panic reporting renders one full diagnostic: host runtimes with
 // their own panic reporting declare it so the eval-panic hook
 // prints a short notice instead of the full diagnostic.
 pub use kernel::set_panic_reporting_downstream;
 
-// SRD-80 — re-export the `#[polydat_node]` attribute so
+// Re-export the `#[polydat_node]` attribute so
 // library callers can write `#[polydat::polydat_node]` without
 // a separate `use polydat_derive::polydat_node;` line.
 pub use polydat_derive::polydat_node;
 
-// SRD-80 — re-export `inventory` so the macro's emitted
+// Re-export `inventory` so the macro's emitted
 // `::polydat::inventory::submit!` path resolves at every call
 // site without users having to add `inventory` to their own
 // dependencies.
@@ -275,10 +275,9 @@ pub use inventory;
 /// resolves inside this crate too).
 pub use half;
 
-/// SRD-104 — the resource-accessor bridge at the crate root so the
-/// host installs via `polydat::RESOURCE_ACCESSOR` and nodes resolve
-/// via `polydat::resource_lookup`, without reaching a deep module
-/// path (D6).
+/// The resource-accessor bridge at the crate root so the host
+/// installs via `polydat::RESOURCE_ACCESSOR` and nodes resolve via
+/// `polydat::resource_lookup`, without reaching a deep module path.
 pub use resource::{RESOURCE_ACCESSOR, ResourceAccessor, resource_lookup};
 
 /// Host-log sink bridge — the sanctioned public path for installing

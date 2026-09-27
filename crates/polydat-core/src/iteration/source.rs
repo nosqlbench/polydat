@@ -171,9 +171,10 @@ pub struct SourceSchema {
     /// for those, and `cursor_over_partitions` treats them as
     /// open-extent when it resolves an `over` clause.
     pub cursor_kind: CursorKind,
-    /// SRD 71: name of the kernel output that carries the
+    /// Name of the kernel output that carries the
     /// partition-narrowing source (the `over <expr>` clause on
-    /// the cursor declaration). `cursor_over_partitions` pulls it and
+    /// the cursor declaration, cursor_partitions.md §7.2).
+    /// `cursor_over_partitions` pulls it and
     /// resolves it through `cursor_partition::resolve_over` into the
     /// full partition list: a spec string or a `PartitionSpec`
     /// resolves against the cursor's extent, a `Partition` or a
@@ -457,7 +458,7 @@ impl DataSourceFactory for RangeSourceFactory {
 
     fn rewind_for_poll(&self) -> bool {
         // Reset the shared atomic cursor back to the
-        // start-of-range. SRD-75 phase-poll uses this between
+        // start-of-range. Phase-poll uses this between
         // iterations: each iteration covers ordinals
         // `[start, end)` afresh, so the workload's ops see the
         // same cycle space per iteration. With concurrency=1
@@ -569,7 +570,7 @@ pub struct ExtendingRangeSourceFactory {
     /// policy via `ExtensionContext::base` so pass-count
     /// predicates work.
     base: u64,
-    /// SRD 71 — hard upper bound on growth. When a cursor is
+    /// Hard upper bound on growth (cursor_partitions.md §7.2). When a cursor is
     /// narrowed by a partition (`until_elapsed(...) over p`),
     /// the partition's end ordinal caps the extension: the
     /// policy keeps making its time / pass / count decisions,
@@ -619,7 +620,7 @@ impl ExtendingRangeSourceFactory {
     }
 
     /// Cap growth at `max_end` (absolute ordinal, exclusive) —
-    /// the partition-narrowing bound from SRD 71. The initial
+    /// the partition-narrowing bound (cursor_partitions.md §7.2). The initial
     /// extent is clamped too, so a base chunk larger than the
     /// partition never reserves past it.
     pub fn bounded(mut self, max_end: u64) -> Self {
@@ -689,7 +690,7 @@ struct ExtendingRangeSource {
     policy: Arc<dyn ExtensionPolicy>,
     start: u64,
     base: u64,
-    /// SRD 71 partition cap — see
+    /// Partition cap — see
     /// [`ExtendingRangeSourceFactory::bounded`].
     max_end: Option<u64>,
     started: std::time::Instant,
@@ -717,7 +718,7 @@ impl DataSource for ExtendingRangeSource {
                     Err(_) => continue, // raced; retry
                 }
             }
-            // SRD 71: a partition-bound cursor terminates the
+            // A partition-bound cursor terminates the
             // moment the partition is exhausted, whether or not
             // the policy's time / pass / count target was
             // reached — no policy consultation past the cap.
@@ -1279,7 +1280,7 @@ mod tests {
 
     #[test]
     fn extending_source_bounded_terminates_at_partition_end() {
-        // SRD 71: `until_*(base, ...) over p` — base-sized chunks
+        // `until_*(base, ...) over p` — base-sized chunks
         // walk within the partition; the cap stops growth even
         // though the policy would keep extending. Partition
         // [100, 125) with base 10 → 10 + 10 + 5, then exhausted.

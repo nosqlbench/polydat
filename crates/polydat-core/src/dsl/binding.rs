@@ -161,7 +161,7 @@ pub(super) fn infer_expr_type(
         Expr::IntLit(_, _) => PortType::U64,
         Expr::FloatLit(_, _) => PortType::F64,
         Expr::StringLit(_, _) => PortType::Str,
-        // SRD-84 Part 1b — a cast's type is its target.
+        // A cast's type is its target (polydat_grammar.md §10).
         Expr::Cast(_, ty, _) => *ty,
         Expr::For(_) => PortType::Ext,
         Expr::Ident(name, _) => {
@@ -169,7 +169,7 @@ pub(super) fn infer_expr_type(
             // an `f64` / `str` extern carries its declared type — must
             // NOT be U64-defaulted, or an `f64` extern in a comparison
             // (e.g. `error_rate > 0.1`) gets spuriously ToF64-widened
-            // (SRD-84 Part 1). Fall back to u64 for inputs with no
+            // (polydat_grammar.md §7). Fall back to u64 for inputs with no
             // recorded type (e.g. coordinate inputs).
             if input_names.contains(name) {
                 return asm.input_type(name).unwrap_or(PortType::U64);
@@ -240,8 +240,8 @@ pub(super) fn infer_expr_type(
                 | BinOpKind::Gt
                 | BinOpKind::Le
                 | BinOpKind::Ge => PortType::U64,
-                // SRD-84 Part 1 — logical `&&` / `||` produce a u64
-                // truthiness (0/1), like comparisons.
+                // Logical `&&` / `||` produce a u64 truthiness (0/1),
+                // like comparisons (polydat_grammar.md §7).
                 BinOpKind::And | BinOpKind::Or => PortType::U64,
                 _ => {
                     let lt = infer_expr_type(lhs, asm, input_names);
@@ -306,7 +306,7 @@ impl Compiler {
                 // Mismatched branch types are widened: any u64 branch
                 // is wrapped in `to_f64(...)` when the other branch is
                 // f64. Both branches always evaluate (no short-circuit);
-                // see SRD 10 §"Conditional selection" for the rationale.
+                // see polydat_grammar.md §7.1 for the rationale.
                 if call.func == "if" {
                     if call.args.len() != 3 {
                         return Err(format!(
@@ -552,8 +552,7 @@ impl Compiler {
                     }
                 }
 
-                // SRD 23 §"Mutation entry points → GK": install
-                // the enclosing binding's name as attribution for
+                // Install the enclosing binding's name as attribution for
                 // any node that records it (e.g. `control_set`).
                 // The scope guard clears on Drop so nested
                 // compilation never leaks an outer attribution.
@@ -584,8 +583,7 @@ impl Compiler {
                     Err(e) => return Err(e),
                 };
 
-                // SRD 53 §"Source-string call-site sugar": for each
-                // Handle-typed input port whose wire produces a Str
+                // Source-string call-site sugar: for each Handle-typed input port whose wire produces a Str
                 // value, splice in the resolver named by the
                 // function's `default_resolver` hint. Performs the
                 // auto-promotion defined as "string-conversion node
@@ -712,11 +710,10 @@ impl Compiler {
                     }
 
                     // All inputs treated as Str via auto-adapters.
-                    // SRD-80b Phase E: `Printf::new(fmt, n_wires)` —
-                    // the macro-emitted constructor declares each
-                    // variadic slot as `PortType::Str` so explicit
-                    // input-type vectors are no longer threaded
-                    // through the call.
+                    // `Printf::new(fmt, n_wires)`: the macro-emitted
+                    // constructor declares each variadic slot as
+                    // `PortType::Str`, so the call takes no input-type
+                    // vector.
                     let node = Box::new(Printf::new(fmt_str.clone(), bind_names.len()));
                     let name = &targets[0];
                     asm.add_node(name, node, wire_refs);
@@ -733,9 +730,8 @@ impl Compiler {
                 // port type is inferred from the source wire so an
                 // f64 / bool / json alias doesn't clash with
                 // Identity's hardcoded u64 ports. Falls back to u64
-                // when the type can't be resolved at this point —
-                // preserves the legacy Identity behaviour for the
-                // unknown-source case.
+                // when the type can't be resolved at this point, as
+                // Identity does for an unknown source.
                 let name = &targets[0];
                 let wire = if self.input_names.contains(id) {
                     WireRef::input(id)
@@ -802,7 +798,7 @@ impl Compiler {
                     return Ok(());
                 }
 
-                // SRD-84 Part 1 — eager logical `&&` / `||`. Normalise
+                // Eager logical `&&` / `||` (polydat_grammar.md §7). Normalise
                 // each operand to truthiness (`x != 0` → 0/1), then
                 // bitwise-combine: the bitwise and/or of two truthiness
                 // values is the logical and/or. Both operands evaluate
@@ -1046,7 +1042,8 @@ impl Compiler {
                 // Infer the passthrough's port type from the source
                 // wire (e.g. `q.cursor` → Ext when q is partition-bound).
                 // Without this inference, Ext-typed projections like
-                // SRD 71's `q.cursor` would be forced to u64 and fail
+                // a partition-bound `q.cursor` (cursor_partitions.md §7.2)
+                // would be forced to u64 and fail
                 // downstream type-checking.
                 let port_type = asm
                     .output_type(&wire_name)
@@ -1081,11 +1078,11 @@ impl Compiler {
                 ));
             }
             Expr::Cast(inner, target, _) => {
-                // SRD-84 Part 1b — `<expr> as <type>`: an alignment-only
+                // `<expr> as <type>` (polydat_grammar.md §10): an alignment-only
                 // type-fusion infill. Compile the inner expression; if
                 // its type already matches the target, pass it through
                 // unchanged (the cast is a no-op); otherwise insert the
-                // SRD-79 fusion adapter, or error if no valid fusion
+                // fusion adapter (type_system.md §3), or error if no valid fusion
                 // exists.
                 use crate::ast::PortType as PT;
                 let from = infer_expr_type(inner, asm, &self.input_names);
@@ -1100,7 +1097,7 @@ impl Compiler {
                         // The parse fusion: text to a number is a
                         // declared reading, not a lossy narrowing.
                         (PT::Str, PT::U64) => Box::new(crate::library::convert::StrToU64::new()),
-                        // SRD-84 Part 1b — `as` does NOT perform lossy
+                        // `as` does NOT perform lossy
                         // numeric narrowing: the rounding is a semantic
                         // choice the author must make explicitly.
                         (PT::F64, PT::U64) => {

@@ -52,8 +52,8 @@ pub use compile::{
 /// literal placeholders (`{name}` form) contribute their
 /// identifier-shaped placeholder bodies.
 ///
-/// Cross-crate consumers (e.g. the host's SRD-13f
-/// synthesizer) use this to discover transitive wire refs from
+/// Cross-crate consumers (e.g. the host's context synthesizer,
+/// composition_substrate.md §3) use this to discover transitive wire refs from
 /// a binding's RHS without depending on the private `validate`
 /// module.
 pub fn collect_expr_references(expr: &ast::Expr, out: &mut std::collections::HashSet<String>) {

@@ -319,8 +319,8 @@ fn check_compatibility(
     // protocol-side coercion / text-detour the adapter performs
     // at bind time is acceptable for this position.
     //
-    // The text-natural-lvalue auto-permit that used to live in
-    // this file moved out to the caller side: an adapter whose
+    // The text-natural-lvalue auto-permit lives on the caller
+    // side: an adapter whose
     // protocol can text-coerce anything to its string parameter
     // type is expected to set `allow_fusion: true` on slots
     // with `Str`-lvalue (in non-strict mode). That makes the

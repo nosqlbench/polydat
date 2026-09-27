@@ -12,13 +12,13 @@
 // implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-//! SRD-84 Part 3 — caller-native, typed polydat expression stubs.
+//! Caller-native, typed polydat expression stubs.
 //!
 //! Lets Rust code build a polydat binding from an expression and emit
 //! it as a [`Statement`] for a grammar-safe
 //! `crate::kernel::subcontext::module::BodyFragment::Statements`
-//! (SRD-84 Part 2) — **without** concatenating source strings. The
-//! return type is bound at the call site via the SRD-80b [`Wire`]
+//! (subcontext_construction.md §2.1) — **without** concatenating source
+//! strings. The return type is bound at the call site via the [`Wire`]
 //! trait, so the Rust generic and the polydat target type are one and
 //! the same.
 //!
@@ -32,8 +32,8 @@ use crate::dsl::ast::{Binding, BindingModifier, Expr, ExternPort, Statement, Wir
 use crate::dsl::lexer::Span;
 
 /// A caller-native expression stub: a named binding over a polydat
-/// expression, optionally type-coerced (via the SRD-84 Part 1b `as`
-/// cast) and `volatile`.
+/// expression, optionally type-coerced (via the `as` cast,
+/// polydat_grammar.md §10) and `volatile`.
 pub struct ExprStub {
     name: String,
     expr: Expr,
@@ -60,8 +60,8 @@ impl ExprStub {
         Ok(Self::new(name, expr))
     }
 
-    /// Coerce the stub's value to `T`'s polydat type via the SRD-84
-    /// Part 1b `as <type>` cast — alignment-only, a no-op when the
+    /// Coerce the stub's value to `T`'s polydat type via the
+    /// `as <type>` cast (polydat_grammar.md §10) — alignment-only, a no-op when the
     /// expression is already `T::PORT`. The Rust generic *is* the
     /// polydat target type.
     pub fn returning<T: Wire>(mut self) -> Self {
@@ -90,7 +90,7 @@ impl ExprStub {
     }
 }
 
-/// SRD-84 **shape 1** — grammar-safe *graph matter*: a bundle of
+/// **Shape 1** — grammar-safe *graph matter*: a bundle of
 /// statements the polydat kernel compiler turns into a kernel. Built
 /// programmatically (typed externs + `ExprStub` bindings), never from a
 /// source string. Feeds `PolydatMatter` / `BodyFragment::Statements`.
@@ -146,7 +146,7 @@ impl GraphMatter {
     }
 }
 
-/// SRD-84 **shape 2** — a polydat expression *bound to a parent
+/// **Shape 2** — a polydat expression *bound to a parent
 /// kernel's lexical scope*. Compiled into a sub-context whose named
 /// output is the expression, evaluable many times against injected
 /// inputs. The return is whatever `Wire` type the bound stub was

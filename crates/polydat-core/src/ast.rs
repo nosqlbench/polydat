@@ -41,7 +41,7 @@ use std::sync::Arc;
 ///   - exactly one allocation when it doesn't (a `Vec<T>` from
 ///     `VectorReader::get`, wrapped into an `Arc<[T]>`).
 ///
-/// See SRD 53 §"Native Vector Binding".
+/// See type_system.md §1.7.
 pub struct SliceArc<T: 'static> {
     /// Keeps the storage alive. For owned data this is an
     /// `Arc<OwnedSlice<T>>`; for mmap-backed data this is an
@@ -357,7 +357,7 @@ pub enum Value {
     /// `Arc::clone` — a single atomic increment, zero allocations.
     /// Produced by resolver nodes (e.g. `dataset_open`) and consumed
     /// by reader nodes that downcast to the concrete type. See
-    /// SRD 53 §"Dataset Handles" for the canonical use case.
+    /// type_system.md §1.8 for the canonical use case.
     Handle(Arc<dyn std::any::Any + Send + Sync>),
     /// Typed `f32` vector carrier. Flows from vector accessors to
     /// native-binding adapters without string formatting or byte
@@ -391,7 +391,7 @@ pub enum Value {
     /// (type_system_alignment.md §8.2). Unsigned byte buffers are
     /// spelled `Bytes`.
     VecI8(SliceArc<i8>),
-    /// The absent value (SRD-74): fresh buffer slots start as
+    /// The absent value (none_semantics.md): fresh buffer slots start as
     /// `None`, and the kernel propagates it through nodes that do
     /// not `accepts_none_inputs`.
     None,
@@ -503,9 +503,8 @@ impl Value {
     }
 
     /// Read a signed 64-bit integer. Accepts the honest `Value::I64`
-    /// carrier and — during the bit-stuffed-to-honest migration —
-    /// a legacy `Value::U64` whose bits are reinterpreted (the
-    /// pre-alignment storage convention for `PortType::I64` slots).
+    /// carrier and a bit-stuffed `Value::U64` whose bits are
+    /// reinterpreted as the `i64` they store.
     #[inline]
     pub fn as_i64(&self) -> i64 {
         match self {
@@ -518,7 +517,7 @@ impl Value {
     /// Read an unsigned 128-bit integer. Accepts the honest
     /// `Value::U128` carrier plus zero-extended `U64` (widening
     /// is implicit at read sites the way `as_i64` accepts the
-    /// legacy stuffed form).
+    /// bit-stuffed form).
     #[inline]
     pub fn as_u128(&self) -> u128 {
         match self {
@@ -690,7 +689,7 @@ impl Value {
     ///   stuffing uses `Value::F64` for the materialised float
     ///   value, not the bit pattern).
     /// - `Value::None` is acceptable for every slot type
-    ///   (SRD-74 absent sentinel).
+    ///   (the absent sentinel, none_semantics.md).
     ///
     /// Every typed input write checks a value with it. The check in
     /// `adapt_boundary_value` stays strict (`port_type == slot_type`)
@@ -794,7 +793,7 @@ impl Value {
     /// Downcast a Handle value to a borrowed reference of its concrete
     /// type. Panics if the variant isn't `Handle` or the type doesn't
     /// match. Used by reader nodes that consume a typed-handle wire
-    /// produced by a resolver node (see SRD 53 §"Dataset Handles").
+    /// produced by a resolver node (see type_system.md §1.8).
     ///
     /// The borrow lasts as long as `self` (the buffer slot's `Value`
     /// is what holds the `Arc`). For per-cycle reads this is the
@@ -1222,7 +1221,7 @@ pub struct Port {
     /// Cost class for input ports. Ignored for output ports.
     pub wire_cost: WireCost,
     /// Optional value contract this wire must satisfy at runtime
-    /// (SRD 15 §"Strict Wire Mode"). The compiler uses this to
+    /// (graph_compiler.md §2, strict-wire assertions). The compiler uses this to
     /// decide whether to auto-insert a value assertion when the
     /// upstream source can't statically be proven to deliver a
     /// satisfying value. `None` = no constraint declared.
@@ -1245,11 +1244,9 @@ pub struct Port {
     /// does not need it, because the assembler resolves that port's
     /// type from its wire and hands it to the constructor.
     ///
-    /// The assembler used to decide this from a list of thirteen node
-    /// names, which was both a name-keyed table and the wrong
-    /// granularity: `pick`'s selector wires must be `Bool` while its
-    /// value wires are polymorphic, and one flag per node cannot say
-    /// that.
+    /// The flag is per port rather than per node or per node name:
+    /// `pick`'s selector wires must be `Bool` while its value wires are
+    /// polymorphic, and one flag per node cannot say that.
     pub accepts_any_type: bool,
 }
 
@@ -1332,8 +1329,8 @@ impl Port {
 
     /// Attach a value constraint. Used by node authors that want
     /// to declare "this wire must satisfy X" so strict-wire-mode
-    /// can auto-insert the right value assertion. See SRD 15
-    /// §"Strict Wire Mode".
+    /// can auto-insert the right value assertion. See
+    /// graph_compiler.md §2.
     pub fn with_constraint(mut self, c: crate::dsl::const_constraints::ConstConstraint) -> Self {
         self.constraint = Some(c);
         self
@@ -1354,7 +1351,7 @@ impl Port {
 }
 
 // ---------------------------------------------------------------------------
-// Unified slot model (SRD 36 §Variadic)
+// Unified slot model (library_catalog.md, "Shapes")
 // ---------------------------------------------------------------------------
 
 /// The type discriminant for a slot: wire or typed constant.
@@ -1376,7 +1373,7 @@ pub enum SlotType {
     ConstVecU64,
     /// A `Vec<f64>` constant (from array literal).
     ConstVecF64,
-    /// SRD-80b Phase C — typed-element variadic-const slot for
+    /// Typed-element variadic-const slot for the
     /// `Const<Vec<C>>` operator-side shape. Element type
     /// discrimination is emitted inline by the macro at the
     /// build-closure call site, from the element type it read out of
@@ -2118,7 +2115,7 @@ pub trait PolydatNode: Send + Sync {
 
     /// True iff this node should receive `Value::None` inputs
     /// directly rather than have the kernel propagate None through
-    /// it. Default: false — most nodes follow SRD-74 Rule 1
+    /// it. Default: false — most nodes follow none_semantics.md Rule 1
     /// (None in → None out, no eval invocation).
     ///
     /// Override to true for nodes whose semantics explicitly
@@ -2223,7 +2220,7 @@ pub trait PolydatNode: Send + Sync {
     }
 
     /// A synthetic fusion node's view of the subgraph it stands in
-    /// for (SRD-105 cone extraction). Program-identity hashing
+    /// for (cone extraction, engines.md §2). Program-identity hashing
     /// (`PolydatProgram::canonical_hash`) walks THROUGH fusion
     /// nodes into this subgraph, so identity is invariant to the
     /// engine mix: `jit=off` and `jit=auto` compiles of the same
@@ -2404,7 +2401,7 @@ mod value_size_probe {
     }
 }
 
-/// A borrowed view of a [`Value`] (SRD 115 §6.1): what a compiled helper
+/// A borrowed view of a [`Value`] (compiled_handles.md §6): what a compiled helper
 /// or closure sees for an argument it does not own. A scalar is carried
 /// by value, a string or byte string by reference into the arena or the
 /// interner, a JSON value by reference into the value table, and any

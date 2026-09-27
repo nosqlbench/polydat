@@ -162,7 +162,7 @@ impl PolydatRuntime {
 
     /// Return the unified function registry: built-in + all factories.
     ///
-    /// SRD-80 — `#[polydat_node]`-generated nodes route through
+    /// `#[polydat_node]`-generated nodes route through
     /// the same `crate::dsl::registry::registry()` channel
     /// (they submit `NodeRegistration` entries link-time, same
     /// as `register_nodes!`-using modules), so no separate

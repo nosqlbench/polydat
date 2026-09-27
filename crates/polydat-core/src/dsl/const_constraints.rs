@@ -3,7 +3,7 @@
 
 //! Assembly-time validation of Polydat node constant arguments.
 //!
-//! Polydat's contract (SRD 15 §"Input Validity Model") keeps the hot
+//! Polydat's input-validity contract keeps the hot
 //! path branch-free by letting node `::new` trust its constants —
 //! no runtime checks. That only holds if the *factory* has already
 //! proven each constant satisfies the node's contract, rejecting

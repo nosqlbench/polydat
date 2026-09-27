@@ -59,8 +59,7 @@ pub struct NodeRegistration {
     /// matches one of this module's functions. Returning `Err` makes
     /// the compile fail with a structured `bad constant` error, so
     /// the node itself never sees a malformed literal and can keep
-    /// its constructor and `eval()` branch-free. See SRD 15 §"Const
-    /// Constraint Metadata" for the contract.
+    /// its constructor and `eval()` branch-free.
     pub validate: Option<crate::dsl::const_constraints::NodeValidator>,
 }
 
@@ -260,7 +259,7 @@ impl FuncCategory {
 }
 
 // ---------------------------------------------------------------------------
-// Unified parameter specification (SRD 36 §Variadic)
+// Unified parameter specification (library_catalog.md, "Shapes")
 // ---------------------------------------------------------------------------
 
 use crate::ast::SlotType;
@@ -284,8 +283,7 @@ pub struct ParamSpec {
     /// default, which passes validation; a const param without one is
     /// empty, since the signature offers no value to show.
     pub example: &'static str,
-    /// Optional assembly-time validation rule (SRD 15 §"Const
-    /// Constraint Metadata"). The factory enforces this before
+    /// Optional assembly-time validation rule. The factory enforces this before
     /// `build_node` so node constructors can stay infallible and
     /// branch-free at runtime. `None` = no constraint declared
     /// (default for wires and unconstrained constants).
@@ -384,8 +382,8 @@ pub struct FuncSig {
     /// the binding compiler emits this function and a `Handle`
     /// input is wired to a `Str`-producing source, it splices in
     /// the named resolver to convert the string into a handle. This
-    /// is the "string-conversion node insertion" mechanism from
-    /// SRD 53 §"Source-string call-site sugar". `None` means no
+    /// is the "string-conversion node insertion" mechanism of
+    /// source-string call-site sugar. `None` means no
     /// auto-promotion — the caller must pass a `Handle` directly.
     pub default_resolver: Option<DefaultResolver>,
     /// Output-type contract — `Fixed` for the vast majority of
@@ -513,10 +511,8 @@ pub fn suggest_function(name: &str) -> Option<&'static str> {
 /// Iterates the link-time inventory directly and returns the
 /// actual `&'static FuncSig` — the registration slices are
 /// already `'static` (see [`NodeRegistration::signatures`]), so
-/// no allocation is needed. (The former implementation built an
-/// owned `Vec` and `Box::leak`'d a clone to fabricate the
-/// `'static` lifetime, leaking ~200 bytes per call — Miri's
-/// leak-check finding 2026-06-12.)
+/// no allocation is needed, and no clone is leaked to fabricate a
+/// `'static` lifetime.
 pub fn lookup(name: &str) -> Option<&'static FuncSig> {
     for reg in inventory::iter::<NodeRegistration> {
         for sig in (reg.signatures)() {
@@ -607,15 +603,13 @@ mod tests {
 
     #[test]
     fn printf_has_const_str_param() {
-        // SRD-80b Phase E: printf migrated to `#[polydat_node]` with
-        // a `Const<&str> format` arg + `&[Value] parts` variadic.
-        // The macro lists both in `params` (the variadic arg appears
-        // as a SlotType::Wire entry whose count is governed by the
-        // node's `Arity::VariadicWires`); the pre-migration
-        // hand-written FuncSig listed only the const. The
-        // load-bearing assertion is that the FIRST param is the
-        // format ConstStr and the arity is variadic — both still
-        // hold.
+        // printf is a `#[polydat_node]` with a `Const<&str> format`
+        // arg + `&[Value] parts` variadic. The macro lists both in
+        // `params` (the variadic arg appears as a SlotType::Wire
+        // entry whose count is governed by the node's
+        // `Arity::VariadicWires`). The load-bearing assertion is that
+        // the FIRST param is the format ConstStr and the arity is
+        // variadic.
         let sig = lookup("printf").unwrap();
         assert!(
             !sig.params.is_empty(),

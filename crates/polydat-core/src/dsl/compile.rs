@@ -115,7 +115,7 @@ pub enum EmbeddingError {
     /// where a concrete value was required. Produced by a
     /// `HostType::from_value` conversion that meets `Value::None`,
     /// or by a host's own strict accessor (`as_bool` on
-    /// `Value::None`, etc.). See SRD-74.
+    /// `Value::None`, etc.). See none_semantics.md.
     NonePropagated {
         /// The accessor the host called.
         accessor: &'static str,
@@ -269,9 +269,8 @@ pub fn stdlib_sources() -> &'static [(&'static str, &'static str)] {
 ///   kernel, when a test or diagnostic needs its own internals, or when
 ///   it is being used as the semantic oracle a differential test
 ///   compares a compiled engine against. That is a real need, and it
-///   says so by name — it used to be what this entry point quietly
-///   returned, which meant a host got the slowest engine by asking for
-///   none.
+///   says so by name, so a host that names no engine never gets the
+///   slowest one.
 /// - [`compile_polydat_with`] to walk the tiers with one source.
 pub fn compile_polydat(source: &str) -> Result<Box<dyn crate::Kernel>, crate::KernelError> {
     compile_polydat_kernel(source)
@@ -481,9 +480,9 @@ pub struct CompileOptions {
     /// for when to set it and what happens when it cannot be realized.
     pub engine: crate::Engine,
     /// What the compiler does with an input whose type the author did
-    /// not declare (input_variance.md §4). The default keeps today's
-    /// rule: the inferred type is the input's, and a write of another
-    /// type is refused.
+    /// not declare (input_variance.md §4). The default, `Fixed`, makes
+    /// the inferred type the input's and refuses a write of another
+    /// type.
     pub input_variance: InputVariance,
     /// Externs whose declared type the caller inferred rather than the
     /// author wrote: the ones a program synthesizer emitted, such as a
@@ -497,8 +496,11 @@ pub struct CompileOptions {
 /// `extern` a scope builder synthesized (input_variance.md §3, §4).
 /// Coordinates and declared inputs are never affected.
 ///
-/// Converting an input costs a closure step on the compiled engines, so
-/// conversion is asked for, never assumed.
+/// A converted input costs a converter node, which on the compiled
+/// engines is a closure step or a slot call from native code, run when
+/// the input changes (input_variance.md §5). A declared input and an
+/// open input under `Fixed` cost nothing, so conversion is asked for,
+/// never assumed.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum InputVariance {
     /// An open input takes its inferred type, and a write of another
@@ -656,8 +658,8 @@ pub fn compile_polydat_checked(
 /// expression compiles with no inputs, so its value is a pure function
 /// of its text; caching is exact. Bounded so a pathological caller
 /// cannot grow it without limit. This is what keeps repeated evaluation
-/// of the same range, list, or predicate text compile-free (SRD 113
-/// §5.2).
+/// of the same range, list, or predicate text compile-free
+/// (for_traversal.md §5.2).
 static CONST_EXPR_CACHE: std::sync::OnceLock<
     std::sync::Mutex<std::collections::HashMap<String, crate::ast::Value>>,
 > = std::sync::OnceLock::new();
@@ -666,7 +668,7 @@ const CONST_EXPR_CACHE_CAP: usize = 8192;
 /// Evaluate a constant expression by compiling it as a one-binding
 /// program: what a comprehension source such as `partitions("*\/4", 1000)`
 /// goes through. Cached by source text, so the same text compiles once
-/// per process (SRD 113 §5.2). An expression that reaches a dynamic
+/// per process (for_traversal.md §5.2). An expression that reaches a dynamic
 /// input is a lifecycle error. The compile, when there is one, is
 /// recorded in a ledger of its own; [`eval_const_expr_for`] charges
 /// it to a tree's.
@@ -980,9 +982,9 @@ pub fn eval_const_expr_typed<T: HostType>(source: &str) -> Result<T, EmbeddingEr
 ///
 /// `scope` is anything names resolve in: a kernel of any engine, a
 /// [`Layered`](crate::kernel::interp::Layered) view of a tuple over
-/// one, or the empty scope. It used to be `&PolydatKernel`, so a host
-/// holding a compiled kernel had to compile its program again on the
-/// interpreter to read a binding through here.
+/// one, or the empty scope, so a host holding a compiled kernel reads a
+/// binding through here without compiling its program again on the
+/// interpreter.
 pub fn eval_kernel_bound_typed<T: HostType>(
     text: &str,
     scope: &dyn crate::kernel::interp::Lookup,
@@ -1053,10 +1055,9 @@ pub fn eval_kernel_bound_typed_strict<T: HostType>(
 /// The answer is read off the two types' own numeric domains
 /// ([`crate::ast::PortType::numeric_domain`]) rather than looked up in a table of
 /// pairs. A table has to be kept in step with the adapter catalog by
-/// hand, and was not: it named eleven pairs where the catalog has
-/// well over a hundred, so `U8 → U64` was refused as lossy, and it
-/// called `U64 → F64` and `I64 → F64` lossless where both round above
-/// `2^53`.
+/// hand, and the catalog has well over a hundred pairs; the domains
+/// answer every pair, including that `U8 → U64` is lossless and that
+/// `U64 → F64` and `I64 → F64` round above `2^53`.
 ///
 /// Rendering to `Str` keeps the value for the types that have a
 /// numeric domain, since each of those renders with a round-trip
@@ -1311,7 +1312,7 @@ pub(super) struct Compiler {
     context_label: String,
     /// Module-level pragmas extracted from the source. Drive the
     /// assembler's `strict_types` / `strict_values` flags
-    /// (SRD 15 §"Module-Level Pragmas" + §"Strict Wire Mode").
+    /// (polydat_grammar.md §14, graph_compiler.md §2).
     pub(super) pragmas: super::pragmas::PragmaSet,
     /// LHS binding name currently being compiled, if any. Used as a
     /// prefix for auto-generated anonymous node names so type-mismatch
@@ -1319,13 +1320,13 @@ pub(super) struct Compiler {
     /// instead of an opaque counter (`__anon_14`).
     pub(super) current_binding: Option<String>,
     /// Tiles lowered so far in this compile, in order, so later tiles
-    /// can splice earlier ones (SRD 114 §5.5).
+    /// can splice earlier ones (polytile.md §5.5).
     pub(super) tiles: Vec<super::ast::TileDef>,
     /// Producer bindings seen so far, so tile projections over a
     /// producer can type their elements.
     pub(super) producers_seen: Vec<super::traversal::Producer>,
     /// Events raised while lowering, handed to the compile event log:
-    /// one `TileHoleTyped` per hole (SRD 114 §4.4), so `explain tiles`
+    /// one `TileHoleTyped` per hole (polytile.md §4.4), so `explain tiles`
     /// can show how each hole was typed and encoded, one
     /// `ComprehensionWarning` per degenerate composition (§5.8), and the
     /// steps of this compile that report themselves (a binding resolved,
@@ -1595,7 +1596,7 @@ impl Compiler {
                 match (start_literal, end_literal) {
                     // Both literal — compute directly. We also emit
                     // the start/end as named final bindings so the
-                    // comprehension `all(<cursor>)` form (SRD-18c)
+                    // comprehension `all(<cursor>)` form (expression_engine.md §3.3)
                     // can resolve them uniformly with the deferred
                     // (non-literal) case below.
                     (Some(s), Some(e)) => {
@@ -1711,8 +1712,8 @@ impl Compiler {
             .as_ref()
             .map(|(_, start, _, end)| (start.clone(), end.clone()));
 
-        // SRD 71: if the cursor decl carries an `over <expr>`
-        // clause, set up two pieces of plumbing:
+        // If the cursor decl carries an `over <expr>` clause
+        // (cursor_partitions.md §7.2), set up two pieces of plumbing:
         //
         // 1. An auxiliary output `<source>__over_raw` carrying
         //    the raw expression value (typically a string spec
@@ -1750,7 +1751,7 @@ impl Compiler {
             // exactly one partition seeds the cursor's slots, so the
             // program runs on every engine with no host call. A clause
             // that denotes several leaves the choice to the host or
-            // the traversal runtime, as before.
+            // the traversal runtime.
             if let (crate::dsl::ast::Expr::StringLit(spec, _), Some(extent)) =
                 (over_expr, effective_extent)
             {
@@ -1789,7 +1790,7 @@ impl Compiler {
                 vec![WireRef::input(&cursor_input_name)],
             );
             asm.add_output(&cursor_input_name, WireRef::node(&cursor_input_name));
-            // SRD 71 §"Cursor metadata wires": scalar projections
+            // Cursor metadata wires (cursor_partitions.md §7.2): scalar projections
             // of the resolved partition, as plain typed slots —
             // `<source>.cursor.idx` and friends parse as chained
             // field access and flatten onto these wires. The
@@ -1884,7 +1885,7 @@ impl Compiler {
     }
 
     /// The output type of a generator expression used as a comprehension
-    /// source (SRD 113 §3.3): compile `__probe := <expr>` on its own and
+    /// source (for_traversal.md §3.3): compile `__probe := <expr>` on its own and
     /// read the port type. Shared by `for` bodies and tile projections.
     pub(super) fn probe_element_type(&self, expr: &str) -> Result<crate::ast::PortType, String> {
         let src = format!("input cycle: u64\n__probe := {expr}\n");
@@ -1898,18 +1899,16 @@ impl Compiler {
         probe_compiler.source_text = src.clone();
         probe_compiler.context_label = format!("{} (element probe)", self.context_label);
         probe_compiler.module_cache = self.module_cache.clone();
-        // Assembly answers this. The probe used to compile a whole
-        // kernel under `JitMode::Auto` — wire resolution, the constant
-        // fold, cone extraction, native codegen, a state — to read one
-        // output's declared port type, which the assembler knows as
-        // soon as the node is registered.
+        // Assembly answers this: the assembler knows an output's
+        // declared port type as soon as the node is registered, so the
+        // probe builds no kernel.
         let asm = probe_compiler.assemble_parent(&ast, None)?;
         asm.output_type("__probe")
             .ok_or_else(|| "probe produced no output".to_string())
     }
 
     /// Lower each `for` statement's body to a child program, typed from
-    /// its comprehension and the parent's manifest (SRD 113 §3.3, §4).
+    /// its comprehension and the parent's manifest (for_traversal.md §3.3, §4).
     fn compile_traversals(
         &mut self,
         for_stmts: &[super::ast::ForStmt],
@@ -1997,10 +1996,6 @@ impl Compiler {
         Ok(out)
     }
 
-    /// Compile a traversal body on `engine` (engine parity, step 8): the
-    /// same child file and compiler settings the parent used for the
-    /// interpreter's program, through the assembler, its own `for`
-    /// statements and producers included.
     /// A body of this program's, from its lowered source: the
     /// settings this compiler carries, so the body compiles the way
     /// the program around it does — its source directory and library
@@ -2008,8 +2003,8 @@ impl Compiler {
     /// resolved, and the tree's compile ledger.
     ///
     /// A `for` body gets these because `compile_traversals` builds its
-    /// `BodySource` here; a tile's projection body used to travel as
-    /// text and get none of them.
+    /// `BodySource` in this compiler, and a tile's projection body gets
+    /// them through this function.
     pub(super) fn body_source_for(
         &self,
         source: &str,
@@ -2030,6 +2025,10 @@ impl Compiler {
         ))
     }
 
+    /// Compile a traversal body on `engine` (engines.md §3.6): the same child file and
+    /// compiler settings the parent used for the interpreter's program,
+    /// through the assembler, its own `for` statements and producers
+    /// included.
     pub(super) fn compile_body_on(
         body: &super::traversal::BodySource,
         engine: crate::Engine,
@@ -2153,8 +2152,8 @@ impl Compiler {
                 Statement::Binding(b) => {
                     // `shared X := <expr>` compiles to an input slot +
                     // passthrough output, so the binder can wire a
-                    // `SharedCell` for cross-scope mutability (SRD-16
-                    // §"Mutability Rules: Shared Mutable"). A literal
+                    // `SharedCell` for cross-scope mutability
+                    // (scope_model.md §6). A literal
                     // is the slot's default; any other expression
                     // compiles as the output `__init_X`, which the
                     // declaring kernel's initialization evaluates once
@@ -2341,7 +2340,7 @@ impl Compiler {
         // pruned by DCE, leaving the cursor extent unresolved.
         match required_outputs {
             Some(required) => {
-                // SRD-13f Push D / SRD-44: `volatile` bindings stay
+                // `volatile` bindings (polydat_grammar.md §5) stay
                 // exposed as outputs even when the caller's
                 // required list doesn't mention them. The author
                 // declared the wire as volatile to mark it as
@@ -2401,7 +2400,7 @@ impl Compiler {
                 }
                 // Always preserve `__cursor_extent_*` auxiliary
                 // outputs — they're consumed by the comprehension
-                // `all(<cursor>)` form (SRD-18c §"Layer 3") and
+                // `all(<cursor>)` form (expression_engine.md §3.3) and
                 // also by the post-compile deferred-extent
                 // resolution above. DCE-ing them would leave the
                 // cursor's extent unresolvable to descendant scopes.
@@ -2509,7 +2508,7 @@ pub fn compile_polydat_with_engine(
 /// [`compile_polydat_with_engine`] from a parsed file: the parent
 /// compiles on `engine` through the assembler, and each `for` body
 /// compiles once for the interpreter as the traversal's record and on
-/// any engine at activation (engine parity, step 8).
+/// any engine at activation (engines.md §3.6).
 pub fn compile_ast_with_engine(
     ast: &PolydatFile,
     source: &str,
@@ -2787,9 +2786,9 @@ mod tests {
     fn array_literal_in_argument_position_is_refused() {
         // The other half of the same rule: a list literal is a
         // binding-position form and has no meaning as a call argument
-        // (polydat_grammar.md §18.1 T-ArrayLit). It used to lower to a
-        // const argument nothing read, so the call reached the runtime
-        // with one wire input missing and panicked there instead.
+        // (polydat_grammar.md §18.1 T-ArrayLit). Lowered to a const
+        // argument, nothing would read it, and the call would reach the
+        // runtime with one wire input missing and panic there.
         let err = compile_polydat_interpreter("input cycle: u64\nout := printf(\"{}\", [1, 2])")
             .expect_err("a list literal in argument position is a compile error");
         let text = err.to_string();
@@ -3261,8 +3260,8 @@ mod tests {
     #[test]
     fn init_outputs_threaded_into_program() {
         // Sanity: the compiler records every `init`-declared name
-        // on GkProgram.const_outputs so Plan B (executor side) can
-        // walk them at scope activation.
+        // on the program's const outputs so the executor can walk
+        // them at scope activation.
         let src = "const a := 1\n\
                    const b := 2\n\
                    c := 3\n";
@@ -3278,10 +3277,9 @@ mod tests {
 
     /// Auto-extern slots inferred from RHS shape land at the
     /// boundary with their actual type (Str / U64 / F64 / Bool)
-    /// rather than the legacy `PortType::Ext` catchall. This
-    /// removes the `U64 → Ext` boundary-adapter miss the audit
-    /// log used to warn about for workloads that use `set:`
-    /// blocks with iter-var interpolation.
+    /// rather than the `PortType::Ext` catchall, so workloads that
+    /// use `set:` blocks with iter-var interpolation meet no
+    /// `U64 → Ext` boundary-adapter miss.
     ///
     /// Test path: declare an iteration extern explicitly with
     /// `extern N: str` (no default → `IterationExtern` kind,
@@ -3321,9 +3319,7 @@ mod tests {
 
     /// `dataset_prebuffer(...)` returns `Value::Handle` — the
     /// auto-extern slot for `const prebuffered := dataset_prebuffer(...)`
-    /// MUST be `PortType::Handle`, not the legacy `Ext` catchall.
-    /// This is the second specific call site we patched in the
-    /// inferrer after the `printf` string-template case.
+    /// MUST be `PortType::Handle`, not the `Ext` catchall.
     /// (`dataset_prebuffer` is a vectordata node, so the test only
     /// exists when that feature registers it.)
     #[cfg(feature = "vectordata")]

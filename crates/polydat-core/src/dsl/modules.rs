@@ -63,8 +63,8 @@ impl Compiler {
 
     /// Splice a resolver between any `Str`-producing wire and any
     /// `Handle`-typed input port on a freshly built node, per the
-    /// function's `default_resolver` hint
-    /// (SRD 53 §"Source-string call-site sugar").
+    /// function's `default_resolver` hint (source-string call-site
+    /// sugar).
     ///
     /// For each `Handle` input port:
     ///   - if the wire already produces `Handle`, leave it alone;
@@ -125,7 +125,7 @@ impl Compiler {
                 if src_type == Some(PortType::Str) {
                     // Build the resolver call as anonymous nodes.
                     let resolver_name = self.anon_name();
-                    // The SRD-53 source-string resolvers are dataset
+                    // The source-string resolvers are dataset
                     // openers from `library::vectors`, which exists
                     // only with the `vectordata` feature. Without it,
                     // auto-promotion must fail loudly — silently
@@ -200,13 +200,13 @@ impl Compiler {
         let module_is_formal = module.is_formal;
         let module_stmts = module.statements.clone();
 
-        // Module inlining is the *flatten* combinator (SRD 13b
-        // §"Inline"): the module's `Statement`s splice into this
+        // Module inlining is the *flatten* combinator
+        // (module_system.md §5): the module's `Statement`s splice into this
         // host's DAG and the boundary disappears. Pragmas declared
         // inside the module body therefore become *additive*
         // contributions to the *same* `PragmaSet` — they're not a
         // separate scope. The outer-wins / conflict-detection
-        // semantics from SRD 15 §"Pragma Scope" fire at *scope
+        // pragma semantics fire at *scope
         // composition* boundaries (workload → phase → for_each),
         // which live in `nbrs-runtime`, not here.
         for stmt in &module_stmts {
@@ -336,7 +336,7 @@ impl Compiler {
             match stmt {
                 Statement::InputDecl(_) => {} // skip — kernel inputs handled by caller
                 Statement::Binding(b) if matches!(b.value, Expr::For(_)) => {
-                    // A producer inside the module (SRD 113 §3.1): bound
+                    // A producer inside the module (for_traversal.md §3.1): bound
                     // under the module prefix as a `streamer` constant and
                     // recorded so this module's tiles can project over it.
                     let Expr::For(source) = &b.value else {
@@ -554,7 +554,7 @@ impl Compiler {
         asm.node_output_type(name)
     }
 
-    /// Rewrite a tile's pieces from a module (SRD 114 §5.6): hole and
+    /// Rewrite a tile's pieces from a module (polytile.md §5.6): hole and
     /// branch expressions go through [`Self::rewrite_module_expr`];
     /// `{name}` placeholders in projection sources are renamed the same
     /// way when they name a module input bound to a caller's wire or a
@@ -708,8 +708,7 @@ impl Compiler {
         };
         match &source.kind {
             // Renaming the base is the whole rewrite: the text follows
-            // from it, where this used to patch the old text by prefix
-            // surgery and could leave the two disagreeing.
+            // from it, so the base and the text cannot disagree.
             ForSourceKind::Producer(n) => Ok(ForSource::producer(renamed(n), source.span)),
             ForSourceKind::Derived {
                 base,
