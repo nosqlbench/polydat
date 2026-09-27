@@ -103,10 +103,10 @@ struct Settings {
     batch_ms: u64,
     /// Provenance mode of the compiled engines: `auto`, `raw`, `push`,
     /// `pull`, or `push-pull`. `auto` is what a host gets by default.
-    /// Under `raw` every pull recomputes its output's cone, so a
-    /// program read at several outputs pays for each, and on pure native
-    /// code, one function for the whole program, it pays for all of it
-    /// every time.
+    /// Under `raw` a pull keeps no provenance guard, so a program read
+    /// at several outputs pays for each output's cone. Pure native code
+    /// under `raw` makes every unit stale on a write and runs each unit
+    /// at most once until the next write (engines.md §1).
     #[serde(default = "default_provenance")]
     provenance: String,
 }

@@ -19,9 +19,9 @@ use polydat::library::arithmetic::{Add, Sum};
 // =================================================================
 
 // The passthrough stages use `add 0`, not `identity`: identity is
-// polymorphic over `Value` (SRD-80 PR B.8) with no P2/P3 lowering,
-// which silently broke the compiled-tier benches. `add 0` is the
-// same one-node-deep work at every tier.
+// polymorphic over `Value` with no P2/P3 lowering, so it would not
+// measure the compiled tiers. `add 0` is the same one-node-deep work
+// at every tier.
 fn asm_single_identity() -> PolydatAssembler {
     let mut asm = PolydatAssembler::new(vec!["cycle".into()]);
     asm.add_node("id", Box::new(Add::new(0)), vec![WireRef::input("cycle")]);
@@ -55,8 +55,8 @@ fn asm_wide_sum(width: usize) -> PolydatAssembler {
 // Phase 1 (runtime) benchmarks
 // =================================================================
 
-/// Compile pinned to the interpreter (`jit=off`). Since SRD-105
-/// made `Auto` the process default, an unpinned compile would fuse
+/// Compile pinned to the interpreter (`jit=off`). `Auto` is the
+/// interpreter's default mode (engines.md §2), so an unpinned compile would fuse
 /// eligible chains into cones — these groups measure the
 /// interpreter tier specifically.
 fn compile_off(mut asm: PolydatAssembler) -> polydat::kernel::PolydatKernel {
@@ -313,7 +313,7 @@ fn bench_invalidation_strategy(c: &mut Criterion) {
 }
 
 // =================================================================
-// SRD-105 cone-mode benchmarks — the production engine question:
+// Cone-mode benchmarks (engines.md §2) — the production engine question:
 // what does auto-mode cone extraction buy over the interpreter on
 // per-cycle graphs shaped like real workload bindings? These
 // compile through the full DSL pipeline (same path production

@@ -73,8 +73,9 @@ struct CompileArgs {
     /// Execution engine: `auto` is the build's default, native code
     /// where the build has it and closures otherwise; `interpreter`,
     /// `closures`, `native`, and `pure-native` name one. `pure-native`
-    /// refuses the program when any node has no native lowering, where
-    /// `native` runs that node's closure.
+    /// calls a node's kit where it has no native lowering and refuses
+    /// the program when a node has neither, where `native` runs that
+    /// node's closure.
     #[arg(long, value_enum, default_value_t = Engine::Auto)]
     engine: Engine,
     /// Provenance mode of a compiled engine: how much work a cycle whose
@@ -102,8 +103,7 @@ struct CompileArgs {
 impl CompileArgs {
     /// How much of the interpreter's program is fused into cones: what
     /// `--cones` says, and nothing else. The engine and the cone mode
-    /// are separate choices, which is the whole point of splitting
-    /// them out of the one flag that used to carry both.
+    /// are separate choices, each with its own flag.
     fn cones(&self) -> JitMode {
         match self.cones {
             Cones::Off => JitMode::Off,
@@ -282,9 +282,10 @@ enum Engine {
     Closures,
     /// Native code where a node has a lowering, its closure elsewhere.
     Native,
-    /// Native code and nothing else: refuses the program when any node
-    /// has no native lowering, which is how you find out whether a
-    /// program is fully native.
+    /// Native code and nothing else: a node with no native lowering
+    /// runs through its kit, and a node with neither refuses the
+    /// program, which is how you find out whether a program is fully
+    /// native.
     PureNative,
 }
 
@@ -430,7 +431,7 @@ fn read_source(path: &Path) -> Result<String, String> {
 /// moved, so nothing would re-evaluate, and the kernel is told to run
 /// everything again so per-cycle nodes such as the emit binding fire.
 /// The output indices of `names` on `kernel`, resolved once so the
-/// run pulls by index (SRD 117 step 3).
+/// run pulls by index (runtime_model.md §6).
 fn resolve_pulls(kernel: &dyn Kernel, names: &[String]) -> Vec<usize> {
     names
         .iter()
@@ -574,11 +575,10 @@ fn run(args: RunArgs) -> Result<(), String> {
     assign_values(&mut ast, &assignments)?;
 
     // What the program declares, read from its source. The emit
-    // transform needs the names before the program is compiled, so a
-    // probe compile used to run first and the run's reported compile
-    // time was the sum of two. `declared_wires` reads the same names
-    // from the AST, and the suite checks it against what the compiler
-    // resolves.
+    // transform needs the names before the program is compiled.
+    // `declared_wires` reads them from the AST, so no probe compile
+    // adds to the run's reported compile time, and the suite checks
+    // it against what the compiler resolves.
     let declared = declared_wires(&ast);
     let traversal_mode = !declared.traversal_bodies.is_empty();
     let selected: Vec<String> = match &args.outputs {
@@ -962,9 +962,10 @@ fn body_output_names(body: &[Statement]) -> Vec<String> {
     out
 }
 
-/// Run every top-level traversal of the program (SRD 113 §3.6). Fibers
-/// take activations by index, stride `fibers`, so no coordination is
-/// needed. Each activation runs its cycles under the §3.4 rule, capped
+/// Run every top-level traversal of the program (for_traversal.md
+/// §3.6). Fibers take activations by index, stride `fibers`, so no
+/// coordination is needed. Each activation runs its cycles under the
+/// for_traversal.md §3.4 rule, capped
 /// by `--cycles`. Rows are ordered by traversal and activation index
 /// unless `--unordered` is given.
 fn run_traversals(
