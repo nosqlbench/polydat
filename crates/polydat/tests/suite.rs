@@ -5,10 +5,10 @@
 //! is a module here, so the suite links once against the library
 //! rather than once per file (sixty-odd links after every library
 //! change, the largest cost of the gate); nextest runs each test in
-//! its own process regardless. The five files that define nodes of
+//! its own process regardless. The four files that define nodes of
 //! their own (`ext_tiers`, `handle_tiers`, `kernel_api`,
-//! `polydat_node_macro`, `srd80b_invariant`) stay binaries of their
-//! own: a node registers into the inventory at link time, and the
+//! `polydat_node_macro`) stay binaries of their own, as does
+//! `hand_written_impl_invariant`: a node registers into the inventory at link time, and the
 //! tests here that walk the registry must see the library alone. A
 //! test in the suite is addressed by its module:
 //!

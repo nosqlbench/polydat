@@ -42,7 +42,7 @@ const CARVEOUT_FILES: &[&str] = &[
 ];
 
 #[test]
-fn srd80b_no_handwritten_polydat_node_impl_outside_carveouts() {
+fn no_handwritten_polydat_node_impl_outside_carveouts() {
     let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
     // The nodes the compiler keeps, and the node library.
     let roots = [
@@ -90,9 +90,9 @@ fn srd80b_no_handwritten_polydat_node_impl_outside_carveouts() {
 
     assert!(
         offending.is_empty(),
-        "SRD-80b invariant violated — hand-written `impl PolydatNode for X` \
+        "Hand-written-impl invariant violated — hand-written `impl PolydatNode for X` \
          blocks must use the `#[polydat_node]` macro, OR the file must be \
-         added to CARVEOUT_FILES in `polydat/tests/srd80b_invariant.rs` with \
+         added to CARVEOUT_FILES in `polydat/tests/hand_written_impl_invariant.rs` with \
          a justifying rationale.\n\nOffending sites:\n  {}\n",
         offending.join("\n  ")
     );

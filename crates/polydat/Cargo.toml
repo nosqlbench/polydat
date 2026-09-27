@@ -116,8 +116,8 @@ name = "polydat_node_macro"
 path = "tests/polydat_node_macro.rs"
 
 [[test]]
-name = "srd80b_invariant"
-path = "tests/srd80b_invariant.rs"
+name = "hand_written_impl_invariant"
+path = "tests/hand_written_impl_invariant.rs"
 
 [[bench]]
 name = "polydat_throughput"
