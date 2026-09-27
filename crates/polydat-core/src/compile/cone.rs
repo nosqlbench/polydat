@@ -15,8 +15,22 @@
 //! after it; interior fusion follows whatever the P3 classifier
 //! accepts. Extraction is recoverable:
 //! member nodes move into the cone only after codegen succeeds, so
-//! any JIT failure leaves the graph exactly as the interpreter
-//! would have compiled it.
+//! a cone whose code generation fails leaves its members exactly as
+//! the interpreter would have compiled them. Under `JitMode::Auto` the
+//! failure is recorded on the tree's `CompileLedger` and the compile
+//! goes on; under `JitMode::Force` it fails the compile (engines.md
+//! §2.1).
+//!
+//! A cone reads at most [`MAX_CONE_INPUTS`] distinct boundary inputs.
+//! A component that reads more is cut into convex pieces within the
+//! bound, each compiled on its own (engines.md §2.2).
+
+/// The most distinct boundary inputs one cone piece reads: an
+/// implementation bound on each piece, not on the component it is cut
+/// from. A component over it is cut into pieces within it, and a single
+/// node over it stays on the interpreter and is recorded on the ledger
+/// (engines.md §2.2).
+pub const MAX_CONE_INPUTS: usize = 64;
 
 /// How much of the interpreter's graph is fused into native cones: the
 /// interpreter engine's one knob, carried by
@@ -38,17 +52,23 @@ pub enum JitMode {
 }
 
 #[cfg(not(feature = "jit"))]
-pub(crate) fn extract_jit_cones(_dag: &mut super::assembly::ResolvedDag, _mode: JitMode) {}
+pub(crate) fn extract_jit_cones(
+    _dag: &mut super::assembly::ResolvedDag,
+    _mode: JitMode,
+) -> Result<(), super::assembly::AssemblyError> {
+    Ok(())
+}
 
 #[cfg(feature = "jit")]
 pub(crate) use jit_impl::extract_jit_cones;
 
 #[cfg(feature = "jit")]
 mod jit_impl {
-    use super::JitMode;
+    use super::{JitMode, MAX_CONE_INPUTS};
     use crate::ast::{NodeMeta, PolydatNode, Port, PortType, Purity, Slot, SlotShape, Value};
-    use crate::compile::assembly::{PolydatAssembler, ResolvedDag};
+    use crate::compile::assembly::{AssemblyError, PolydatAssembler, ResolvedDag};
     use crate::compile::jit::{JitOp, classify_node_typed};
+    use crate::kernel::{ConeFallback, ConeFallbackKind};
     use crate::kernel::{InputDef, InputKind, WireSource};
     use std::collections::HashMap;
 
@@ -219,7 +239,7 @@ mod jit_impl {
     /// cost-model outcomes, not user-facing failures).
     fn audit_skip(member_count: usize, reason: &str) {
         crate::library::support::audit::debug(&format!(
-            "jit cone: leaving a {member_count}-member component on              the interpreter: {reason}"
+            "jit cone: leaving a {member_count}-member component on the interpreter: {reason}"
         ));
     }
 
@@ -300,17 +320,26 @@ mod jit_impl {
     }
 
     /// Replace eligible cones in `dag` with compiled cone nodes.
-    /// On any per-cone failure the cone's members stay interpreter
-    /// nodes; the DAG is always left valid and topologically sorted.
-    pub(crate) fn extract_jit_cones(dag: &mut ResolvedDag, mode: JitMode) {
+    ///
+    /// A cone whose code generation fails keeps its members as
+    /// interpreter nodes. Under `Auto` the failure is recorded on the
+    /// tree's ledger and the DAG is left valid and topologically sorted;
+    /// under `Force` it is returned as [`AssemblyError::NativeCone`]
+    /// (engines.md §2.1). A node that alone reads more than
+    /// [`MAX_CONE_INPUTS`] boundary inputs stays on the interpreter under
+    /// either mode and is recorded (engines.md §2.2).
+    pub(crate) fn extract_jit_cones(
+        dag: &mut ResolvedDag,
+        mode: JitMode,
+    ) -> Result<(), AssemblyError> {
         let min_members = match mode {
-            JitMode::Off => return,
+            JitMode::Off => return Ok(()),
             JitMode::Auto => 2,
             JitMode::Force => 1,
         };
         let n = dag.nodes.len();
         if n == 0 {
-            return;
+            return Ok(());
         }
 
         let (lifecycles, volatile) = classify_lifecycles(dag);
@@ -431,48 +460,210 @@ mod jit_impl {
                 );
                 continue;
             }
-            let Some(plan) = plan_cone(dag, members, &nodes_opt, &out_types) else {
-                // plan_cone audit-logs its own rejection reason;
-                // the component stays on the interpreter.
-                continue;
-            };
-            match build_cone(dag, &plan, &mut nodes_opt) {
-                Ok(cone) => {
-                    // Formation is diagnosable state too: cone-aware
-                    // bench reporting keys on this line to verify
-                    // extraction actually ran.
-                    crate::library::support::audit::debug(&format!(
-                        "jit cone: fused {} members ({} boundary in, {} out): {}",
-                        plan.members.len(),
-                        plan.boundary_in.len(),
-                        plan.boundary_out.len(),
-                        cone.meta().name,
-                    ));
-                    cones.push((plan, cone));
+            let split = split_by_inputs(dag, members, &preds);
+            for (node, inputs) in split.over_bound {
+                record_fallback(
+                    dag,
+                    &[node],
+                    &nodes_opt,
+                    inputs,
+                    ConeFallbackKind::InputBound,
+                    format!(
+                        "{inputs} distinct boundary inputs exceed the {MAX_CONE_INPUTS}-input \
+                         piece bound"
+                    ),
+                );
+            }
+            for piece in &split.pieces {
+                if piece.len() < min_members {
+                    continue;
                 }
-                // Members were restored by build_cone; the cone
-                // stays on the interpreter: a JIT failure never fails
-                // a compile. Eligibility
-                // prescreens classification, so a codegen error
-                // here is unexpected — surface it.
-                Err(e) => {
-                    crate::library::support::audit::warn(&format!(
-                        "jit cone: codegen failed for a {}-member                          cone — staying on the interpreter: {e}",
-                        plan.members.len(),
-                    ));
+                let Some(plan) = plan_cone(dag, piece, &nodes_opt, &out_types) else {
+                    // plan_cone audit-logs its own rejection reason;
+                    // the piece stays on the interpreter.
+                    continue;
+                };
+                match build_cone(dag, &plan, &mut nodes_opt) {
+                    Ok(cone) => {
+                        // Formation is diagnosable state too: cone-aware
+                        // bench reporting keys on this line to verify
+                        // extraction actually ran.
+                        crate::library::support::audit::debug(&format!(
+                            "jit cone: fused {} members ({} boundary in, {} out): {}",
+                            plan.members.len(),
+                            plan.boundary_in.len(),
+                            plan.boundary_out.len(),
+                            cone.meta().name,
+                        ));
+                        cones.push((plan, cone));
+                    }
+                    // build_cone restored the members. Force builds
+                    // native code or fails; Auto keeps the members on
+                    // the interpreter and records the fallback.
+                    Err(e) => {
+                        if mode == JitMode::Force {
+                            return Err(AssemblyError::NativeCone {
+                                cone: label_of(plan.members.iter().map(|&m| {
+                                    nodes_opt[m]
+                                        .as_ref()
+                                        .map_or("", |nd| nd.meta().name.as_str())
+                                })),
+                                reason: e,
+                            });
+                        }
+                        record_fallback(
+                            dag,
+                            &plan.members,
+                            &nodes_opt,
+                            plan.boundary_in.len(),
+                            ConeFallbackKind::Codegen,
+                            e,
+                        );
+                    }
                 }
             }
         }
 
         if cones.is_empty() {
             dag.nodes = nodes_opt.into_iter().map(Option::unwrap).collect();
-            return;
+            return Ok(());
         }
         rebuild(dag, nodes_opt, cones);
+        Ok(())
     }
 
-    /// Compute the cone's boundaries; `None` rejects the component
-    /// (dead outputs, oversized boundary, unmarshalable edge type).
+    /// Record on the tree's ledger that the cone of `members` stays on
+    /// the interpreter, and write the same to the audit channel.
+    fn record_fallback(
+        dag: &ResolvedDag,
+        members: &[usize],
+        nodes: &[Option<Box<dyn PolydatNode>>],
+        boundary_inputs: usize,
+        kind: ConeFallbackKind,
+        reason: String,
+    ) {
+        let names: Vec<String> = members
+            .iter()
+            .map(|&m| {
+                nodes[m]
+                    .as_ref()
+                    .map_or_else(String::new, |nd| nd.meta().name.clone())
+            })
+            .collect();
+        let mut outputs: Vec<String> = dag
+            .output_map
+            .iter()
+            .filter(|(_, (j, _))| members.contains(j))
+            .map(|(name, _)| name.clone())
+            .collect();
+        outputs.sort_unstable();
+        crate::library::support::audit::warn(&format!(
+            "jit cone: {} stays on the interpreter ({kind:?}): {reason}",
+            label_of(names.iter().map(String::as_str)),
+        ));
+        dag.ledger.record_cone_fallback(ConeFallback {
+            context: dag.context.clone(),
+            members: names,
+            outputs,
+            boundary_inputs,
+            kind,
+            reason,
+        });
+    }
+
+    /// A component cut into pieces within [`MAX_CONE_INPUTS`], and the
+    /// nodes no piece can hold, each with the boundary inputs it reads.
+    struct InputSplit {
+        pieces: Vec<Vec<usize>>,
+        over_bound: Vec<(usize, usize)>,
+    }
+
+    /// Cut the convex component `members` (ascending, so topological)
+    /// into pieces of at most [`MAX_CONE_INPUTS`] distinct boundary
+    /// inputs each. A component within the bound is one piece.
+    ///
+    /// Members join the open piece in topological order until the next
+    /// one would take its boundary over the bound; that member opens the
+    /// next piece. Each piece is a run of the component's topological
+    /// order, and a run of a convex component is convex: a path between
+    /// two of its members passes only through nodes between them in that
+    /// order, and a member between them is in the run, while a path
+    /// through a node outside the component would leave the component
+    /// and come back. Every wire between pieces runs forward, so the
+    /// pieces form no cycle. Each run is then cut into its connected
+    /// parts, which stay convex and never read more than the run did, so
+    /// a pull runs only the part its output needs. Every piece keeps the
+    /// component's class, so lifecycle, volatility, extern set, and
+    /// purity hold as they held for the component. A member that alone
+    /// reads more than the bound is in no piece.
+    fn split_by_inputs(dag: &ResolvedDag, members: &[usize], preds: &[Vec<usize>]) -> InputSplit {
+        let mut runs: Vec<Vec<usize>> = Vec::new();
+        let mut over_bound = Vec::new();
+        let mut run: Vec<usize> = Vec::new();
+        let mut read: std::collections::HashSet<(u8, usize, usize)> = Default::default();
+        // The distinct sources `m` reads from outside `run`, not yet in
+        // `read`.
+        let fresh = |m: usize, run: &[usize], read: &std::collections::HashSet<_>| {
+            let mut keys: Vec<(u8, usize, usize)> = dag.wiring[m]
+                .iter()
+                .filter(|src| {
+                    !matches!(src, WireSource::NodeOutput(j, _) if run.binary_search(j).is_ok())
+                })
+                .map(src_key)
+                .filter(|k| !read.contains(k))
+                .collect();
+            keys.sort_unstable();
+            keys.dedup();
+            keys
+        };
+        for &m in members {
+            let keys = fresh(m, &run, &read);
+            if read.len() + keys.len() <= MAX_CONE_INPUTS {
+                read.extend(keys);
+                run.push(m);
+                continue;
+            }
+            if !run.is_empty() {
+                runs.push(std::mem::take(&mut run));
+                read.clear();
+            }
+            let keys = fresh(m, &run, &read);
+            if keys.len() > MAX_CONE_INPUTS {
+                over_bound.push((m, keys.len()));
+                continue;
+            }
+            read.extend(keys);
+            run.push(m);
+        }
+        if !run.is_empty() {
+            runs.push(run);
+        }
+        if runs.len() == 1 && over_bound.is_empty() {
+            return InputSplit {
+                pieces: runs,
+                over_bound,
+            };
+        }
+        let mut in_run = vec![false; preds.len()];
+        let classes = vec![0u64; preds.len()];
+        let mut pieces = Vec::new();
+        for run in runs {
+            for &m in &run {
+                in_run[m] = true;
+            }
+            pieces.extend(crate::compile::fusion_units::components(
+                preds, &in_run, &classes,
+            ));
+            for &m in &run {
+                in_run[m] = false;
+            }
+        }
+        InputSplit { pieces, over_bound }
+    }
+
+    /// Compute the cone's boundaries; `None` rejects the piece (dead
+    /// outputs, a mistyped or None-tolerant boundary, an unmarshalable
+    /// edge type).
     /// `out_types` are every node's output types, the graph's before any
     /// cone took its members.
     fn plan_cone(
@@ -555,19 +746,9 @@ mod jit_impl {
                 in_types.push(ty);
             }
         }
-        // Cones are bounded at 64 boundary inputs. The bound is a size
-        // cap on a cone's boundary, not a limit of `ProvMask`, which is
-        // multi-word; a cone over it is skipped rather than re-split.
-        if boundary_in.len() > 64 {
-            audit_skip(
-                members.len(),
-                &format!(
-                    "{} boundary inputs exceeds the 64-input bound (no                  re-split implemented — catchup item B2)",
-                    boundary_in.len()
-                ),
-            );
-            return None;
-        }
+        // `split_by_inputs` cut the component into pieces within the
+        // bound.
+        debug_assert!(boundary_in.len() <= MAX_CONE_INPUTS);
         // A cone with no boundary inputs is a compile-time
         // constant: it would evaluate exactly once (node_clean)
         // and belongs to const folding, not per-cycle fusion.
@@ -704,7 +885,7 @@ mod jit_impl {
             .iter()
             .map(|&m| nodes[m].take().expect("cone member present"))
             .collect();
-        let member_label = cone_label(&taken);
+        let member_label = label_of(taken.iter().map(|n| n.meta().name.as_str()));
 
         let mut sub = ResolvedDag {
             nodes: taken,
@@ -779,9 +960,10 @@ mod jit_impl {
                 .zip(&plan.in_types)
                 .enumerate()
                 .map(|(i, (src, ty))| {
-                    // Boundary producers are ineligible nodes by
-                    // definition, so they are never cone members
-                    // and always present in the slot vec.
+                    // A boundary producer is an ineligible node, still
+                    // in the slot vec, or a member of an earlier piece
+                    // of the same component, already taken, whose port
+                    // is built from the wire's type.
                     let mut port = match src {
                         WireSource::NodeOutput(j, p) => nodes[*j]
                             .as_ref()
@@ -853,15 +1035,12 @@ mod jit_impl {
 
     /// Diagnostic name carrying the fused members, so an enriched
     /// eval panic attributes the interior functions.
-    fn cone_label(members: &[Box<dyn PolydatNode>]) -> String {
+    fn label_of<'a>(members: impl ExactSizeIterator<Item = &'a str>) -> String {
         const SHOWN: usize = 6;
-        let names: Vec<&str> = members
-            .iter()
-            .take(SHOWN)
-            .map(|n| n.meta().name.as_str())
-            .collect();
-        let suffix = if members.len() > SHOWN {
-            format!("+{} more", members.len() - SHOWN)
+        let count = members.len();
+        let names: Vec<&str> = members.take(SHOWN).collect();
+        let suffix = if count > SHOWN {
+            format!("+{} more", count - SHOWN)
         } else {
             String::new()
         };

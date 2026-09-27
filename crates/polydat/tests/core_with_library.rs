@@ -1094,6 +1094,109 @@ mod compile_cone_tests {
         assert_eq!(off, force, "off vs force identity must match");
         assert_eq!(off, auto, "off vs auto identity must match");
     }
+
+    /// `input (x0: u64, …, x{n-1}: u64)`.
+    fn inputs_decl(n: usize) -> String {
+        let names: Vec<String> = (0..n).map(|i| format!("x{i}: u64")).collect();
+        format!("input ({})\n", names.join(", "))
+    }
+
+    /// Every output of `src` agrees between the interpreter with its
+    /// cones off and `kernel`, over a few coordinate vectors of `n`
+    /// inputs, and between the interpreter and the closure and native
+    /// tiers.
+    fn agrees_everywhere(src: &str, n: usize, outputs: &[&str]) {
+        use polydat::{Engine, Kernel, Provenance};
+        let mut off = compile(src, JitMode::Off);
+        let mut auto = compile(src, JitMode::Auto);
+        let mut tiers: Vec<Box<dyn Kernel>> = [
+            Engine::Closures(Provenance::Auto),
+            Engine::Native(Provenance::Auto),
+        ]
+        .into_iter()
+        .map(|e| compile_polydat_with(src, e).unwrap_or_else(|err| panic!("{e}: {err}")))
+        .collect();
+        for seed in [0u64, 1, 0x9e37_79b9] {
+            let coords: Vec<u64> = (0..n as u64)
+                .map(|i| seed.wrapping_mul(i + 11).rotate_left(i as u32))
+                .collect();
+            off.set_inputs(&coords);
+            auto.set_inputs(&coords);
+            for t in tiers.iter_mut() {
+                t.set_inputs(&coords);
+            }
+            for out in outputs {
+                let want = off.pull_ref(out).to_display_string();
+                assert_eq!(auto.pull_ref(out).to_display_string(), want, "Auto {out}");
+                for t in tiers.iter_mut() {
+                    let engine = t.engine();
+                    assert_eq!(
+                        Kernel::pull(t.as_mut(), out).to_display_string(),
+                        want,
+                        "{engine} {out}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A component reading 100 inputs is cut into convex pieces of at
+    /// most 64 boundary inputs each, and every piece runs native under
+    /// `Auto` (engines.md §2.2): no member of the chain stays on the
+    /// interpreter, nothing is recorded on the ledger, and the results
+    /// match every other engine's.
+    #[test]
+    fn a_component_over_the_input_bound_runs_native_in_pieces() {
+        let n = 100;
+        let mut src = inputs_decl(n);
+        src.push_str("s1 := u64_xor(x0, x1)\n");
+        for i in 2..n {
+            src.push_str(&format!("s{i} := u64_xor(s{}, x{i})\n", i - 1));
+        }
+        let k = compile(&src, JitMode::Auto);
+        let report = polydat::compile::lattice::lattice_report(k.program());
+        assert!(report.cones.len() >= 2, "one component, several pieces");
+        for cone in &report.cones {
+            assert!(
+                cone.boundary_in <= polydat::compile::cone::MAX_CONE_INPUTS,
+                "{} reads {} inputs",
+                cone.label,
+                cone.boundary_in
+            );
+        }
+        assert!(
+            report.residue.iter().all(|r| r.name != "u64_xor"),
+            "every xor runs native"
+        );
+        assert_eq!(report.fused_nodes, n - 1);
+        assert_eq!(k.program().ledger().cone_fallbacks(), []);
+        let last = format!("s{}", n - 1);
+        agrees_everywhere(&src, n, &["s1", "s63", "s64", &last]);
+    }
+
+    /// A single node reading more than 64 distinct boundary inputs fits
+    /// no piece: it stays on the interpreter, and the ledger records it
+    /// with its input count (engines.md §2.2).
+    #[test]
+    fn a_node_over_the_input_bound_is_recorded() {
+        let n = 70;
+        let mut src = inputs_decl(n);
+        let rest: Vec<String> = (1..n).map(|i| format!("x{i}")).collect();
+        src.push_str("h := hash(x0)\n");
+        src.push_str(&format!("t := sum(h, {})\n", rest.join(", ")));
+        src.push_str("u := hash(t)\n");
+        for mode in [JitMode::Auto, JitMode::Force] {
+            let k = compile(&src, mode);
+            let fallbacks = k.program().ledger().cone_fallbacks();
+            assert_eq!(fallbacks.len(), 1, "{mode:?}: {fallbacks:?}");
+            let f = &fallbacks[0];
+            assert_eq!(f.kind, ConeFallbackKind::InputBound);
+            assert_eq!(f.members, ["sum"]);
+            assert_eq!(f.boundary_inputs, n);
+            assert!(f.reason.contains("64"), "{}", f.reason);
+        }
+        agrees_everywhere(&src, n, &["h", "t", "u"]);
+    }
 }
 
 mod dsl_registry_tests {

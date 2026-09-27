@@ -162,9 +162,45 @@ pub(crate) struct LifecycleClasses {
 /// them; two kernels over one program do. A compile charged to a
 /// ledger a host already holds is requested through
 /// [`CompileOptions::ledger`](crate::dsl::compile::CompileOptions).
+///
+/// The ledger also holds every native cone the interpreter planned and
+/// left on the interpreter because the cone could not be built
+/// ([`ConeFallback`], engines.md §2.1).
 #[derive(Debug, Default)]
 pub struct CompileLedger {
     programs: std::sync::atomic::AtomicU64,
+    cone_fallbacks: std::sync::Mutex<Vec<ConeFallback>>,
+}
+
+/// Why a planned native cone stayed on the interpreter (engines.md §2.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ConeFallbackKind {
+    /// Native code generation for the cone failed.
+    Codegen,
+    /// A single node reads more distinct boundary inputs than one cone
+    /// piece may have, so no piece can hold it.
+    InputBound,
+}
+
+/// A native cone the interpreter planned under `JitMode::Auto` or
+/// `JitMode::Force` and left on the interpreter, recorded on the tree's
+/// [`CompileLedger`]. Its members run as interpreter nodes, and every
+/// output keeps the value the interpreter computes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConeFallback {
+    /// The diagnostic context of the program the cone belongs to.
+    pub context: String,
+    /// The members' function names in program order; its length is the
+    /// cone's size.
+    pub members: Vec<String>,
+    /// The program outputs the members produce, sorted by name.
+    pub outputs: Vec<String>,
+    /// The distinct boundary inputs the cone reads.
+    pub boundary_inputs: usize,
+    /// Why the cone stayed on the interpreter.
+    pub kind: ConeFallbackKind,
+    /// The code generator's error text, or the bound the inputs exceed.
+    pub reason: String,
 }
 
 impl CompileLedger {
@@ -183,6 +219,24 @@ impl CompileLedger {
     pub(crate) fn record(&self) {
         self.programs
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// The native cones left on the interpreter so far, in the order
+    /// they were planned, across every program of the tree.
+    pub fn cone_fallbacks(&self) -> Vec<ConeFallback> {
+        self.cone_fallbacks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Record one native cone left on the interpreter.
+    #[cfg(feature = "jit")]
+    pub(crate) fn record_cone_fallback(&self, fallback: ConeFallback) {
+        self.cone_fallbacks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(fallback);
     }
 }
 

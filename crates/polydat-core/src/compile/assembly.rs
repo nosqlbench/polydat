@@ -109,6 +109,15 @@ pub enum AssemblyError {
     /// types were inferred rather than declared, as `(name, inferred
     /// type)` (input_variance.md §4).
     OpenInputs(Vec<(String, PortType)>),
+    /// Native code generation failed for an interpreter cone under
+    /// `JitMode::Force`, which builds native code or fails (engines.md
+    /// §2.1).
+    NativeCone {
+        /// The cone's label, naming its members.
+        cone: String,
+        /// The code generator's error text.
+        reason: String,
+    },
     /// Catch-all for errors from downstream phases (e.g., strict mode).
     Other(String),
 }
@@ -226,6 +235,10 @@ impl std::fmt::Display for AssemblyError {
                      `input_variance` to `Warn` or `Info` to convert what is written to them."
                 )
             }
+            AssemblyError::NativeCone { cone, reason } => write!(
+                f,
+                "native code generation failed for cone {cone} under JitMode::Force: {reason}"
+            ),
             AssemblyError::Other(msg) => write!(f, "{msg}"),
         }
     }
@@ -1173,7 +1186,7 @@ impl PolydatAssembler {
         let template = self.template;
         let mut resolved = self.resolve_with_log(log.as_deref_mut())?;
         let (node_total, output_total) = (resolved.nodes.len(), resolved.output_order.len());
-        crate::compile::cone::extract_jit_cones(&mut resolved, jit_mode);
+        crate::compile::cone::extract_jit_cones(&mut resolved, jit_mode)?;
         let _coord_names = resolved.input_names();
         let modifiers = resolved.output_modifiers.clone();
         let cursors = std::mem::take(&mut resolved.cursor_schemas);

@@ -232,13 +232,79 @@ built with as its engine.
 - `Off` leaves the typed P1 graph unchanged;
 - `Auto`, what a host gets when it names none, extracts eligible connected
   cones containing at least two nodes; and
-- `Force` permits a one-node eligible cone.
+- `Force` permits a one-node eligible cone, and a cone it plans is built as
+  native code or the compile fails (§2.1).
 
 An extracted cone is replaced by a synthetic fusion node whose `eval` invokes
 the compiled native segment. Unsupported nodes, boundary types, lifecycle
 classes, and purity shapes remain in P1. The graph's canonical identity walks
 through fusion nodes to their scalar subgraph, so changing the cone mode does
 not change program identity.
+
+### 2.1 Code generation fallback
+
+The planner builds a cone's native code before the cone's members leave the
+graph, so a build that fails leaves the members exactly where the interpreter
+put them. What happens next depends on the mode:
+
+- Under `Auto` the compile succeeds. The cone's members run as interpreter
+  nodes, every output has the value the interpreter computes, and the
+  fallback is recorded on the program's `CompileLedger`.
+- Under `Force` the compile fails with `AssemblyError::NativeCone`, which
+  names the cone by its members and carries the code generator's error text.
+  `Force` asks for native code, so a cone that cannot be built is an error
+  rather than a silent change of engine.
+
+The ledger record is a `ConeFallback`, read with
+`CompileLedger::cone_fallbacks()`. It holds the diagnostic context of the
+program the cone belongs to, the members' function names in program order
+(their count is the cone's size), the program outputs the members produce,
+the number of distinct boundary inputs the cone reads, a `ConeFallbackKind`,
+and the reason text. `Codegen` is the kind for a failed build, and its reason
+is the code generator's error. The ledger is shared by every program of a
+tree ([for_traversal.md](for_traversal.md) §5.1), so a host that compiles a
+program reads every fallback of its bodies from the root's ledger.
+
+Eligibility and the build classify each member with the same classifier, so a
+build fails only for a node whose native form changes between the two
+classifications, such as a host's own node, or for a defect in a lowering or
+in the code generator. The record names that cone, so the fallback is visible
+to the host as well as to the audit channel.
+
+### 2.2 The per-piece input bound
+
+One cone reads at most 64 distinct boundary inputs (`MAX_CONE_INPUTS`). The
+bound is an implementation limit of each piece the planner builds, not of the
+component the fusion rule forms (§8), and it never leaves a component on the
+interpreter merely because the component is large.
+
+A component that reads more than 64 boundary inputs is cut into pieces. The
+planner walks the component's members in topological order and adds each one
+to the open piece until the next member would take the piece's boundary past
+64; that member opens the next piece. Each piece is then split into its
+connected parts, so a pull runs only the part its output needs. The pieces
+keep every property of the component they are cut from:
+
+- A run of a convex component's topological order is convex, and every wire
+  between two pieces runs forward, so the pieces form no cycle.
+- Every piece keeps the component's lifecycle, volatility, extern set, and
+  purity, because the planner cuts only within one component.
+- A piece reads a producer from an earlier piece as a boundary input, the
+  same way a cone reads any node outside it.
+- Each piece is subject to the mode's minimum size, so under `Auto` a
+  one-node piece stays on the interpreter.
+
+A single node that reads more than 64 distinct boundary inputs fits no piece.
+It stays on the interpreter under either mode, and the ledger records it with
+the kind `InputBound`, its input count, and the bound it exceeds. The pieces
+before and after it are built as usual.
+
+For example, a chain `s1 := u64_xor(x0, x1)`, `s2 := u64_xor(s1, x2)`, and so
+on through `s99`, reads 100 inputs as one component. It is built as two
+native cones: the first holds `s1` through `s63` and reads `x0` through
+`x63`, and the second holds `s64` through `s99` and reads `s63` and `x64`
+through `x99`. The program `t := sum(h, x1, …, x69)` gives `sum` 70 boundary
+inputs, so `sum` stays on the interpreter and the ledger records it.
 
 ## 3. The rules every engine follows
 
