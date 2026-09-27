@@ -2155,11 +2155,15 @@ impl PolydatAssembler {
                     }
                     resolved_wiring[adapter_idx] = adapter_wiring;
 
+                    // The adapter converts for the sink, so it is
+                    // written in the sink's scope and linted under
+                    // that scope's pragmas.
+                    let sink_mark = all_nodes[node_idx].strict_values;
                     all_nodes.push(PendingNode {
                         name: adapter_name,
                         node: adapter,
                         inputs: vec![],
-                        strict_values: None,
+                        strict_values: sink_mark,
                     });
 
                     node_wiring.push(WireSource::NodeOutput(adapter_idx, 0));
@@ -2305,7 +2309,11 @@ impl PolydatAssembler {
                     }
                 }
 
-                // Convert to Option<Box<dyn PolydatNode>> for the fusion pass.
+                // Convert to Option<Box<dyn PolydatNode>> for the fusion
+                // pass, which replaces nodes in place, so each index
+                // keeps its scope mark for the round-trip lint.
+                let marks: Vec<Option<bool>> =
+                    all_nodes.iter().map(|pn| pn.strict_values).collect();
                 let mut opt_nodes: Vec<Option<Box<dyn PolydatNode>>> =
                     all_nodes.into_iter().map(|pn| Some(pn.node)).collect();
 
@@ -2342,8 +2350,7 @@ impl PolydatAssembler {
                             ))
                         }),
                         inputs: vec![], // wiring is in resolved_wiring
-                        // The strict-wire pass has run.
-                        strict_values: None,
+                        strict_values: marks[i],
                     })
                     .collect();
             }
@@ -2487,6 +2494,11 @@ impl PolydatAssembler {
             old_to_new[old_idx] = new_idx;
         }
 
+        // Each final node's scope mark, for the round-trip lint.
+        let final_marks: Vec<Option<bool>> = sorted_order
+            .iter()
+            .map(|&old_idx| all_nodes[old_idx].strict_values)
+            .collect();
         let mut sorted_nodes: Vec<Option<Box<dyn PolydatNode>>> =
             all_nodes.into_iter().map(|pn| Some(pn.node)).collect();
 
@@ -2532,13 +2544,15 @@ impl PolydatAssembler {
         // `compile::roundtrip_lint`): a value modulated `T → Y → … → T`
         // through pure conversion/formatting machinery violates the
         // native-types-stay-native principle. Warning by default; a
-        // hard error under strict-values mode (graph_compiler.md §2).
-        for f in crate::compile::roundtrip_lint::lint_type_round_trips(
+        // hard error when the scope the restoring node was written in
+        // has strict_values on: a module body's own pragmas, or the
+        // program's (graph_compiler.md §2.3, polydat_grammar.md §14.1).
+        for (i, f) in crate::compile::roundtrip_lint::lint_type_round_trips(
             &final_nodes,
             &final_wiring,
             &self.input_defs,
         ) {
-            if strict_values {
+            if final_marks[i].unwrap_or(strict_values) {
                 return Err(AssemblyError::Other(f.message()));
             }
             // Through the audit log, which the host routes; a library

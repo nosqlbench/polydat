@@ -981,6 +981,15 @@ for k in 1..3 {
 }
 ```
 
+The type round-trip lint ([graph_compiler.md §2.3](graph_compiler.md#sec-strict-wires))
+follows the same rule. Each binding is linted under the pragmas of the
+scope it is written in, so a round trip is an error when that scope has
+`strict_values` on and a warning otherwise. A round trip inside a
+module that declares `strict_values` fails the build under a host that
+declares no pragma, and the host's own round trips stay warnings. A
+round trip inside a module that declares no pragma is a warning under a
+strict host, whose own round trips fail the build.
+
 ---
 
 <a id="sec-types"></a>

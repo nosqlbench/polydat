@@ -250,9 +250,13 @@ strict_values: port 'divisor' of 'b' (mod_wire) must be non-zero, but its source
 ```
 
 Each wire that gets no guard is logged as `AssertionSkipped` with the
-reason, and each inserted guard as `AssertionInserted`. The round-trip
-lint (§2) is an error rather than a warning when the program's own
-pragmas, or a `for` body's, turn `strict_values` on.
+reason, and each inserted guard as `AssertionInserted`. A round trip
+the round-trip lint (§2) finds is an error rather than a warning when
+the scope its restoring binding is written in has `strict_values` on:
+the program, a `for` body, or a module body, each under its own
+pragmas as [polydat_grammar.md
+§14.1](polydat_grammar.md#sec-pragma-scoping) scopes them. An adapter
+the resolver inserts belongs to the scope of the port it feeds.
 
 `pragma strict_types` is accepted and acknowledged
 (`PragmaAcknowledged`), and it has no effect on the graph. Wires are

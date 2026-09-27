@@ -105,6 +105,8 @@ mod indexed_equivalence;
 mod input_variance;
 #[path = "ir_end_to_end.rs"]
 mod ir_end_to_end;
+#[path = "lint_pragmas.rs"]
+mod lint_pragmas;
 #[path = "local_modules.rs"]
 mod local_modules;
 #[path = "nodes_reference.rs"]

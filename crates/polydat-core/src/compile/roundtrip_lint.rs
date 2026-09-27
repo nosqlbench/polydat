@@ -25,8 +25,9 @@
 //! `T → Json → T` is never reported.
 //!
 //! Severity: one [`RoundTripFinding`] per restoring node; the caller
-//! (assembly `resolve`) reports findings as compile warnings by
-//! default and as a hard error under strict-values mode.
+//! (assembly `resolve`) reports a finding as a compile warning, or as
+//! a hard error when the scope the restoring node was written in has
+//! `strict_values` on (polydat_grammar.md §14.1).
 
 use std::collections::{HashMap, HashSet};
 
@@ -133,7 +134,9 @@ fn is_carrier(name: &str) -> bool {
 
 /// Run the lint over a resolved DAG (topologically sorted nodes +
 /// wiring, as built at the end of assembly `resolve`). Returns one
-/// finding per restoring conversion node that closes a round trip.
+/// finding per restoring conversion node that closes a round trip,
+/// with the restoring node's index, which names the scope whose
+/// pragmas decide the finding's severity.
 /// `pub(crate)`: the only sanctioned caller is assembly `resolve`
 /// (walled-off chokepoint); hosts observe findings as compile
 /// warnings / strict errors, never by re-running the pass.
@@ -141,7 +144,7 @@ pub(crate) fn lint_type_round_trips(
     nodes: &[Box<dyn PolydatNode>],
     wiring: &[Vec<WireSource>],
     input_defs: &[InputDef],
-) -> Vec<RoundTripFinding> {
+) -> Vec<(usize, RoundTripFinding)> {
     let registry = conversion_registry();
     let mut findings = Vec::new();
 
@@ -198,12 +201,15 @@ pub(crate) fn lint_type_round_trips(
             // via-type domain is not a round trip.
         }
         if let Some(dep) = departure {
-            findings.push(RoundTripFinding {
-                restored,
-                via,
-                departure_node: dep,
-                restore_node: node.meta().name.clone(),
-            });
+            findings.push((
+                i,
+                RoundTripFinding {
+                    restored,
+                    via,
+                    departure_node: dep,
+                    restore_node: node.meta().name.clone(),
+                },
+            ));
         }
     }
     findings
@@ -280,6 +286,39 @@ mod tests {
         );
         asm.add_output("y", WireRef::node("back"));
         asm.compile().expect("non-strict compile must succeed");
+    }
+
+    /// A round trip closed by a node written in another scope is
+    /// decided by that scope's mark, whatever the program's set says:
+    /// a lax scope in a strict program warns, and a strict scope in a
+    /// lax program fails.
+    #[test]
+    fn the_restoring_nodes_scope_decides_the_severity() {
+        for (program_strict, scope_strict) in [(true, false), (false, true)] {
+            let mut asm = PolydatAssembler::new(vec![]);
+            asm.set_strict_wires(false, program_strict);
+            asm.add_input("x", Value::U64(0), PortType::U64, InputKind::Coordinate);
+            asm.add_node(
+                "to_text",
+                conv(PortType::U64, PortType::Str),
+                vec![WireRef::Input("x".into())],
+            );
+            let before = asm.set_scope_strict_values(Some(scope_strict));
+            asm.add_node(
+                "back",
+                conv(PortType::Str, PortType::U64),
+                vec![WireRef::Node("to_text".into(), 0)],
+            );
+            asm.set_scope_strict_values(before);
+            asm.add_output("y", WireRef::node("back"));
+            let result = asm.compile();
+            assert_eq!(
+                result.is_err(),
+                scope_strict,
+                "program strict {program_strict}, scope strict {scope_strict}: {:?}",
+                result.err()
+            );
+        }
     }
 
     /// T → Json → T is a by-design hand-off: clean even under strict.
