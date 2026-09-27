@@ -29,7 +29,7 @@
 //! │    inputs[]          — current input values, coords + externs│
 //! │    input_defaults[]  — what reset restores                   │
 //! │    shared_cells[]    — cell-bound input slots                 │
-//! │    output_cells[]    — cell-bound `shared` outputs            │
+//! │    output_cells[]    — broadcast cells of computed outputs    │
 //! │    input_scratch[]   — temp buffer for node input gathering  │
 //! │    node_scratch[]    — per-node memo space                   │
 //! └──────────────────────────────────────────────────────────────┘
@@ -170,8 +170,8 @@ pub(crate) fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
 /// — are defined uniformly. Coordinates default to `Value::U64(0)`,
 /// captures default to `Value::None` (unset until a capture writes
 /// to them) or to their declared default. The `kind` field carries
-/// the lifecycle classification used by the init-binding contract
-/// (see SRD 11 §"Init Binding Contract").
+/// the lifecycle classification used by the const-binding contract
+/// (evaluation_model.md, "Const Binding Contract").
 #[derive(Debug, Clone)]
 pub struct InputDef {
     /// Input name (e.g., "cycle", "username").

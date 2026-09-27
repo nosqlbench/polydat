@@ -11,8 +11,10 @@ use super::{InputDef, WireSource};
 use crate::ast::{PolydatNode, Value};
 use crate::dsl::ast::{PolydatFile, Statement};
 
-/// Evaluation lifecycle classification used by the init-binding
-/// contract (see `crates/polydat/docs/design/evaluation_model.md`).
+/// Evaluation lifecycle classification used by the const-binding
+/// contract (graph_compiler.md §3.1):
+/// `CompileConst` and `ScopeInit` are the effectively-const
+/// lifecycle's compile-fold and initialization paths.
 ///
 /// The variants are *ordered* — `Dynamic > ScopeInit > CompileConst`
 /// — so propagation along wires is a `max()` operation: a node's
@@ -34,10 +36,9 @@ pub(crate) enum EvalLifecycle {
 }
 
 /// Exact multi-word input-provenance mask: bit `i` set means the
-/// carrier transitively depends on graph input `i`. Replaces the
-/// one-word `u64` whose ≥63 saturation aliased every high input
-/// (a real shape — a workload root's params + shared wires
-/// crossed 64 inputs on 2026-08-03). Self-sizing: `set` grows the
+/// carrier transitively depends on graph input `i`, with no
+/// saturation: a workload root's params and shared wires can exceed
+/// 64 inputs, and each keeps its own bit. Self-sizing: `set` grows the
 /// word vector to the highest observed index, so callers never
 /// plumb an input-count and masks from different programs stay
 /// comparable (absent words read as zero).
@@ -154,7 +155,7 @@ pub(crate) struct LifecycleClasses {
 /// records into the same one: each `for` body, each engine variant of
 /// a body, and each constant expression a traversal source or
 /// predicate compiles at open. A host reads it before and after an
-/// operation to verify the program-invariance property (SRD 113 §5.1):
+/// operation to verify the program-invariance property (for_traversal.md §5.1):
 /// compiling builds one program per body, and activation builds none.
 ///
 /// Two trees never share a ledger, whatever thread or process runs
@@ -262,7 +263,7 @@ pub struct PolydatProgram {
     /// program was built: what its kernels report as their engine.
     cone_mode: crate::compile::cone::JitMode,
     /// Compiled `for` traversals declared at this program's top level,
-    /// in document order (SRD 113). Each carries its child program.
+    /// in document order (for_traversal.md). Each carries its child program.
     traversals: Vec<crate::dsl::traversal::Traversal>,
     /// Producer bindings (`name := for ...`) declared at this level.
     producers: Vec<crate::dsl::traversal::Producer>,
@@ -272,7 +273,8 @@ pub struct PolydatProgram {
     /// const whose value fell through to the enclosing scope.
     pub(crate) const_outputs: std::collections::HashSet<String>,
     /// Rule 2 write-through bindings produced when this program
-    /// was synthesized by the SRD-67 builder's finalize step.
+    /// was synthesized by the subcontext builder's finalize step
+    /// (subcontext_construction.md §3.1).
     /// Each entry pairs an export name (a cell-bound input slot
     /// on this program) with the synthetic `__write_<name>`
     /// source output the rewrite emitted.
@@ -285,12 +287,11 @@ pub struct PolydatProgram {
     /// per-cycle commit would silently no-op.
     pub(crate) write_throughs: Vec<crate::kernel::KernelWriteThrough>,
     /// Retained AST that produced this program. Live metadata —
-    /// read by the subscope synthesizer (SRD-13f §"Wire-reference
-    /// classification") to integrate parent bindings' matter
-    /// into child scopes. A binding's graph structure may not be
-    /// contiguous in source text, so the AST is the canonical
-    /// view of what defines each binding. `None` only for
-    /// legacy / programmatic construction paths that bypass the
+    /// read by the subscope synthesizer to integrate parent
+    /// bindings' matter into child scopes. A binding's graph
+    /// structure may not be contiguous in source text, so the AST
+    /// is the canonical view of what defines each binding. `None`
+    /// only for programmatic construction paths that bypass the
     /// parser; the DSL entry points always populate this.
     pub(crate) ast: Option<Arc<PolydatFile>>,
     /// The ledger this program was recorded in: the root's, shared by
@@ -315,8 +316,8 @@ impl PolydatProgram {
     /// Create a program with explicit input definitions and output
     /// ordering, recorded in `ledger`.
     // Nine parameters describe one compiled program definition; a
-    // params struct belongs to the construction-protocol reshape
-    // (SRD-13e), not lint cleanup — see `PolydatKernel::new_with_inputs`.
+    // params struct would reshape the construction protocol, not
+    // clean up a lint — see `PolydatKernel::new_with_inputs`.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn with_inputs(
         nodes: Vec<Box<dyn PolydatNode>>,
@@ -362,13 +363,14 @@ impl PolydatProgram {
     }
 
     /// Mark a binding as declared with the `const` keyword. The
-    /// init-binding contract (SRD 11) is checked against this set.
+    /// const-binding contract (evaluation_model.md, "Const Binding
+    /// Contract") is checked against this set.
     pub(crate) fn mark_const_output(&mut self, name: &str) {
         self.const_outputs.insert(name.to_string());
     }
 
     /// Set the program's Rule 2 write-through bindings. Called
-    /// once by the SRD-67 builder's finalize step right after
+    /// once by the subcontext builder's finalize step right after
     /// compile, while the program Arc is still uniquely owned.
     /// Every kernel built from this program afterwards inherits
     /// the bindings via `from_program`'s automatic seeding.
@@ -394,9 +396,8 @@ impl PolydatProgram {
         self.ast = Some(ast);
     }
 
-    /// The retained AST that produced this program, if any.
-    /// SRD-13f §"Wire-reference classification" — the subscope
-    /// synthesizer queries this to integrate parent bindings'
+    /// The retained AST that produced this program, if any. The
+    /// subscope synthesizer queries this to integrate parent bindings'
     /// graph structure into child scopes. Returns `None` for
     /// programs built via programmatic (non-DSL) paths.
     pub fn ast(&self) -> Option<&Arc<PolydatFile>> {
@@ -422,9 +423,8 @@ impl PolydatProgram {
     }
 
     /// Compute the transitive closure of bindings needed to
-    /// materialise `name` locally in a descendant scope.
-    /// SRD-13f §"Wire-reference classification" — case 3 (local
-    /// matter inclusion).
+    /// materialise `name` locally in a descendant scope: case 3
+    /// (local matter inclusion) of the wire-reference classification.
     ///
     /// Starting from the binding that defines `name`, recursively
     /// walk the RHS expression tree following `Ident` references.
@@ -531,14 +531,13 @@ impl PolydatProgram {
     ///
     /// The inventory computes that set when the program is built,
     /// from the nodes' own declarations, and the output modifiers are
-    /// installed after — so a node feeding a `volatile` output was
-    /// left out of it. `volatile` is the author's statement that a
-    /// wire's value is not a function of its inputs, which is
-    /// precisely the case the node cannot declare for itself, and
-    /// evaluation_model.md §"Non-Deterministic Nodes" says such a
-    /// node is excluded from the fold *and* never treated as current.
-    /// Only the fold half held; a volatile binding was cached per
-    /// cycle like any other.
+    /// installed after — so the build's set leaves out a node feeding
+    /// a `volatile` output, and this recomputes it. `volatile` is the
+    /// author's statement that a wire's value is not a function of
+    /// its inputs, which is precisely the case the node cannot declare
+    /// for itself, and evaluation_model.md §"Non-Deterministic Nodes"
+    /// says such a node is excluded from the fold *and* never treated
+    /// as current, so a volatile binding is not cached per cycle.
     fn refresh_never_current(&mut self) {
         let classes = Self::classify_lifecycle(
             &self.nodes,
@@ -674,7 +673,7 @@ impl PolydatProgram {
     }
 
     /// The `for` traversals declared at this program's top level, each
-    /// with its compiled child program (SRD 113 §5.1: one program per
+    /// with its compiled child program (for_traversal.md §5.1: one program per
     /// lexical position).
     pub fn traversals(&self) -> &[crate::dsl::traversal::Traversal] {
         &self.traversals
@@ -748,8 +747,8 @@ impl PolydatProgram {
         Self::compute_node_inventory(nodes, wiring).input_provenance
     }
 
-    /// The runtime model's lifecycle classification of every node (SRD 11
-    /// §"Three Evaluation Lifecycles"), the one rule the interpreter's
+    /// The runtime model's lifecycle classification of every node
+    /// (graph_compiler.md §3.1), the one rule the interpreter's
     /// fold and every compiled engine share: a node is compile-constant
     /// when no coordinate or external-write input reaches it and neither
     /// it nor anything upstream is declared nondeterministic or
@@ -793,10 +792,11 @@ impl PolydatProgram {
                 nodes[i].purity(),
                 crate::ast::Purity::Nondeterministic { .. }
             );
-            // SRD-13f Push D / SRD-44: `volatile` is the author's
-            // declaration that a wire's value is nondeterministic across
-            // invocations and must not be folded into the workload's
-            // identity. Every output modifier is walked, not only the
+            // `volatile` is the author's declaration that a wire's
+            // value is nondeterministic across invocations and must not
+            // be folded into the workload's identity
+            // (composition_substrate.md §3, "Volatility opt-in"). Every
+            // output modifier is walked, not only the
             // exposed outputs, so a binding pruned from the output list
             // still marks its producing node.
             let modifier = output_modifiers.iter().any(|(name, m)| {
@@ -842,11 +842,9 @@ impl PolydatProgram {
     /// attribute the program carries:
     ///
     /// - **input provenance** — which inputs transitively feed
-    ///   each node, as an exact multi-word [`ProvMask`] (the
-    ///   one-word ≥63 saturation this replaces aliased every
-    ///   high input into bit 63 — conservative for engine
-    ///   invalidation, but lossy for SRD-107's consumed-params
-    ///   projection on many-param workload roots);
+    ///   each node, as an exact multi-word [`ProvMask`], so a
+    ///   consumed-params projection on a many-param workload root
+    ///   sees every input it reads;
     /// - **nondeterminism contagion** — nullary or
     ///   `Purity::Nondeterministic` nodes and everything
     ///   downstream of them (per R1.v's intrinsic-volatility
@@ -967,10 +965,11 @@ impl PolydatProgram {
             inputs,
             input_defaults,
             shared_cells: vec![None; input_count],
-            // SRD-13f Push B.2: cells allocated lazily by
-            // `seed_output_cells` (called from kernel
-            // constructors). Start with an empty Vec — the
-            // seed pass sizes it to match output count.
+            // Broadcast cells allocated by `seed_output_cells`
+            // (called from kernel constructors;
+            // cross_fiber_invalidation.md §3.1). Start with an
+            // empty Vec — the seed pass sizes it to match output
+            // count.
             output_cells: Vec::new(),
             broadcasting: std::sync::atomic::AtomicBool::new(false),
             input_scratch: vec![Value::None; max_inputs],
@@ -1015,10 +1014,11 @@ impl PolydatProgram {
             inputs,
             input_defaults,
             shared_cells: vec![None; input_count],
-            // SRD-13f Push B.2: cells allocated lazily by
-            // `seed_output_cells` (called from kernel
-            // constructors). Start with an empty Vec — the
-            // seed pass sizes it to match output count.
+            // Broadcast cells allocated by `seed_output_cells`
+            // (called from kernel constructors;
+            // cross_fiber_invalidation.md §3.1). Start with an
+            // empty Vec — the seed pass sizes it to match output
+            // count.
             output_cells: Vec::new(),
             broadcasting: std::sync::atomic::AtomicBool::new(false),
             input_scratch: vec![Value::None; max_inputs],
@@ -1193,8 +1193,8 @@ impl PolydatProgram {
         self.input_provenance.get(node_idx)
     }
 
-    /// SRD-13d §3.2: hash-compare two programs for AST /
-    /// constant equivalence. Two programs that produce the
+    /// Hash-compare two programs for AST / constant
+    /// equivalence. Two programs that produce the
     /// same `canonical_hash` are functionally equivalent at
     /// compile time; their runtime instances would differ
     /// only by parent-bound values, which `materialize_wiring_from_outer`
@@ -1205,7 +1205,7 @@ impl PolydatProgram {
         self.canonical_hash() == other.canonical_hash()
     }
 
-    /// SRD-13d §3.2: "can-flatten?" predicate. Returns true
+    /// The "can-flatten?" predicate. Returns true
     /// when this program adds no Polydat content the parent
     /// program doesn't already supply — i.e. when the inner
     /// scope's contribution is structurally a subset of the
@@ -1215,12 +1215,10 @@ impl PolydatProgram {
     /// (rare, but correct: a binding that duplicates a parent
     /// declaration is structurally a no-op).
     ///
-    /// Current implementation: structural — true when the
-    /// inner program has zero outputs and zero inputs beyond
-    /// what the parent already exposes. The semantic-
-    /// equivalence form (new bindings whose definitions equal
-    /// parent bindings) is documented as future work in
-    /// SRD-13d §8.2 item 4 (hash normalisation depth).
+    /// The check is structural: true when the inner program has
+    /// zero outputs and zero inputs beyond what the parent
+    /// already exposes. New bindings whose definitions equal
+    /// parent bindings are not recognized as a subset.
     pub fn is_subset_of(&self, parent: &PolydatProgram) -> bool {
         // Equivalent programs flatten trivially.
         if self.is_equivalent_to(parent) {
@@ -1302,7 +1300,7 @@ impl PolydatProgram {
     /// — the caller keeps them unresolved and continues up its
     /// chain. Sorted, deduplicated.
     ///
-    /// SRD-107 uses this per-ancestor to derive a phase's
+    /// A host uses this per-ancestor to derive a phase's
     /// consumed-params closure: which workload params actually
     /// reach a given phase through the scope chain.
     pub fn extern_closure(&self, outputs: &[&str]) -> Vec<String> {
@@ -1348,7 +1346,7 @@ impl PolydatProgram {
     /// is exactly "keep walking up"; a name no ancestor outputs
     /// stays. The returned TERMINAL set is what the outermost
     /// scope (e.g. a host's synthetic params module) must
-    /// satisfy — SRD-107's consumed-params derivation intersects
+    /// satisfy — a host's consumed-params derivation intersects
     /// it with the declared param names. Sorted, deduplicated.
     pub fn resolve_externs_through(
         seed: impl IntoIterator<Item = String>,
@@ -1391,8 +1389,8 @@ impl PolydatProgram {
     /// output, a new node, a const-slot value change, a
     /// re-routed wire) shifts the hash.
     ///
-    /// Used by checkpointing (SRD-44 §"Why hash the compiled
-    /// program, not the YAML body") for per-phase identity:
+    /// A host's checkpointing uses it for per-phase identity,
+    /// hashing the compiled program rather than the source body:
     /// the resume planner skips a phase only when the saved
     /// hash matches the freshly-compiled program's hash, so a
     /// `{dataset}` change that ripples into a phase's
@@ -1588,7 +1586,7 @@ impl PolydatProgram {
 
     /// Resolve the canonical identity behind `(ni, pi)`. For
     /// ordinary nodes this is the node's own hash and port; for
-    /// fusion nodes (SRD-105 cones) it is the ORIGINAL member's
+    /// fusion nodes (interpreter cones, engines.md §2) it is the ORIGINAL member's
     /// hash and port, computed by walking the stored subgraph —
     /// so program identity is extraction-invariant.
     fn port_identity(
@@ -1701,8 +1699,8 @@ impl PolydatProgram {
     }
 
     /// Access a node by index (trait object). Read-only
-    /// introspection surface for reporting (SRD-105 lattice
-    /// report) — evaluation stays behind the kernel APIs.
+    /// introspection surface for reporting — evaluation stays
+    /// behind the kernel APIs.
     pub fn node_ref(&self, idx: usize) -> &dyn crate::ast::PolydatNode {
         self.nodes[idx].as_ref()
     }
@@ -1748,8 +1746,8 @@ impl PolydatProgram {
             // A native segment is the one kind of node that stands in
             // for a subgraph, which it says by answering
             // `fusion_subgraph`. Its `jit_cone[…]` name is a
-            // diagnostic label, and reading the plan off a label made
-            // the count a fact about how the label is spelled.
+            // diagnostic label, and reading the plan off a label would
+            // make the count a fact about how the label is spelled.
             if self.node_ref(i).fusion_subgraph().is_some() {
                 plan.native_segments += 1;
             } else {
@@ -1770,9 +1768,9 @@ impl PolydatProgram {
     /// True when no node declares `Purity::Nondeterministic`: the
     /// program's outputs are a pure function of its inputs, so two
     /// kernels compiled from the same source produce bit-identical
-    /// pulls. The SRD-105 differential battery keys on this to
+    /// pulls. The engine differential tests key on this to
     /// decide whether a force-compiled twin can be compared
-    /// value-for-value against the interpreter form.
+    /// value-for-value against the interpreter form (engines.md §7).
     pub fn is_deterministic(&self) -> bool {
         !self
             .nodes
@@ -1966,9 +1964,9 @@ impl PolydatProgram {
             return Ok(0);
         }
 
-        // Phase 1: Classify each node by its evaluation lifecycle.
-        // Per SRD 11 §"Three Evaluation Lifecycles": every node is
-        // CompileConst, ScopeInit, or Dynamic; the three are
+        // Phase 1: Classify each node by its evaluation lifecycle
+        // (graph_compiler.md §3.1): every
+        // node is CompileConst, ScopeInit, or Dynamic; the three are
         // ordered (Dynamic dominates ScopeInit dominates
         // CompileConst) and `max()`-propagate downstream.
         //
@@ -2026,8 +2024,8 @@ impl PolydatProgram {
             }
         }
 
-        // Non-deterministic node check (per SRD-44 + design memo
-        // `resumable_test_fixture.md`). Empty-wiring + not-init +
+        // Non-deterministic node check (evaluation_model.md,
+        // "Non-Deterministic Nodes"). Empty-wiring + not-init +
         // not-internal nodes are structurally-detected as
         // non-deterministic. The `volatile` keyword on a binding
         // wire is the author's explicit acknowledgment — when a
@@ -2152,11 +2150,11 @@ impl PolydatProgram {
                 // A compile-constant step is one no input reaches, so
                 // what it does here it will do on every pull: there is
                 // nothing a later evaluation could supply that would
-                // make it succeed. Skipping the fold only moved the
-                // same failure to the first pull, and left this engine
-                // disagreeing with the three compiled ones, which fail
-                // at build. What is knowable at build is known at
-                // build, and fails at build.
+                // make it succeed. Skipping the fold would only move
+                // the same failure to the first pull and leave this
+                // engine disagreeing with the three compiled ones,
+                // which fail at build. What is knowable at build is
+                // known at build, and fails at build.
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     state.eval_node_public(self, i);
                 }));
@@ -2204,11 +2202,10 @@ impl PolydatProgram {
                 // Handles (e.g. `init prebuffered = dataset_prebuffer(...)`)
                 // get a dedicated `ConstHandle` replacement so the original
                 // side-effect-bearing node is removed from the program.
-                // Without this, every fresh fiber's `PolydatState` walks the
-                // dirty original on first pull and re-fires its eval —
-                // producing a per-fiber stampede that exhausts process
-                // thread limits when the eval spawns HTTP workers (the
-                // exact failure mode that motivates this branch).
+                // Without this, every fresh fiber's `PolydatState` would
+                // walk the dirty original on first pull and re-fire its
+                // eval — a per-fiber stampede that exhausts process
+                // thread limits when the eval spawns HTTP workers.
                 Value::Handle(arc) => {
                     let original_name = self.nodes[i].meta().name.clone();
                     // Per-node compile-time mechanic; one
@@ -2225,7 +2222,7 @@ impl PolydatProgram {
                     ));
                     Box::new(ConstHandle::new(arc.clone()))
                 }
-                // SRD 71: Ext-typed init values (Partition,
+                // Ext-typed init values (cursor_partitions.md §2: Partition,
                 // PartitionSpec, PartitionList, …) replace the
                 // original node with a ConstExt leaf — same
                 // shape as the Handle path so post-fold kernels
@@ -2476,7 +2473,7 @@ mod canonical_hash_tests {
         assert_eq!(h1, h2);
     }
 
-    // ── SRD-13d §3.2: is_equivalent_to / is_subset_of ──
+    // ── is_equivalent_to / is_subset_of ──
 
     #[test]
     fn is_equivalent_to_identical_programs() {

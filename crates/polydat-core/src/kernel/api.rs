@@ -368,9 +368,9 @@ pub trait Kernel: Send + Sync + internals::KernelInternals {
     fn eval(&mut self);
 
     /// The named output for the inputs set so far, evaluating what it
-    /// needs and no more: the output's cone, on the interpreter, the
-    /// closure tier, and the hybrid kernel alike (pure native code,
-    /// being one function, evaluates the program). A side channel in
+    /// needs and no more: the output's cone, on all four engines (pure
+    /// native code, though one function, runs only the fusion units
+    /// of the output's cone; engines.md §1). A side channel in
     /// the cone fires when the output is pulled; a failing node fails
     /// when pulled, with the same attributed message on every engine:
     /// the node's name, the outputs it feeds, the program's context,
@@ -517,10 +517,10 @@ pub trait Kernel: Send + Sync + internals::KernelInternals {
     fn traversals(&self) -> &[crate::dsl::traversal::Traversal];
 
     /// Open the traversal at `index` against this kernel's current
-    /// values (SRD 113 §3.6): the comprehension's sources see the wires
-    /// they reference as this kernel holds them now, and the cascaded
-    /// wires are snapshotted into every activation. On every engine
-    /// (engine parity, step 8).
+    /// values (for_traversal.md §3.6): the comprehension's sources see
+    /// the wires they reference as this kernel holds them now, and the
+    /// cascaded wires are snapshotted into every activation. Every
+    /// engine opens traversals (engines.md §3.6).
     fn traverse(&mut self, index: usize) -> Result<crate::kernel::TraversalStream, String>;
 
     /// Open every traversal, in document order.
@@ -548,11 +548,11 @@ pub trait Kernel: Send + Sync + internals::KernelInternals {
     /// through it, rather than a copy taken once when the descendant
     /// was built (cross_fiber_invalidation.md §3.1).
     ///
-    /// `None` when the name is not an output of this kernel, and on an
-    /// engine that has no broadcast cells at all. The interpreter seeds
-    /// one per output at construction; the closure tier and the hybrid
-    /// make them on demand, so a program with no descendant bound to it
-    /// allocates none.
+    /// `None` when the name is not an output of this kernel. All four
+    /// engines have broadcast cells: the interpreter seeds one per
+    /// output at construction, and the closure tier, native, and pure
+    /// native make them on demand, so a compiled program with no
+    /// descendant bound to it allocates none (engines.md §3.6).
     fn output_cell(&self, _name: &str) -> Option<SharedCell> {
         None
     }

@@ -17,10 +17,10 @@ use crate::ast::{PolydatNode, Value};
 /// kernels can pick the cells up via `outer.shared_cell(idx)`
 /// without mutating outer.
 ///
-/// A `shared` output without a backing input slot (the legacy
-/// shape — `shared X := <node-binding>` compiles to a
-/// computation node, not an input slot) is silently skipped;
-/// without a slot there's nothing to share.
+/// A `shared` output without a backing input slot is skipped,
+/// since without a slot there's nothing to share. The DSL compiles
+/// every `shared` binding to an input slot, its register
+/// (scope_model.md §6).
 fn seed_shared_cells(state: &mut PolydatState, program: &PolydatProgram) {
     for name in program.shared_outputs() {
         let Some(idx) = program.find_input(name) else {
@@ -44,7 +44,7 @@ fn seed_shared_cells(state: &mut PolydatState, program: &PolydatProgram) {
     }
 }
 
-/// γ-5 boundary-adapter helper: when the outer-scope binding's
+/// Boundary-adapter helper: when the outer-scope binding's
 /// runtime value type doesn't match the inner kernel's
 /// declared slot type, consult the catalog
 /// (`compile::assembly::boundary_adapter`) and apply the adapter
@@ -52,10 +52,9 @@ fn seed_shared_cells(state: &mut PolydatState, program: &PolydatProgram) {
 /// in the slot.
 ///
 /// When no catalog entry exists for the (from, to) type pair,
-/// returns the value unchanged with a one-line warning via
-/// the audit log — the caller's `set_input` will then proceed
-/// with the type-mismatched value, preserving pre-γ-5 behavior
-/// for unhealable mismatches.
+/// returns the value unchanged with a warning via the audit log,
+/// and the caller's write refuses the mismatched value as a
+/// `WriteError::FromParent` (input_variance.md §7).
 ///
 /// Spec: `expression_engine.md` §5.4 (boundary adapter
 /// polyfills); `composition_substrate.md` T2 (typed-mismatch
@@ -71,7 +70,7 @@ pub(crate) fn adapt_boundary_value(
     }
     // `Value::None` is the "absent" sentinel — pass through
     // without trying to adapt; downstream None-propagation
-    // (SRD-74) handles it.
+    // (none_semantics.md Rule 1) handles it.
     if matches!(value, Value::None) {
         return value;
     }
@@ -190,13 +189,13 @@ pub struct PolydatKernel {
     /// Leaf-first scope-coordinate path. Maintained as an
     /// invariant — see struct docs.
     scope_coords: Vec<super::ScopeCoord>,
-    /// SRD-67 Phase 5 — Rule 2 write-through bindings carried
-    /// alongside the kernel for per-cycle commit. Each entry pairs
-    /// an export name (which the kernel exposes as a cell-bound
-    /// input slot) with the synthetic `__write_<name>` source
-    /// output the rewrite emitted. Empty for the vast majority
-    /// of kernels; populated by the SRD-67 builder when result-
-    /// bindings or `shared` collisions trigger Rule 2.
+    /// Rule 2 write-through bindings carried alongside the kernel
+    /// for per-cycle commit (subcontext_construction.md §3.1, §5).
+    /// Each entry pairs an export name (which the kernel exposes as
+    /// a cell-bound input slot) with the synthetic `__write_<name>`
+    /// source output the rewrite emitted. Empty for the vast
+    /// majority of kernels; populated by the subcontext builder when
+    /// result-bindings or `shared` collisions trigger Rule 2.
     write_throughs: Vec<KernelWriteThrough>,
     /// Shared cells visible at this kernel's scope but with no
     /// matching input slot on this kernel's program (closure-
@@ -214,7 +213,7 @@ pub struct PolydatKernel {
     transit_cells: Vec<SharedCellEntry>,
 }
 
-/// SRD-67 Phase 5 — local data shape of a write-through binding
+/// Local data shape of a write-through binding
 /// the kernel carries. Mirrors `subcontext::WriteThroughBinding`
 /// but lives at this layer so [`PolydatKernel`] avoids a cyclic
 /// dependency on the subcontext module (which already depends on
@@ -226,16 +225,15 @@ pub(crate) struct KernelWriteThrough {
 }
 
 /// Type-stability boundary for shared-cell WRITE-THROUGHS
-/// (scope_model.md §"Type stability: a cell keeps ONE type for
-/// life"). A matching type passes; a catalog adapter heals (the
-/// lossless U64→F64 widening, the Str→number parses); an
-/// UNHEALABLE mismatch — narrowing, kind change — is an `Err` AT
-/// THE WRITE naming the cell, its declared type, the incoming
-/// type, and the producing binding. Without this, a result-binding
-/// writing (say) an F64 into a U64-declared cell silently flipped
-/// the cell's runtime type, and a bridge compiled against the
-/// declared type panicked `expected U64, got F64` at a READ tiers
-/// away from the cause. Shared by both write-through commit paths
+/// (scope_model.md §6.1). A matching type passes; a lossless
+/// widening heals through the catalog adapter; an UNHEALABLE
+/// mismatch — narrowing, kind change — is an `Err` AT THE WRITE
+/// naming the cell, its declared type, the incoming type, and the
+/// producing binding. Without this, a result-binding writing (say)
+/// an F64 into a U64-declared cell would flip the cell's runtime
+/// type, and a bridge compiled against the declared type would
+/// panic `expected U64, got F64` at a READ tiers away from the
+/// cause. Shared by both write-through commit paths
 /// ([`PolydatKernel::commit_write_throughs`] and the subcontext
 /// `ScopeKernel` variant).
 pub(crate) fn check_write_through_type(
@@ -305,10 +303,9 @@ impl PolydatKernel {
     /// Returns `Err` when a compile-constant step cannot be computed,
     /// or for a strict-mode violation.
     // Thirteen parameters describe one thing — a compiled program
-    // definition. A params struct is the right end state, but it
-    // belongs to the construction-protocol reshape (SRD-13e
-    // scope-as-module territory), not lint cleanup — this fn is
-    // the SRD-67 walled-off construction chokepoint.
+    // definition. A params struct would reshape the construction
+    // protocol rather than clean up a lint — this fn is the
+    // walled-off construction chokepoint (subcontext/mod.rs).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new_with_inputs(
         nodes: Vec<Box<dyn PolydatNode>>,
@@ -341,12 +338,12 @@ impl PolydatKernel {
         for name in &const_outputs {
             program.mark_const_output(name);
         }
-        // SRD-13f Push D: install output modifiers BEFORE fold so
-        // the lifecycle classifier sees `volatile`. Without this,
-        // a `volatile` binding's producing node defaults to
-        // CompileConst, fold replaces it with a literal, and the
-        // workload's `volatile` declaration loses its "exclude
-        // from program identity" guarantee.
+        // Install output modifiers BEFORE fold so the lifecycle
+        // classifier sees `volatile`. Without this, a `volatile`
+        // binding's producing node would default to CompileConst,
+        // fold would replace it with a literal, and the workload's
+        // `volatile` declaration would lose its "exclude from
+        // program identity" guarantee.
         for (name, modifier) in &output_modifiers {
             program.set_output_modifier(name, *modifier);
         }
@@ -415,11 +412,9 @@ impl PolydatKernel {
     /// `write_throughs` field so the just-built kernel matches
     /// what later `from_program` callers will see.
     ///
-    /// The single legitimate caller is the SRD-67 builder's
-    /// finalize step. The bake-into-program approach replaces
-    /// the prior side-channel where the activity layer carried
-    /// write-throughs alongside the program; now any kernel
-    /// built from the program inherits the bindings via
+    /// The single legitimate caller is the subcontext builder's
+    /// finalize step (subcontext_construction.md §3, step 9). Any
+    /// kernel built from the program inherits the bindings via
     /// `from_program`'s automatic seeding.
     pub(crate) fn bake_write_throughs(&mut self, write_throughs: Vec<KernelWriteThrough>) {
         let program = Arc::get_mut(&mut self.program)
@@ -443,10 +438,10 @@ impl PolydatKernel {
     /// installing parent-chain wiring would skip the load-
     /// bearing materialization step.
     ///
-    /// Used by the cache-and-rebind path the host drives (SRD 18b
-    /// §"Cache-and-rebind contract"): a phase scope compiles once,
-    /// caches its program, and instantiates a fresh kernel per
-    /// `run_phase` call against the cached program.
+    /// Used by the cache-and-rebind path the host drives
+    /// (scope_model.md §8): a phase scope compiles once, caches its
+    /// program, and instantiates a fresh kernel per `run_phase` call
+    /// against the cached program.
     pub(crate) fn from_program(program: Arc<PolydatProgram>) -> Self {
         let mut state = program.create_state();
         // Populate buffers for folded constants so get_constant()
@@ -466,8 +461,7 @@ impl PolydatKernel {
         // Auto-seed the kernel's Rule 2 write-through bindings
         // from the program. The program is the single source of
         // truth; any kernel built from it inherits the same
-        // bindings — eliminating the side-channel that the
-        // activity-layer fiber-rebuild path used to need.
+        // bindings.
         let write_throughs = program.write_throughs().to_vec();
         let mut k = Self {
             program,
@@ -486,8 +480,8 @@ impl PolydatKernel {
         &self.program
     }
 
-    /// SRD-67 Phase 5 — attach Rule 2 write-through bindings to
-    /// this kernel. Per-cycle eval calls
+    /// Attach Rule 2 write-through bindings to this kernel
+    /// (subcontext_construction.md §5). Per-cycle eval calls
     /// [`Self::commit_write_throughs`] after the inputs flowing
     /// into the result-binding expressions are written; the
     /// commit walks each binding, pulls its synthetic source
@@ -499,10 +493,10 @@ impl PolydatKernel {
     /// `SubcontextBuilder::finalize` bakes these onto the program and
     /// `from_program` seeds them on every kernel built from it; per-cycle code never mutates
     /// them.
-    // Used only by the SRD-67 subcontext tests today: `from_program`
-    // auto-seeds write-throughs on every kernel built from the
-    // program, so nothing needs a post-construction setter.
-    // Kept for the test surface; dead-code-lint silenced.
+    // Used only by the subcontext tests: `from_program` auto-seeds
+    // write-throughs on every kernel built from the program, so
+    // nothing else needs a post-construction setter. Kept for the
+    // test surface; dead-code-lint silenced.
     #[allow(dead_code)]
     pub(crate) fn set_write_throughs(&mut self, write_throughs: Vec<KernelWriteThrough>) {
         self.write_throughs = write_throughs;
@@ -516,14 +510,14 @@ impl PolydatKernel {
         &self.write_throughs
     }
 
-    /// SRD-67 Phase 5 — per-cycle commit. Pulls each write-
+    /// Per-cycle commit (subcontext_construction.md §5). Pulls each write-
     /// through's synthetic source output and stores its value
     /// through the corresponding cell-bound input slot for the
     /// declared export name. Reads of that name in the parent or
     /// in sibling kernels share the same cell and observe the
     /// write on the next read.
     ///
-    /// TYPE-STABLE (scope_model.md §"Type stability"): a cell keeps
+    /// TYPE-STABLE (scope_model.md §6.1): a cell keeps
     /// ONE type for life. Each pending value passes a typed
     /// boundary —
     /// matching types pass, a catalog adapter heals (e.g. the lossless
@@ -619,8 +613,7 @@ impl PolydatKernel {
     /// Attach the parsed AST as live program metadata. Called by
     /// every DSL compile entry point immediately after the
     /// assembler produces the kernel, while the program Arc is
-    /// still uniquely owned. The subscope synthesizer
-    /// (SRD-13f §"Wire-reference classification") queries this
+    /// still uniquely owned. The subscope synthesizer queries this
     /// to integrate parent bindings' matter into child scopes.
     pub fn set_ast(&mut self, ast: Arc<crate::dsl::ast::PolydatFile>) {
         Arc::get_mut(&mut self.program)
@@ -628,7 +621,7 @@ impl PolydatKernel {
             .set_ast(ast);
     }
 
-    /// Attach compiled traversals and producers (SRD 113). Called by
+    /// Attach compiled traversals and producers (for_traversal.md). Called by
     /// the DSL compiler while the program Arc is still uniquely owned.
     pub fn set_traversals(
         &mut self,
@@ -882,8 +875,8 @@ impl PolydatKernel {
         }
     }
 
-    /// Find every `const` output whose Plan B materialisation
-    /// left the buffer as `Value::None`. The L2.f sub-axiom in
+    /// Find every `const` output whose initialization left the
+    /// buffer as `Value::None`. The L2.f sub-axiom in
     /// composition_substrate.md describes this case: an
     /// intermediate-layer `const X := <expr>` whose RHS yields
     /// None falls through silently to the outer scope's X via
@@ -932,8 +925,7 @@ impl PolydatKernel {
 
     /// Look up a name in this kernel's scope.
     ///
-    /// The canonical scope-aware read documented by SRD-16
-    /// §"Visibility Rules: Shadowing": own-scope folded outputs
+    /// The canonical scope-aware read (scope_model.md §5): own-scope folded outputs
     /// shadow inherited extern values, with auto-passthrough
     /// outputs falling through to the input slot transparently.
     ///
@@ -986,8 +978,9 @@ impl PolydatKernel {
     /// parent. THE single primitive for parent → child kernel
     /// construction with cell propagation.
     ///
-    /// Per SRD-67's "parent supervises sub-context construction":
-    /// only the parent has the right to materialize a sub-scope
+    /// The parent supervises sub-context construction
+    /// (subcontext_construction.md §8, SC1): only the parent has the
+    /// right to materialize a sub-scope
     /// kernel. The parent owns the cell cascade, the value-copy
     /// path for outputs, the scope-coordinate plumbing, and any
     /// pre-bind iter-var injection. Every other code path that
@@ -1022,8 +1015,7 @@ impl PolydatKernel {
     /// its output names, whether a name has an input slot, that name's
     /// binding modifier, its current value, its broadcast cell, and its
     /// scope-coordinate path — and every one of them is on the `Kernel`
-    /// trait, so the parent no longer has to be the interpreter's
-    /// kernel type.
+    /// trait, so the parent can be a kernel of any engine.
     ///
     /// The child is an interpreter kernel, for the crate's
     /// interpreter-only paths (`for_iteration`, comprehension
@@ -1045,13 +1037,10 @@ impl PolydatKernel {
     /// transit cells). The cell handles are Arc-shared; the
     /// returned kernel reads/writes the same cells as `self`.
     ///
-    /// Used by `build_subscope`'s transient typed parent
-    /// (`transient_typed_parent`) when it needs an
-    /// `Arc<ScopeKernel<RootMarker>>` standing in for a borrowed
-    /// `&PolydatKernel` — the wrapping must reflect the LIVE parent's
-    /// cell view, not just its program shape, otherwise Rule 2
-    /// in the builder's finalize sees no cells and produces no
-    /// write-throughs.
+    /// Used by [`Self::fork_kernel`] and [`Self::cell_scope_snapshot`].
+    /// The snapshot must reflect the LIVE kernel's cell view, not just
+    /// its program shape, otherwise Rule 2 in a builder's finalize
+    /// over it sees no cells and produces no write-throughs.
     pub(crate) fn snapshot_with_cells(&self) -> PolydatKernel {
         let mut snapshot = PolydatKernel::from_program(self.program.clone());
         snapshot.transit_cells = self.transit_cells.clone();
@@ -1106,9 +1095,9 @@ impl PolydatKernel {
         self.snapshot_with_cells()
     }
 
-    /// SRD-13f §"The cross-scope wiring operation is matter-AST-
-    /// driven at construction": materialize this kernel's input-
-    /// slot wiring against `outer`'s exports. Reads `self.program`'s
+    /// Materialize this kernel's input-slot wiring against `outer`'s
+    /// exports, driven by the matter at construction
+    /// (wire_materialization.md, "Materialization gradient"). Reads `self.program`'s
     /// matter (its extern / shared / coord declarations) to decide
     /// each slot's materialization gradient — cell-attach for
     /// shared and computed outputs, value-copy for passthrough,
@@ -1166,21 +1155,22 @@ impl PolydatKernel {
         // exists; drop cells whose name the child has already
         // attached itself to (idempotent reattach with the
         // same handle is a no-op, but a name collision with
-        // a DIFFERENT cell would be a contract violation —
-        // not observed in practice). Cells with no matching
-        // child slot are stored on the child as transit so
+        // a DIFFERENT cell would be a contract violation).
+        // Cells with no matching child slot are stored on the
+        // child as transit so a deeper descendant can pick
+        // them up (wire_materialization.md, form 1).
         let outer_scope = crate::kernel::interp::KernelLookup::new(outer);
-        // a deeper descendant can pick them up.
         let outer_cells = outer.cells_in_scope();
         let mut transit_forward: Vec<SharedCellEntry> = Vec::new();
         let mut attached_names: std::collections::HashSet<String> =
             std::collections::HashSet::new();
         // Names this scope declares as a local authoritative
-        // output — `const NAME := …` (const-folded at compile
-        // time) or `init NAME := …` (computed once at scope-init
-        // after wiring, then fixed for the scope's lifetime).
-        // Either form means this scope owns the binding for
-        // `NAME` over its subtree, so any transit cell carrying
+        // output — `const NAME := …`, whether folded at compile
+        // time or computed once at initialization after wiring
+        // and then fixed for the scope's lifetime. Either way
+        // this scope owns the binding for `NAME` over its
+        // subtree (wire_materialization.md, "Local-authoritative
+        // shadow"), so any transit cell carrying
         // a stale value from a grandparent must be suppressed:
         // without that suppression, step 1's blanket cell-attach
         // would short-circuit step 2's value-copy from
@@ -1222,7 +1212,8 @@ impl PolydatKernel {
         }
         child.set_transit_cells(transit_forward);
 
-        // Step 2 — SRD-13f read invariant. For each output on
+        // Step 2 — the read invariant (wire_materialization.md,
+        // forms 2–5). For each output on
         // outer that matches an input slot on inner:
         //
         // - If the name also exists as an *input slot* on
@@ -1241,12 +1232,8 @@ impl PolydatKernel {
         //   outer's output broadcast cell to inner's input
         //   slot. Outer's `pull` writes the freshly computed
         //   value through the cell; inner reads through
-        //   `read_input` transparently. The read invariant
-        //   from SRD-13f §"The read invariant" holds because
-        //   the chain restructure in `nbrs-runtime` ensures
-        //   inner and outer are per-fiber kernels in the
-        //   same lineage — no shared-kernel race on the
-        //   cell.
+        //   `read_input` transparently, so the read invariant
+        //   holds (wire_materialization.md, form 3).
         for name in outer.output_names() {
             if attached_names.contains(&name) {
                 continue;
@@ -1255,7 +1242,8 @@ impl PolydatKernel {
                 continue;
             };
             let outer_has_slot = outer.input_index(&name).is_some();
-            // SRD-74 P2 transitive composition: when outer's output
+            // Conditional-shadow composition (none_semantics.md,
+            // "Conditional-shadow semantics for `const`"): when outer's output
             // is a `const` binding, ALWAYS go through outer.lookup
             // (value-copy), never through the broadcast cell. The
             // const's output buffer may be Value::None (Rule 1
@@ -1267,12 +1255,13 @@ impl PolydatKernel {
             // defeat that fall-through.
             //
             // Const outputs are effectively-const for the scope's
-            // lifetime (SRD-11) — value-copy is semantically
+            // lifetime (evaluation_model.md, "Const Binding
+            // Contract") — value-copy is semantically
             // equivalent to cell-attach and avoids the dynamic-cell
             // overhead.
             let outer_is_const =
                 outer.output_modifier(&name) == crate::dsl::ast::BindingModifier::CONST;
-            // Slot's declared port type — needed for γ-5
+            // Slot's declared port type — needed for
             // boundary-adapter dispatch. `find_input` returned
             // `Some(inner_idx)` above, so `input_port_type` on
             // the same name is a program-shape invariant; a
@@ -1300,8 +1289,9 @@ impl PolydatKernel {
             } else if let Some(value) =
                 crate::dsl::factories::resolve_extern(&name, inner_slot_type)
             {
-                // γ-8 virtual-wire resolver: outer chain has no
-                // binding; a host-registered resolver provides one.
+                // Registered extern resolver: outer chain has no
+                // binding; a host-registered resolver provides one
+                // (wire_materialization.md, form 5).
                 copy_from_parent(child, inner_idx, &name, inner_slot_type, value)?;
             }
         }
@@ -1321,7 +1311,7 @@ impl PolydatKernel {
         Ok(())
     }
 
-    /// SRD-13f Push B.2 — advance this kernel's broadcast
+    /// Advance this kernel's broadcast
     /// state: pull every output that has an attached
     /// broadcast cell, forcing the eval cone to recompute
     /// against current inputs and writing the fresh value
@@ -1354,7 +1344,7 @@ impl PolydatKernel {
                 .is_some()
             {
                 let name = program.output_names()[i].to_string();
-                // SRD-13f Push D: some workload-level bindings
+                // Some workload-level bindings
                 // intentionally panic at specific cycles
                 // (`testkit_throw_at(cycle, threshold, ...)` for the
                 // resume-test fixture). Those panics belong to
@@ -1451,8 +1441,9 @@ impl PolydatKernel {
     ///    kernel runs through the parent's
     ///    `materialize_subscope` (and downstream
     ///    `materialize_wiring_from_outer`) so cell propagation,
-    ///    shared-cell attach, and the SRD-13f read-invariant
-    ///    are byte-identical to any other parent → child path.
+    ///    shared-cell attach, and the read invariant
+    ///    (wire_materialization.md) are byte-identical to any
+    ///    other parent → child path.
     ///
     /// # When to use this
     ///
@@ -1468,10 +1459,9 @@ impl PolydatKernel {
     ///
     /// Owning the recipe here ensures both consumers (runtime
     /// dispatcher + pre-map walker) produce identical kernels
-    /// for identical inputs. Pre-`for_iteration`, each site
-    /// reimplemented the three-step
+    /// for identical inputs, rather than each site composing
     /// `from_program` → `materialize_wiring_from_outer` →
-    /// `set_input` dance and could — and did — drift.
+    /// `set_input` on its own and drifting.
     ///
     /// # See also
     ///
@@ -1528,7 +1518,7 @@ impl PolydatKernel {
             // Use `lookup` (two-tier: const buffer first, input
             // slot second) rather than reading the input slot
             // directly. The conditional-shadow `const NAME :=
-            // <expr>` pattern from SRD-74 P2 makes NAME both an
+            // <expr>` pattern (none_semantics.md) makes NAME both an
             // input slot (wired with the outer scope's binding —
             // typically a workload-param default) AND a const
             // output (the iter-shadow result). The own-coordinate
@@ -1566,10 +1556,9 @@ impl PolydatKernel {
         self.scope_coords.extend_from_slice(outer);
     }
 
-    // `propagate_shared_to` retired in favor of SharedCell-backed
-    // input slots — writes from inner kernels flow through the
-    // cell's Mutex automatically, no scope-exit copy needed. See
-    // SRD-16 §"Mutability Rules: Shared Mutable".
+    // There is no scope-exit copy of `shared` values: they live in
+    // SharedCell-backed input slots, and writes from inner kernels
+    // flow through the cell's Mutex (scope_model.md §6).
 
     /// Extract the scope values that were set via `materialize_wiring_from_outer`.
     /// Returns `[(name, value)]` for inputs that are not at their
@@ -1632,10 +1621,10 @@ mod type_stability_tests {
     use super::*;
     use crate::ast::PortType;
 
-    /// scope_model.md §"Type stability" — the write-through boundary:
+    /// scope_model.md §6.1 — the write-through boundary:
     /// matching types pass untouched, the catalog heals lossless
-    /// widening (U64 → F64 slot), and an unhealable mismatch (the
-    /// incident shape: F64 into a U64 cell) errors AT THE WRITE with
+    /// widening (U64 → F64 slot), and an unhealable mismatch (F64
+    /// into a U64 cell) errors AT THE WRITE with
     /// the cell name, both types, and the narrowing-cast guidance.
     #[test]
     fn write_through_boundary_matches_widens_and_rejects() {
@@ -1649,13 +1638,13 @@ mod type_stability_tests {
             .expect("u64→f64 widens");
         assert_eq!(v.as_f64(), 900.0);
 
-        // None sentinel passes (SRD-74 None-propagation handles it).
+        // None sentinel passes (none_semantics.md Rule 1 handles it).
         let v = check_write_through_type("m", "__write_m", PortType::U64, Value::None)
             .expect("None passes through");
         assert!(matches!(v, Value::None));
 
-        // Narrowing: F64 into a U64 cell is the incident shape — an
-        // error at the write, naming everything the author needs.
+        // Narrowing: F64 into a U64 cell is an error at the write,
+        // naming everything the author needs.
         let err = check_write_through_type(
             "measured",
             "__write_measured",

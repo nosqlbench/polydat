@@ -49,7 +49,7 @@ use crate::kernel::PolydatKernel;
 /// `{name}` placeholder or a bare identifier reads. The interpreter
 /// kernel is one; a [`Layered`] view puts a tuple's bindings in front of
 /// another, so opening a traversal needs no kernel of the engine that
-/// opens it (engine parity, step 8).
+/// opens it (engines.md §3.6).
 pub trait Lookup {
     /// The value `name` denotes here, if any.
     fn lookup(&self, name: &str) -> Option<Value>;
@@ -70,13 +70,11 @@ impl Lookup for PolydatKernel {
 
 /// A kernel of any engine, as a scope names resolve in.
 ///
-/// `Lookup` had one kernel implementor and the typed embedding
-/// surfaces took `&PolydatKernel`, so a host holding a
-/// `Box<dyn Kernel>` could not interpolate `{k} > 5` against the
-/// kernel it had: the only route was to compile the program a second
-/// time on the interpreter. Wrapping is what makes this work rather
-/// than an `impl Lookup for dyn Kernel` — one trait object cannot
-/// become another.
+/// A host holding a `Box<dyn Kernel>` interpolates `{k} > 5` against
+/// the kernel it has through this wrapper, without compiling the
+/// program a second time on the interpreter. It is a wrapper rather
+/// than an `impl Lookup for dyn Kernel` because one trait object
+/// cannot become another.
 ///
 /// Distinct from
 /// [`comprehension::surfaces::KernelScope`](crate::iteration::comprehension::surfaces::KernelScope),
@@ -101,7 +99,8 @@ impl Lookup for KernelLookup<'_> {
     ///
     /// A `const` binding is the exception. Its value is the scope's for
     /// the name, and an input slot of the same name, which a const that
-    /// reads a parameter it shadows is given (SRD-74 P2), holds only the
+    /// reads a parameter it shadows is given (none_semantics.md,
+    /// "Conditional-shadow semantics for `const`"), holds only the
     /// value from the scope above. So the const's own value comes
     /// first, and the slot answers only while that value is `None`: the
     /// two-tier read of a conditional shadow.

@@ -32,12 +32,9 @@ fn nbrs_dirty_debug_enabled() -> bool {
 /// `set_input` flow through to the cell; reads on either side
 /// pick up the latest value.
 ///
-/// Concurrent writers serialize at the Mutex; the current
-/// semantic is **last-write-wins** (lock-acquisition order).
-/// Future templated patterns (atomic-fetch-add, sum-reduction,
-/// merge, etc.) — see SRD-16 §"Open: concurrent shared
-/// mutation" — will introduce alternative cell types selected
-/// per binding declaration.
+/// Concurrent writers serialize at the Mutex, and the observable
+/// value is **last-write-wins** in lock-acquisition order
+/// (scope_model.md §6.2).
 ///
 /// ## Cross-fiber validity tracking
 ///
@@ -212,8 +209,7 @@ pub struct SharedCellEntry {
     pub cell: SharedCell,
 }
 
-/// SRD-82 §"Panic reporting: one full render" — set by a host
-/// runtime that catches worker panics and renders the full
+/// Set by a host runtime that catches worker panics and renders the full
 /// enriched diagnostic itself (the `errors:` block). When set,
 /// the re-raise hook below prints a single first-line notice
 /// instead of the full body; bare polydat consumers never set it
@@ -268,7 +264,7 @@ fn install_eval_panic_hook() {
                 // The runtime will render the full enriched
                 // diagnostic in the phase error list; one short
                 // line keeps the terminal signal without the
-                // four-fold repeat (SRD-82 §one full render).
+                // four-fold repeat.
                 let first = info
                     .payload()
                     .downcast_ref::<String>()
@@ -390,7 +386,7 @@ pub(crate) fn without_panic_location(message: String) -> String {
 
 /// Re-raise an enriched message as the interpreter does: through
 /// `panic_any`, so the hook prints it once, or prints the short notice
-/// when a downstream reporter renders the full body (SRD-82).
+/// when a downstream reporter renders the full body.
 pub(crate) fn reraise_enriched(enriched: String) -> ! {
     if PANIC_REPORTING_DOWNSTREAM.load(std::sync::atomic::Ordering::Relaxed) {
         RERAISE_SHORT.with(|c| c.set(true));
@@ -472,7 +468,7 @@ pub struct EngineCore {
     /// the slot is bound to a shared cell; writes propagate
     /// through the cell to whatever other kernels share it.
     pub(crate) shared_cells: Vec<Option<SharedCell>>,
-    /// SRD-13f Push B.2 — per-output broadcast cell. Indexed
+    /// Per-output broadcast cell (cross_fiber_invalidation.md §3.1). Indexed
     /// by output position in `program.output_list`. `Some(cell)`
     /// = the output broadcasts its value to descendants via
     /// the cell whenever the owner pulls the output; `None` =
@@ -699,19 +695,15 @@ impl EngineCore {
         // memoized node between the dirty slot and any consumer —
         // not just the node that happened to check first. The
         // caller only re-evaluates the CHECKED node; its recursive
-        // upstream walk re-checks each parent's own cone, which now
+        // upstream walk re-checks each parent's own cone, which
         // reads the just-updated `last_seen` and comes back clean,
-        // leaving the intermediate buffers stale — the checked node
-        // then recomputes from stale parents (observed as a
-        // phase-poll predicate memoized at its pre-write value
-        // forever). Mirror `set_input`'s write-side rule on the
-        // read side: a detected cross-fiber write invalidates every
-        // node whose transitive input provenance covers the dirty
-        // slot.
+        // so without this pass the intermediate buffers stay stale
+        // and the checked node recomputes from stale parents.
+        // Mirror `set_input`'s write-side rule on the read side: a
+        // detected cross-fiber write invalidates every node whose
+        // transitive input provenance covers the dirty slot.
         if !clean {
-            // Exact multi-word mask: slots >= 64 invalidate too
-            // (the one-word form silently SKIPPED them — a latent
-            // under-invalidation on >64-input scopes).
+            // Exact multi-word mask, so slots >= 64 invalidate too.
             let mut dirty_mask = crate::kernel::ProvMask::empty();
             for (ptr, r, slot) in dirty {
                 self.last_seen.insert(ptr, r);
@@ -780,7 +772,7 @@ impl EngineCore {
 
         let input_count = wiring.len();
 
-        // SRD-74 Rule 1 — None propagation lifted to the kernel
+        // none_semantics.md Rule 1 — None propagation lifted to the kernel
         // level. Any node whose inputs include `Value::None`
         // emits `Value::None` on every output without invoking
         // the node's `eval`. This holds the SQL-NULL / Rust
@@ -792,7 +784,7 @@ impl EngineCore {
         //
         // Opt-out: nodes whose semantics explicitly consume
         // `Value::None` (coalesce-style `default_or`, explicit
-        // optionality handlers per SRD-74 Rule 2) override
+        // optionality handlers per none_semantics.md Rule 2) override
         // `PolydatNode::accepts_none_inputs` to skip this guard. Such
         // nodes handle `None` in their own `eval`.
         let node_ref = &*program.nodes[node_idx];
@@ -820,9 +812,7 @@ impl EngineCore {
         //
         // Cost: one catch_unwind frame per slow-path node eval.
         // The JIT path doesn't go through here. On the success
-        // path the frame is a few stack words; on the panic
-        // path it's strictly an improvement over what the
-        // user sees today.
+        // path the frame is a few stack words.
         //
         // The capture guard suppresses the std panic hook for
         // the duration: without it, the hook prints the BARE
@@ -844,7 +834,7 @@ impl EngineCore {
         if let Err(e) = payload {
             // A native cone re-raises its member's failure already
             // enriched with the member's name, its inputs, and this
-            // program's context (A7); the cone itself is not a frame,
+            // program's context (engines.md §3.4); the cone itself is not a frame,
             // so the report reads as it does on every other engine.
             if program.nodes[node_idx].fusion_subgraph().is_some()
                 && e.downcast_ref::<String>()
@@ -873,7 +863,7 @@ impl EngineCore {
         &self.buffers[node_idx][port_idx]
     }
 
-    /// SRD-13f Push B.2: broadcast an output's freshly computed value
+    /// Broadcast an output's freshly computed value
     /// through its cell, so a descendant that bound its matching input
     /// to the cell reads the current value next. Every pull does this,
     /// by name or by index (cross_fiber_invalidation.md §3.1).
@@ -906,8 +896,8 @@ impl EngineCore {
         }
     }
 
-    /// SRD-13f Push B.2 — allocate broadcast cells for every
-    /// output in `program`. Idempotent: if cells are already
+    /// Allocate broadcast cells for every output in `program`
+    /// (cross_fiber_invalidation.md §3.1). Idempotent: if cells are already
     /// allocated (size matches the program's output count),
     /// the call is a no-op. Initial cell value is taken from
     /// the current buffer (typically `Value::None` at
@@ -930,10 +920,9 @@ impl EngineCore {
             .map(|i| {
                 let name = &program.output_list()[i].0;
                 let (node_idx, port_idx) = program.output_map[name];
-                // Defensive bounds-check: some construction paths
-                // (raw state, partial programs) may not populate
-                // buffers for every node referenced in the output
-                // map. Seed with `Value::None` rather than panic.
+                // Defensive bounds-check: an output whose node has
+                // no buffer is seeded with `Value::None` rather than
+                // panicking.
                 self.buffers
                     .get(node_idx)
                     .and_then(|b| b.get(port_idx))
@@ -1118,9 +1107,8 @@ impl PolydatState {
         self.core.read_input(idx)
     }
 
-    /// Alias for [`Self::get_input`]; kept for legacy callers
-    /// that picked the more explicit name. Both read the cell
-    /// when one is attached.
+    /// Alias for [`Self::get_input`] under a more explicit name.
+    /// Both read the cell when one is attached.
     pub fn read_input_value(&self, idx: usize) -> Value {
         self.core.read_input(idx)
     }
@@ -1205,11 +1193,9 @@ impl PolydatState {
     }
 
     /// Pre-populate a node's output buffer slot and mark it clean,
-    /// suppressing on-demand evaluation. Used by the scope-init
-    /// pass (SRD 11 §"Init Binding Contract" Plan B) to seed
-    /// per-fiber states with init binding values that the
-    /// activation kernel already evaluated, so each fiber doesn't
-    /// re-fire the eval at first pull.
+    /// suppressing on-demand evaluation. A caller seeds a state
+    /// with a value another state over the same program already
+    /// evaluated, so the node does not run again at first pull.
     pub fn seed_node_buffer(&mut self, node_idx: usize, port_idx: usize, value: Value) {
         if node_idx >= self.core.buffers.len() {
             return;
@@ -1221,9 +1207,9 @@ impl PolydatState {
         self.core.node_clean[node_idx] = true;
     }
 
-    /// Read a node's output buffer slot. Used by the scope-init
-    /// pass to extract a pre-pulled init binding value from one
-    /// state and seed it into another.
+    /// Read a node's output buffer slot, the counterpart of
+    /// [`Self::seed_node_buffer`] for carrying an evaluated value
+    /// from one state into another.
     pub fn node_buffer(&self, node_idx: usize, port_idx: usize) -> Option<&Value> {
         self.core
             .buffers

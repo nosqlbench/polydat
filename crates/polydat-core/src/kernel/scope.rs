@@ -47,9 +47,10 @@
 //! comprehension vs. an outer one with the same coord name
 //! in a different shape.
 //!
-//! See SRD 18b §"Iteration variables as scope outputs" for
-//! how comprehension scopes synthesise the `extern` slots
-//! that this module classifies as coordinates.
+//! See scope_model.md §3 and §7 for the iteration-extern slots
+//! that this module classifies as coordinates, and
+//! for_traversal.md §4 for how a `for` body declares one per
+//! element.
 
 use indexmap::IndexMap;
 

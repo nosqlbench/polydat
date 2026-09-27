@@ -1,8 +1,8 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! The activation runtime for `for` traversals (SRD 113 §3.4, §3.6,
-//! §5).
+//! The activation runtime for `for` traversals (for_traversal.md §3.4,
+//! §3.6, §5).
 //!
 //! A [`TraversalStream`] dispenses one [`Activation`] per tuple of a
 //! compiled traversal. An activation is a fresh state over the body's
@@ -58,9 +58,7 @@ impl CursorSlice {
 /// The kernel is on the stream's engine — the engine of the kernel
 /// that opened the traversal — and is driven through the [`Kernel`]
 /// trait. [`TraversalStream::activation_on`] names another engine for
-/// a caller that wants one. The default used to be the interpreter's
-/// whatever the parent ran on, so a traversal opened on a native
-/// kernel activated interpreted unless the caller asked otherwise.
+/// a caller that wants one (for_traversal.md §5.2).
 pub struct Activation<K = PolydatKernel> {
     /// Position of this activation's tuple in the traversal's dispense
     /// order.
@@ -234,15 +232,12 @@ impl TraversalStream {
     /// disjoint index ranges.
     ///
     /// The kernel is on the stream's engine — the one the kernel that
-    /// opened the traversal runs on. This used to be the interpreter's
-    /// whatever the parent was, so a traversal opened on a native
-    /// kernel activated interpreted unless the caller asked for an
-    /// engine by name.
+    /// opened the traversal runs on.
     pub fn activation(&self, index: usize) -> Result<Activation<Box<dyn Kernel>>, String> {
         self.activation_on(index, self.engine)
     }
 
-    /// [`Self::activation`] on `engine` (engine parity, step 8): a fresh
+    /// [`Self::activation`] on `engine` (engines.md §3.6): a fresh
     /// kernel over the body's program for that engine, compiled once
     /// per engine and shared by every activation after, driven through
     /// the [`Kernel`] trait with the same elements, cascade, and cursor
@@ -373,7 +368,7 @@ pub fn program_identity(kernel: &PolydatKernel) -> *const PolydatProgram {
 }
 
 /// Open `traversal` against `parent`'s current values, on any engine
-/// (engine parity, step 8): the cascaded wires and the wires the
+/// (engines.md §3.6): the cascaded wires and the wires the
 /// sources reference are snapshotted through
 /// the [`Kernel`] trait, and the comprehension is evaluated in the
 /// body's scope, the body's program with those wires bound, where a
@@ -395,11 +390,9 @@ pub fn open_traversal(
     }
     // What the comprehension's sources resolve against: the cascaded
     // wires, over the body program's ledger, which is what a source
-    // that has to compile is charged to. Opening a traversal used to
-    // allocate a whole interpreter state over the body's program for
-    // this — every buffer, every clean flag — and then read two things
-    // from it, the cascade it had just bound into it and the body's
-    // own constants, which no source of the enclosing scope names.
+    // that has to compile is charged to. Opening allocates no state
+    // over the body's program, because a source reads the cascade and
+    // the enclosing scope's wires and never the body's own constants.
     let base = crate::kernel::interp::NoScope::charged_to(traversal.program.ledger().clone());
     let cascaded = Layered {
         prefix: &cascade,

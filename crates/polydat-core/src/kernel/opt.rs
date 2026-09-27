@@ -4,23 +4,20 @@
 //! `KernelOptLevel` — session-wide optimization knob for op-template
 //! kernel synthesis.
 //!
-//! Today's closure-binding economy (Rule 5) drops input slots for
-//! names nothing in the body references — magic externs `body` /
-//! `count` / `ok` and result-binding LHSs whose values nothing
-//! downstream reads get DCE'd at slot-allocation time. Runtime
-//! writes to those names land on a kernel that has no slot for them
-//! and silently no-op.
+//! The closure-binding economy (Rule 5) allocates a magic extern
+//! (`body` / `count` / `ok`) only when the result source references
+//! it (subcontext_construction.md §3.2), so a kernel has no slot for
+//! an unreferenced one and a host write to that name finds none.
 //!
 //! That's fine in production: the workload didn't ask for the value,
 //! we don't pay to track it. It's actively harmful for step-debug /
 //! cycle-replay / "show me what the adapter actually wrote this
 //! cycle even though nothing read it" inspection.
 //!
-//! `Diagnostic` mode relaxes the DCE: every magic extern referenced
-//! or not is allocated, every result-binding LHS gets a kernel slot
-//! whether or not anything reads it. The writes land, `wires.get`
-//! answers, the step-debugger sees the real values. Compute path
-//! unchanged — the extra slots have no eval cone hanging off them.
+//! `Diagnostic` mode allocates all three magic externs whether or not
+//! the source references them. The writes land, `wires.get` answers,
+//! the step-debugger sees the real values. Compute path unchanged —
+//! the extra slots have no eval cone hanging off them.
 //!
 //! The knob threads through [`crate::kernel::subcontext::CompileOptions`]
 //! and is consulted by `SubcontextBuilder::add_result_bindings`. The
@@ -29,10 +26,10 @@
 /// Optimization level for op-template kernel synthesis.
 ///
 /// `Release` is the production default — closure-binding economy
-/// elides slots for names nothing references. `Diagnostic` keeps
-/// every magic-extern and result-binding-LHS slot allocated so
-/// step-debug / cycle-replay introspection can see the values the
-/// runtime would otherwise drop.
+/// elides magic-extern slots nothing references. `Diagnostic` keeps
+/// every magic-extern slot allocated so step-debug / cycle-replay
+/// introspection can see the values the runtime would otherwise
+/// drop.
 ///
 /// Naming: matches the rustc convention (`opt-level=0..3`) but
 /// collapsed to two semantically-distinct positions; there's no
@@ -41,14 +38,13 @@
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum KernelOptLevel {
     /// Production default. Closure-binding economy elides slots
-    /// for unreferenced magic externs and result-binding LHSs.
-    /// Writes to elided names silently no-op.
+    /// for unreferenced magic externs; an elided name has no slot
+    /// to write.
     #[default]
     Release,
     /// Step-debug / cycle-replay mode. Force-allocate every magic
-    /// extern (`body` / `count` / `ok`) and every result-binding
-    /// LHS slot regardless of downstream reference. Runtime writes
-    /// always land; `wires.get` always answers.
+    /// extern (`body` / `count` / `ok`) regardless of reference.
+    /// Runtime writes always land; `wires.get` always answers.
     Diagnostic,
 }
 
