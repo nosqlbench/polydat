@@ -55,6 +55,7 @@ The release makes three things true that a host builds on:
 | `Op::OrderMaterialize` gains `input` and `Op::Zip` gains `operands` | a pattern or literal naming every field of either | end the pattern with `..`; `OrderMaterialize` now holds its input and pops nothing from the stack |
 | New variants: `KernelError::ConstInit`, `AssemblyError::ConstInit`, `AssemblyError::NativeCone`, `WriteError::ConstSlot`, `WriteError::FromParent`, `ContractViolation::Bind`, `RuntimeError::ZipLengthMismatch`, `ValidationError::PredicateContextRequired`, `InputKind::Const` | an exhaustive `match` on any of these enums (E0004) | add the arm or a wildcard |
 | The node types `SessionStartMillis` and `ElapsedMillis` are removed | code that named them | a const capture; see the next table |
+| `polydat_grammar::PragmaSet` loses its `parent` field, `attach_to`, and `PragmaConflict` | code that chained pragma sets by hand | `PragmaSet::nested` builds a nested scope's set from its enclosing one ([polydat_grammar.md](../design/polydat_grammar.md) §14.1) |
 
 A healing write becomes a conversion the host asks for:
 
@@ -114,6 +115,7 @@ returns it again on every later `advance`.
 | `is_stable` takes a window: `is_stable(samples: vec_f64, margin, min_samples)` | the 0.5.0 form `is_stable(value, margin, min_samples, horizon)` | keep the recent samples in the host and pass them, for example as JSON through `str_to_vec_f64` ([evaluation_model.md](../design/evaluation_model.md), "Non-Deterministic Nodes") |
 | A predicate compiled without a scope may name only what its tuples bind | a coordinate stream whose `where` names an enclosing wire, now `ValidationError::PredicateContextRequired` | traverse it with `for`, which captures those names when it opens |
 | `order reverse_lex` over a filter is refused on streams, as it was on traversals | a stream of such an order (V4) | order before filtering, or use `lex` ([comprehension_forms.md](../design/comprehension_forms.md) §5, V4) |
+| Under `pragma strict_values`, a constant that violates the constraint of the port it feeds fails the build | a program such as `mod_wire(cycle, 0)`, which compiled before because a constant source was skipped unchecked | pass a value the constraint accepts; the error names the port, the constraint, and the constant ([graph_compiler.md](../design/graph_compiler.md) §2.3) |
 
 ## Part 2: what changes quietly
 
@@ -292,6 +294,21 @@ a rule the specifications now state and every engine follows.
   ([for_traversal.md](../design/for_traversal.md) §5.2, "Opening
   cost").
 
+### Pragmas
+
+- **A pragma applies to the scope it is written in and every scope
+  nested in it.** A `pragma` inside a `for` body was parsed and ignored;
+  it now applies to that body. A module's pragmas were added to the
+  program that imports the module, so importing a strict module made
+  the whole host strict; they now apply to the module's own bindings
+  only ([polydat_grammar.md](../design/polydat_grammar.md) §14.1).
+- **`strict_values` guards a nondeterministic source at run time.** A
+  source with no wire inputs was treated as a constant and never
+  checked. A constant is now checked at build (Part 1), and a
+  nondeterministic or volatile source, such as `counter()`, gets the
+  runtime assertion every other wire gets
+  ([graph_compiler.md](../design/graph_compiler.md) §2.3).
+
 ### Release requirements
 
 - **The facade requires the newest published version of each internal
@@ -336,6 +353,11 @@ a rule the specifications now state and every engine follows.
   `Arc<PolydatProgram>` argument coerces, so existing calls compile; the
   child now runs on the engine the program was compiled for, and a
   program of any engine is accepted.
+- **`pragma strict_types` is accepted and has no effect.** Statically
+  typed wires already make every resolved wire's type match its sink, so
+  a runtime type assertion would never fire; a program that sets the
+  pragma compiles to the same graph as one that does not
+  ([graph_compiler.md](../design/graph_compiler.md) §2.3).
 
 ## Known issues
 
@@ -345,10 +367,6 @@ a rule the specifications now state and every engine follows.
 - **`ScopedExpr::set` ignores a value it cannot write.** A name the
   expression does not read, a coordinate, and a value that does not
   convert are dropped without an error.
-- **The `strict_types` pragma inserts no type assertion.** The adapter
-  pass already makes every resolved wire's type match its sink, so a
-  program that sets the pragma compiles to the same graph as one that
-  does not.
 
 ## Pending for 0.6.0
 
@@ -359,10 +377,6 @@ when its change lands.
 - Optimizer rules: O1 restricted, validation before rewrite, R5 pushdown
   only for total predicates, and an order over a filter ranks the
   survivors.
-- `strict_values` checks constant sources at build.
-- The `strict_types` pragma is documented as having no effect.
-- Pragmas are lexically scoped, so a module's pragmas stop applying to
-  the host that imports it.
 - Binding attribution moves from `compile_ctx::current_binding()` to the
   construction context.
 - The resource accessor moves from a process global to the kernel tree.
