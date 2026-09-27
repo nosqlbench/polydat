@@ -35,6 +35,8 @@
 
 use std::sync::{Arc, LazyLock};
 
+use crate::derive_support::Ext;
+use crate::iteration::cursor_partition::PartitionList;
 use crate::library::support::cache::OnceCache;
 
 use vectordata::TestDataGroup;
@@ -264,22 +266,20 @@ pub(crate) enum DatasetHandle {
     /// `TestDataGroup` before any profile/facet is chosen.
     Group(Arc<TestDataGroup>),
     /// Prebuffered-and-resident dataset, returned by
-    /// `dataset_prebuffer(source)`. Carries both the group AND
-    /// the source spec so per-facet accessors can re-resolve
-    /// (`query_vector_at(prebuffered, q)` → resolves the
-    /// `query` facet from `<source>:<profile>`). Distinct from
-    /// `Group` so existing Group-only consumers stay typed.
+    /// `dataset_prebuffer(source)`. Carries both the group and
+    /// the source spec: a facet accessor opens its facet from
+    /// `<source>:<profile>` (`query_vector_at(prebuffered, q)`
+    /// reads the `query` facet), and a group accessor reads the
+    /// group. [`DatasetHandle::resolve_facet`] and
+    /// [`DatasetHandle::resolve_group`] are those two readings.
     ///
-    /// The `_group` field keeps the prebuffered `TestDataGroup`
+    /// The `group` field also keeps the prebuffered `TestDataGroup`
     /// alive for the duration of the handle — vectordata's
     /// internal storage cache is keyed off the group instance,
     /// so dropping the group prematurely would force per-facet
-    /// readers to re-open against transport. The field isn't
-    /// read directly by accessors (they use `source` to re-open
-    /// via `DATASET_CACHE`, which has the same group cached);
-    /// the field's purpose is the lifetime extension.
+    /// readers to re-open against transport.
     Prebuffered {
-        _group: Arc<TestDataGroup>,
+        group: Arc<TestDataGroup>,
         source: String,
     },
 }
@@ -318,15 +318,12 @@ impl DatasetHandle {
 /// All per-cycle accessors take the resulting handle on a wire
 /// — the catalog/HTTP/mmap path is never on the cycle hot path.
 ///
-/// Resolve failures used to fall through silently as `Value::None`
-/// so a downstream op wrapper could lift them. That pattern also
-/// let comprehension clause evaluation degrade silently (catalog
-/// miss → None → downstream `handle_of` panic → caught + swallowed
-/// → literal-list fallback splits the spec on a comma → garbage
-/// iter-var). We now panic with the underlying error: the engine's
-/// `enrich_eval_panic` adds node provenance, `eval_const_expr`
-/// traps the panic into `Result::Err`, and `evaluate_spec`
-/// propagates it as a clean clause-level diagnostic.
+/// A resolve failure panics with the underlying error rather than
+/// yielding `Value::None`, so a catalog miss cannot degrade into a
+/// garbage value downstream: the engine's `enrich_eval_panic` adds
+/// node provenance, `eval_const_expr` traps the panic into
+/// `Result::Err`, and `evaluate_spec` propagates it as a
+/// clause-level diagnostic.
 #[crate::polydat_node(category = RealData)]
 fn dataset_open(source: &str, facet: &str) -> Arc<DatasetHandle> {
     match DatasetHandle::open(source, facet) {
@@ -346,9 +343,8 @@ fn dataset_open(source: &str, facet: &str) -> Arc<DatasetHandle> {
 /// `dataset_facets`, ...) that operate on the dataset as a whole
 /// before any profile/facet is selected.
 ///
-/// Hard-fail on resolve failure — see `dataset_open` for the
-/// rationale. The Value::None pattern was a silent-degradation
-/// source for comprehension clause evaluation.
+/// A resolve failure panics, as in `dataset_open` and for the
+/// same reason.
 #[crate::polydat_node(category = RealData)]
 fn dataset_group_open(source: &str) -> Arc<DatasetHandle> {
     match DatasetHandle::open_group(source) {
@@ -365,13 +361,12 @@ fn dataset_group_open(source: &str) -> Arc<DatasetHandle> {
 // Base vector nodes
 // =================================================================
 
-// All indexed-accessor nodes share the same shape: an `index`
-// wire (u64) and a `source` wire (Str), with the dataset
-// resolved lazily on first eval per spec via `DATASET_CACHE`
-// (inside `F32Dataset::load` / `I32Dataset::load`). The
-// per-cycle hot path is one HashMap lookup on the cached spec
-// plus the existing facet read; the spec doesn't change within
-// an iteration scope so subsequent cycles hit the cache.
+// All indexed-accessor nodes share the same shape: a handle wire
+// and an `index` wire (u64). A source string in the handle
+// position is promoted to `dataset_open(source, "<facet>")` for
+// the facet the accessor names, and the facet reader is opened
+// once per (source, profile, facet) through `FACET_CACHE`, so
+// the per-cycle work is the facet read alone.
 
 // =================================================================
 // Per-cycle indexed accessors
@@ -398,6 +393,20 @@ impl DatasetHandle {
                 ),
             },
             _ => std::borrow::Cow::Borrowed(self),
+        }
+    }
+
+    /// The dataset group a group accessor reads: the group of a
+    /// `dataset_group_open` handle, or the group a prebuffered handle
+    /// carries. A facet handle has no group, and asking one for it
+    /// panics with the handle's kind.
+    fn resolve_group(&self) -> &TestDataGroup {
+        match self {
+            DatasetHandle::Group(g) | DatasetHandle::Prebuffered { group: g, .. } => g.as_ref(),
+            other => panic!(
+                "expected a group or prebuffered handle, got {}",
+                dataset_handle_kind(other)
+            ),
         }
     }
 }
@@ -556,17 +565,9 @@ fn dataset_handle_kind(h: &DatasetHandle) -> &'static str {
     }
 }
 
-/// Helper for group-level accessors: extract the `TestDataGroup`
-/// from a `DatasetHandle::Group` variant. Panics on mismatch.
-fn group_of(handle: &DatasetHandle) -> &TestDataGroup {
-    match handle {
-        DatasetHandle::Group(g) => g.as_ref(),
-        other => panic!("expected Group handle, got {}", dataset_handle_kind(other)),
-    }
-}
-
 /// Access an `f32` vector by index, returning a typed `VecF32`.
-/// Works on any F32 handle (base or query facet).
+/// Reads the base facet of a source string or prebuffered handle,
+/// and whatever facet an opened F32 handle names.
 ///
 /// Signature: `vector_at(handle, index: u64) -> VecF32`
 #[crate::polydat_node(category = RealData)]
@@ -577,9 +578,9 @@ fn vector_at(handle: Facet<BaseFacet>, index: u64) -> crate::ast::SliceArc<f32> 
     )
 }
 
-/// Access a query vector by index. Alias for [`VectorAt`] kept
-/// for clarity in workloads that distinguish base and query
-/// handles by name.
+/// Access a query vector by index. Reads the query facet of a
+/// source string or prebuffered handle, as `vector_at` reads the
+/// base facet.
 ///
 /// Signature: `query_vector_at(handle, index: u64) -> VecF32`
 #[crate::polydat_node(category = RealData)]
@@ -679,7 +680,8 @@ fn vector_dim(handle: Facet<BaseFacet>) -> u64 {
 /// against. This is the canonical "how many vectors / queries /
 /// neighbor-rows" accessor — `vector_count(base_handle)` for
 /// base vectors, `vector_count(query_handle)` for query
-/// vectors, etc.
+/// vectors, etc. A source string or prebuffered handle counts
+/// the base facet.
 ///
 /// Signature: `vector_count(handle) -> (u64)`
 #[crate::polydat_node(category = RealData)]
@@ -687,8 +689,9 @@ fn vector_count(handle: Facet<BaseFacet>) -> u64 {
     facet_record_count(&handle, "vector_count", BaseFacet::FACET)
 }
 
-/// Alias for [`VectorCount`] kept for clarity in workloads that
-/// distinguish base/query handles by name.
+/// Return the count of query vectors. Counts the query facet of a
+/// source string or prebuffered handle, as `vector_count` counts
+/// the base facet.
 ///
 /// Signature: `query_count(handle) -> (u64)`
 #[crate::polydat_node(category = RealData)]
@@ -714,13 +717,13 @@ fn neighbor_count(handle: Facet<NeighborIndicesFacet>) -> u64 {
 }
 
 /// Return the dataset's distance function (e.g., "COSINE",
-/// "EUCLIDEAN"). Operates on the dataset group; takes a Group
-/// handle.
+/// "EUCLIDEAN"). Operates on the dataset group; takes a group or
+/// prebuffered handle.
 ///
 /// Signature: `dataset_distance_function(group) -> (String)`
 #[crate::polydat_node(category = RealData)]
 fn dataset_distance_function(group: Group) -> String {
-    let group = group_of(&group);
+    let group = group.resolve_group();
     let raw = group
         .attribute("distance_function")
         .and_then(|v| v.as_str())
@@ -816,13 +819,13 @@ fn metadata_results_count(handle: Facet<MetadataResultsFacet>) -> u64 {
 }
 
 /// Report which facets are available for the default profile of
-/// a dataset group as a comma-separated list. Expects a Group
-/// handle.
+/// a dataset group as a comma-separated list. Expects a group or
+/// prebuffered handle.
 ///
 /// Signature: `dataset_facets(group) -> (String)`
 #[crate::polydat_node(category = RealData)]
 fn dataset_facets(group: Group) -> String {
-    let group = group_of(&group);
+    let group = group.resolve_group();
     // Use the default profile — group-level callers want a
     // dataset-wide manifest; specific profile facets come via
     // `profile_facets(group, idx)`.
@@ -855,7 +858,7 @@ fn dataset_facets(group: Group) -> String {
 /// Signature: `dataset_profile_count(group) -> (u64)`
 #[crate::polydat_node(category = RealData)]
 fn dataset_profile_count(group: Group) -> u64 {
-    group_of(&group).profile_names().len() as u64
+    group.resolve_group().profile_names().len() as u64
 }
 
 /// Comma-separated list of all profile names in canonical sort
@@ -864,7 +867,7 @@ fn dataset_profile_count(group: Group) -> u64 {
 /// Signature: `dataset_profile_names(group) -> (String)`
 #[crate::polydat_node(category = RealData)]
 fn dataset_profile_names(group: Group) -> String {
-    group_of(&group).profile_names().join(", ")
+    group.resolve_group().profile_names().join(", ")
 }
 
 /// Return profile names matching a prefix, comma-separated.
@@ -880,15 +883,16 @@ fn dataset_profile_names(group: Group) -> String {
 /// codegen and emits the matching `FuncSig.default_resolver`
 /// (`DefaultResolver::Group`). The spliced `dataset_group_open` yields
 /// the canonical `Value::Handle(Arc<DatasetHandle>)`, so the wire is
-/// resolved as `DatasetHandle` and the group is taken via `group_of`
-/// (downcasting straight to `TestDataGroup` would fail — the handle is
-/// always the unified `DatasetHandle` enum).
+/// resolved as `DatasetHandle` and the group is taken via
+/// [`DatasetHandle::resolve_group`] (downcasting straight to
+/// `TestDataGroup` would fail — the handle is always the unified
+/// `DatasetHandle` enum).
 #[crate::polydat_node(category = RealData)]
 fn matching_profiles(
     group: crate::derive_support::Resolved<crate::derive_support::GroupResolver, DatasetHandle>,
     prefix: &str,
 ) -> String {
-    let group: &TestDataGroup = group_of(&group);
+    let group: &TestDataGroup = group.resolve_group();
     let all = group.profile_names();
     let mut matched: Vec<&str> = if prefix.is_empty() {
         all.iter().map(|s| s.as_str()).collect()
@@ -970,7 +974,7 @@ fn dataset_profile_name_at(
     group: crate::derive_support::Resolved<crate::derive_support::GroupResolver, DatasetHandle>,
     index: u64,
 ) -> String {
-    let group: &TestDataGroup = group_of(&group);
+    let group: &TestDataGroup = group.resolve_group();
     let names = group.profile_names();
     if names.is_empty() {
         String::new()
@@ -987,7 +991,7 @@ fn profile_base_count(
     group: crate::derive_support::Resolved<crate::derive_support::GroupResolver, DatasetHandle>,
     index: u64,
 ) -> u64 {
-    let group: &TestDataGroup = group_of(&group);
+    let group: &TestDataGroup = group.resolve_group();
     let names = group.profile_names();
     if names.is_empty() {
         0
@@ -1008,7 +1012,7 @@ fn profile_facets(
     group: crate::derive_support::Resolved<crate::derive_support::GroupResolver, DatasetHandle>,
     index: u64,
 ) -> String {
-    let group: &TestDataGroup = group_of(&group);
+    let group: &TestDataGroup = group.resolve_group();
     let names = group.profile_names();
     if names.is_empty() {
         String::new()
@@ -1052,12 +1056,13 @@ fn profile_facets(
 fn profile_partitions(
     group: crate::derive_support::Resolved<crate::derive_support::GroupResolver, DatasetHandle>,
     pattern: &str,
-) -> crate::derive_support::Ext<crate::iteration::cursor_partition::PartitionList> {
-    let group: &TestDataGroup = group_of(&group);
-    let parts = build_profile_partitions(group, pattern);
-    crate::derive_support::Ext(crate::iteration::cursor_partition::PartitionList::new(
-        parts,
-    ))
+) -> Ext<PartitionList> {
+    // The return is written `Ext<_>` by its bare name: the node macro
+    // recognizes an extension return by that spelling, and reads a
+    // path-qualified one as a handle, which leaves the node without a
+    // compiled form.
+    let group: &TestDataGroup = group.resolve_group();
+    Ext(PartitionList::new(build_profile_partitions(group, pattern)))
 }
 
 /// Build the cumulative size-tier partitions for the profiles of `group`
@@ -1144,7 +1149,7 @@ fn matching_profile_name_at(
     pattern: &str,
     index: u64,
 ) -> String {
-    let group: &TestDataGroup = group_of(&group);
+    let group: &TestDataGroup = group.resolve_group();
     // Same masked sequence `profile_partitions` uses (matching profiles
     // with a non-zero base count, canonical order), so `idx_of(p)` from a
     // partition resolves to the right tier name.
@@ -1161,8 +1166,8 @@ fn matching_profile_name_at(
 // =================================================================
 
 /// Eagerly download all facets for a dataset profile into the
-/// local cache, returning a `DatasetHandle::Group` handle
-/// that downstream facet accessors take as their first
+/// local cache, returning a dataset handle that every facet
+/// accessor and every group accessor takes as its first
 /// argument. After this returns, every subsequent facet read
 /// served by [`vectordata::TestDataView`] hits the merkle-
 /// verified mmap fast path with no further network traffic.
@@ -1173,24 +1178,24 @@ fn matching_profile_name_at(
 /// downstream accessors *consume* makes prebuffer part of
 /// the dataflow graph: DCE keeps the chain alive because
 /// `vector_at(prebuffered, q)` needs `prebuffered` to be
-/// resolvable, which forces evaluation. Bindings such as
+/// resolvable, which forces evaluation. A binding such as
 /// `init prebuffered = dataset_prebuffer(...)` whose result
-/// nothing reads would still be pruned (TODO: rationalise
-/// dangling-init dataflow as a separate followup; the
-/// established pattern is to thread the handle through).
+/// nothing reads is pruned, so a workload threads the handle
+/// through its accessors.
 ///
 /// `source` is the canonical `dataset:profile` string. The
-/// returned handle is a `Group` handle — accessors that take
-/// it route through the same `DatasetHandle::open(...)`
-/// resolver path used by other group-aware nodes
-/// (`dataset_facets`, `dataset_distance_function`, ...).
+/// returned handle names the dataset rather than one facet: a
+/// facet accessor opens its own facet of `source` from it
+/// ([`DatasetHandle::resolve_facet`]), and a group accessor
+/// (`dataset_facets`, `dataset_distance_function`, ...) reads
+/// the dataset's group ([`DatasetHandle::resolve_group`]).
 ///
-/// Errors during prebuffer surface via stderr; the node
-/// still returns the group handle so downstream binds don't
-/// fail with a "missing value" cascade — the operator's
-/// intent is "best effort warm-up", and a workload that
-/// wants strict guarantees can wrap this in a `required(...)`
-/// predicate or check facet readiness explicitly.
+/// A dataset that does not resolve yields no handle, and the
+/// resolve error goes to the audit log. A profile the dataset
+/// lacks, or a facet whose download fails, is logged there too
+/// and still yields the handle: prebuffering is a best-effort
+/// warm-up, and an accessor that then reads a missing facet
+/// fails with that facet's own error.
 #[crate::polydat_node(category = RealData)]
 fn dataset_prebuffer(source: &str) -> Option<Arc<dyn std::any::Any + Send + Sync>> {
     // The init-binding contract (SRD 11) means this runs exactly
@@ -1215,10 +1220,10 @@ fn dataset_prebuffer(source: &str) -> Option<Arc<dyn std::any::Any + Send + Sync
 /// Inner body of [`dataset_prebuffer`]. Runs **at most once
 /// per (source, process)** under the [`PREBUFFER_CACHE`] OnceLock.
 fn do_dataset_prebuffer_inner(source: &str) -> Result<Arc<DatasetHandle>, String> {
-    // Return a Group handle in every exit (success or error) so
-    // the downstream `*_at(prebuffered, q)` accessors can resolve.
-    // Failed prebuffer still hands back the group handle — the
-    // accessors will then HTTP-fall-through, and the operator
+    // Every exit after the group resolves returns a prebuffered
+    // handle, so the downstream `*_at(prebuffered, q)` accessors can
+    // resolve. A failed download still hands back the handle — the
+    // accessors then read through the transport, and the operator
     // sees the prebuffer error in the audit log.
     let group = match load_dataset_group(source) {
         Ok(g) => g,
@@ -1240,7 +1245,7 @@ fn do_dataset_prebuffer_inner(source: &str) -> Result<Arc<DatasetHandle>, String
                 "dataset_prebuffer: profile '{profile}' not found in '{source}'"
             ));
             return Ok(Arc::new(DatasetHandle::Prebuffered {
-                _group: group_for_handle,
+                group: group_for_handle,
                 source: source.to_string(),
             }));
         }
@@ -1352,7 +1357,7 @@ fn do_dataset_prebuffer_inner(source: &str) -> Result<Arc<DatasetHandle>, String
     }
     crate::library::support::audit::log_prebuffer_summary(source, profile, facet_count);
     Ok(Arc::new(DatasetHandle::Prebuffered {
-        _group: group_for_handle,
+        group: group_for_handle,
         source: source.to_string(),
     }))
 }
@@ -1680,7 +1685,7 @@ mod count_of_tests {
     #[test]
     fn a_handle_of_another_shape_counts_nothing() {
         let group_shaped = DatasetHandle::Prebuffered {
-            _group: match load_dataset_group("nonexistent:profile") {
+            group: match load_dataset_group("nonexistent:profile") {
                 Ok(g) => g,
                 // No dataset available in this environment: the
                 // fallback is still exercised through the match arm

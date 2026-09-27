@@ -6,5 +6,10 @@ profiles:
     base_count: 6
     base_vectors: base_vectors.fvec
     query_vectors: query_vectors.fvec
+    neighbor_indices: neighbor_indices.ivec
+    neighbor_distances: neighbor_distances.fvec
+    prefiltered_neighbor_indices: prefiltered_neighbor_indices.ivec
+    prefiltered_neighbor_distances: prefiltered_neighbor_distances.fvec
     metadata_content: metadata_content.u8
     metadata_predicates: metadata_predicates.i32
+    metadata_results: metadata_results.ivvec

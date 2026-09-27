@@ -6,17 +6,25 @@
 //! `tests/fixtures/vectordata` holds a catalog with one dataset,
 //! `polydat-tiny`, in the on-disk format the `vectordata` crate reads:
 //! six base vectors and three query vectors of dimension 3 (`fvec`),
-//! a `u8` metadata facet with one value per base vector, and an `i32`
-//! predicates facet with one value per query. The tests point the
-//! vectordata client configuration at that catalog and open the
-//! dataset by name, so every read goes through the production path:
-//! catalog resolution, `dataset.yaml`, and the typed and uniform
-//! readers over the files. The answers are the constants below, and
-//! every engine that builds the program gives them.
+//! a `u8` metadata facet with one value per base vector, an `i32`
+//! predicates facet with one value per query, the ground truth of
+//! each query (its two nearest base vectors and their squared
+//! Euclidean distances, and its nearest base vector among those whose
+//! metadata value is the query's predicate), and the variable-length
+//! `ivvec` metadata results naming, per query, every base vector whose
+//! metadata value is its predicate. The tests point the vectordata
+//! client configuration at a per-process copy of that catalog and open
+//! the dataset by name, so every read goes through the production
+//! path: catalog resolution, `dataset.yaml`, and the typed, uniform,
+//! and variable-length readers over the files. The answers are the
+//! constants below, and every engine that builds the program gives
+//! them.
 //!
 //! The binary facets are the output of [`facet_files`];
 //! `the_fixture_is_what_its_generator_writes` holds the checked-in
 //! bytes to it, and the ignored `write_the_fixture` writes them.
+//! `the_ground_truth_is_the_true_nearest_neighbors` holds the
+//! ground-truth constants to a brute-force search over the vectors.
 
 #![cfg(feature = "vectordata")]
 
@@ -36,6 +44,19 @@ const METADATA: [u8; 6] = [2, 0, 2, 5, 2, 0];
 const PREDICATES: [i32; 3] = [2, 5, 2];
 /// The dimension of every vector.
 const DIM: usize = 3;
+/// The two nearest base vectors of each query, nearest first.
+const NEIGHBORS: [[i32; 2]; 3] = [[0, 1], [1, 0], [1, 2]];
+/// The squared Euclidean distance from each query to each of its
+/// [`NEIGHBORS`].
+const DISTANCES: [[f32; 2]; 3] = [[0.5625, 1.0625], [0.5625, 2.0625], [2.0625, 4.5625]];
+/// The nearest base vector of each query among those whose metadata
+/// value is the query's predicate.
+const FILTERED_NEIGHBORS: [[i32; 1]; 3] = [[0], [3], [2]];
+/// The squared Euclidean distance from each query to its
+/// [`FILTERED_NEIGHBORS`].
+const FILTERED_DISTANCES: [[f32; 1]; 3] = [[0.5625], [15.5625], [4.5625]];
+/// The base vectors whose metadata value is each query's predicate.
+const METADATA_RESULTS: [&[i32]; 3] = [&[0, 2, 4], &[3], &[0, 2, 4]];
 
 /// Base vector `i`: `[i, i + 0.5, -i]`, exact in `f32`.
 fn base_vector(i: usize) -> Vec<f32> {
@@ -48,14 +69,20 @@ fn query_vector(q: usize) -> Vec<f32> {
     vec![q as f32 + 0.25, 1.0, -0.5]
 }
 
-/// Records in the `fvec` layout: each one a little-endian `i32`
-/// dimension followed by that many little-endian `f32` values.
-fn fvec(records: impl Iterator<Item = Vec<f32>>) -> Vec<u8> {
+/// Records in the `xvec` layout: each one a little-endian `i32`
+/// dimension followed by that many 4-byte little-endian values. The
+/// `fvec`, `ivec`, and `ivvec` files all have it; an `fvec` or `ivec`
+/// has one dimension throughout, and an `ivvec` a dimension per record.
+fn xvec<T: Copy, R: AsRef<[T]>>(
+    records: impl IntoIterator<Item = R>,
+    le: fn(T) -> [u8; 4],
+) -> Vec<u8> {
     let mut out = Vec::new();
     for r in records {
+        let r = r.as_ref();
         out.extend_from_slice(&(r.len() as i32).to_le_bytes());
         for x in r {
-            out.extend_from_slice(&x.to_le_bytes());
+            out.extend_from_slice(&le(*x));
         }
     }
     out
@@ -68,40 +95,125 @@ fn facet_files() -> Vec<(&'static str, Vec<u8>)> {
     vec![
         (
             "base_vectors.fvec",
-            fvec((0..METADATA.len()).map(base_vector)),
+            xvec((0..METADATA.len()).map(base_vector), f32::to_le_bytes),
         ),
         (
             "query_vectors.fvec",
-            fvec((0..PREDICATES.len()).map(query_vector)),
+            xvec((0..PREDICATES.len()).map(query_vector), f32::to_le_bytes),
         ),
         ("metadata_content.u8", METADATA.to_vec()),
         (
             "metadata_predicates.i32",
             PREDICATES.iter().flat_map(|p| p.to_le_bytes()).collect(),
         ),
+        ("neighbor_indices.ivec", xvec(NEIGHBORS, i32::to_le_bytes)),
+        ("neighbor_distances.fvec", xvec(DISTANCES, f32::to_le_bytes)),
+        (
+            "prefiltered_neighbor_indices.ivec",
+            xvec(FILTERED_NEIGHBORS, i32::to_le_bytes),
+        ),
+        (
+            "prefiltered_neighbor_distances.fvec",
+            xvec(FILTERED_DISTANCES, f32::to_le_bytes),
+        ),
+        (
+            "metadata_results.ivvec",
+            xvec(METADATA_RESULTS, i32::to_le_bytes),
+        ),
     ]
+}
+
+/// The squared Euclidean distance between two vectors.
+fn squared_l2(a: &[f32], b: &[f32]) -> f32 {
+    a.iter().zip(b).map(|(x, y)| (x - y) * (x - y)).sum()
+}
+
+/// The base vectors a query's ground truth ranks, `(distance, ordinal)`
+/// nearest first, among the ordinals `admit` accepts.
+fn ranked(q: usize, admit: impl Fn(usize) -> bool) -> Vec<(f32, i32)> {
+    let query = query_vector(q);
+    let mut all: Vec<(f32, i32)> = (0..METADATA.len())
+        .filter(|&i| admit(i))
+        .map(|i| (squared_l2(&base_vector(i), &query), i as i32))
+        .collect();
+    all.sort_by(|a, b| a.partial_cmp(b).expect("distances are finite"));
+    all
+}
+
+/// The ground-truth constants are what a brute-force search over the
+/// fixture's vectors finds, with no ties to break.
+#[test]
+fn the_ground_truth_is_the_true_nearest_neighbors() {
+    for q in 0..PREDICATES.len() {
+        let all = ranked(q, |_| true);
+        assert!(all[1].0 < all[2].0, "query {q}: a tie at the second place");
+        let top: Vec<(f32, i32)> = DISTANCES[q].iter().copied().zip(NEIGHBORS[q]).collect();
+        assert_eq!(all[..2], top[..], "query {q}");
+
+        let matching = |i: usize| i32::from(METADATA[i]) == PREDICATES[q];
+        let filtered = ranked(q, matching);
+        assert!(
+            filtered.len() < 2 || filtered[0].0 < filtered[1].0,
+            "query {q}: a tie at the first filtered place"
+        );
+        assert_eq!(
+            filtered[0],
+            (FILTERED_DISTANCES[q][0], FILTERED_NEIGHBORS[q][0]),
+            "query {q}"
+        );
+
+        let results: Vec<i32> = (0..METADATA.len())
+            .filter(|&i| matching(i))
+            .map(|i| i as i32)
+            .collect();
+        assert_eq!(results, METADATA_RESULTS[q], "query {q}");
+    }
 }
 
 fn fixture_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/vectordata")
 }
 
-/// Point the vectordata client at the fixture catalog, once per
-/// process.
+/// Copy the directory tree at `from` to `to`.
+fn copy_tree(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap_or_else(|e| panic!("create {}: {e}", to.display()));
+    for entry in std::fs::read_dir(from).unwrap_or_else(|e| panic!("read {}: {e}", from.display()))
+    {
+        let entry = entry.expect("a directory entry");
+        let target = to.join(entry.file_name());
+        if entry.path().is_dir() {
+            copy_tree(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), &target)
+                .unwrap_or_else(|e| panic!("copy {}: {e}", entry.path().display()));
+        }
+    }
+}
+
+/// Point the vectordata client at a copy of the fixture catalog, once
+/// per process.
 ///
 /// The client reads its catalog list from `catalogs.yaml` under
 /// `$VECTORDATA_HOME`, which is the crate's seam for isolating its
 /// configuration; the file goes in a directory of this process's own
-/// under the target's scratch space, naming the fixture catalog by
-/// absolute path. The suite runs one process per test under nextest,
-/// so the variable is set before any thread of this process reads it.
+/// under the target's scratch space, naming by absolute path a copy of
+/// the fixture catalog in the same directory. The copy is there
+/// because the variable-length reader writes an offset index
+/// (`IDXFOR__<file>.i32`) beside the file it opens, and a test process
+/// writes that only into its own copy. The suite runs one process per
+/// test under nextest, so the variable is set before any thread of
+/// this process reads it.
 fn use_fixture_catalog() {
     static HOME: OnceLock<PathBuf> = OnceLock::new();
     HOME.get_or_init(|| {
         let home = Path::new(env!("CARGO_TARGET_TMPDIR"))
             .join(format!("vectordata-home-{}", std::process::id()));
-        std::fs::create_dir_all(&home).expect("create the vectordata home");
-        let catalog = fixture_dir().to_string_lossy().replace('\\', "/");
+        let copy = home.join("catalog");
+        if copy.exists() {
+            std::fs::remove_dir_all(&copy).expect("clear the catalog copy");
+        }
+        copy_tree(&fixture_dir(), &copy);
+        let catalog = copy.to_string_lossy().replace('\\', "/");
         std::fs::write(
             home.join("catalogs.yaml"),
             format!("fixture: '{catalog}'\n"),
@@ -287,17 +399,44 @@ fn facet_accessors_read_the_fixture_through_handle_externs() {
     check_on_every_engine(src, &externs, &FACET_OUTPUTS, 8, facet_answer);
 }
 
-/// The facets the fixture's profile declares.
-const FIXTURE_FACETS: [&str; 4] = ["base", "query", "metadata_content", "metadata_predicates"];
+/// The facets the fixture's profile declares: every facet a dataset
+/// node reads.
+const FIXTURE_FACETS: [&str; 9] = [
+    "base",
+    "query",
+    "neighbor_indices",
+    "neighbor_distances",
+    "filtered_neighbor_indices",
+    "filtered_neighbor_distances",
+    "metadata_results",
+    "metadata_content",
+    "metadata_predicates",
+];
 
-/// Every facet accessor over a fixture facet: its name, the facet it
-/// resolves, and the arguments after the handle.
-const ACCESSORS: [(&str, &str, &str); 10] = [
+/// Every facet accessor: its name, the facet it resolves, and the
+/// arguments after the handle.
+const ACCESSORS: [(&str, &str, &str); 18] = [
     ("vector_at", "base", ", cycle"),
     ("vector_count", "base", ""),
     ("vector_dim", "base", ""),
     ("query_vector_at", "query", ", cycle"),
     ("query_count", "query", ""),
+    ("neighbor_indices_at", "neighbor_indices", ", cycle"),
+    ("neighbor_count", "neighbor_indices", ""),
+    ("neighbor_distances_at", "neighbor_distances", ", cycle"),
+    (
+        "filtered_neighbor_indices_at",
+        "filtered_neighbor_indices",
+        ", cycle",
+    ),
+    (
+        "filtered_neighbor_distances_at",
+        "filtered_neighbor_distances",
+        ", cycle",
+    ),
+    ("metadata_results_at", "metadata_results", ", cycle"),
+    ("metadata_results_len_at", "metadata_results", ", cycle"),
+    ("metadata_results_count", "metadata_results", ""),
     ("metadata_value_at", "metadata_content", ", cycle"),
     ("metadata_content_count", "metadata_content", ""),
     ("metadata_count_of", "metadata_content", ", to_i64(cycle)"),
@@ -309,52 +448,90 @@ const ACCESSORS: [(&str, &str, &str); 10] = [
     ),
 ];
 
-/// Every registered node that resolves a source string to a fixture
-/// facet is in [`ACCESSORS`], so the parity check below covers an
+/// Every group accessor: its name and the arguments after the handle.
+const GROUP_ACCESSORS: [(&str, &str); 10] = [
+    ("dataset_distance_function", ""),
+    ("dataset_facets", ""),
+    ("dataset_profile_count", ""),
+    ("dataset_profile_names", ""),
+    ("matching_profiles", ", \"\""),
+    ("dataset_profile_name_at", ", cycle"),
+    ("profile_base_count", ", cycle"),
+    ("profile_facets", ", cycle"),
+    ("profile_partitions", ", \"*\""),
+    ("matching_profile_name_at", ", \"*\", cycle"),
+];
+
+/// Every registered node that resolves a source string to a facet is
+/// in [`ACCESSORS`] with that facet, the facet is one the fixture
+/// declares, and every node that resolves one to the dataset group is
+/// in [`GROUP_ACCESSORS`], so the parity check below covers an
 /// accessor as soon as it is registered.
 #[test]
-fn every_facet_accessor_over_a_fixture_facet_is_checked() {
+fn every_dataset_accessor_is_checked() {
     for sig in polydat::dsl::registry::registry() {
-        let Some(DefaultResolver::Facet(facet)) = sig.default_resolver else {
-            continue;
-        };
-        if !FIXTURE_FACETS.contains(&facet) {
-            continue;
+        match sig.default_resolver {
+            Some(DefaultResolver::Facet(facet)) => {
+                assert!(
+                    FIXTURE_FACETS.contains(&facet),
+                    "{} resolves the {facet} facet, which the fixture lacks",
+                    sig.name
+                );
+                assert!(
+                    ACCESSORS
+                        .iter()
+                        .any(|(name, f, _)| *name == sig.name && *f == facet),
+                    "{} resolves the {facet} facet and is not in ACCESSORS",
+                    sig.name
+                );
+            }
+            Some(DefaultResolver::Group) => assert!(
+                GROUP_ACCESSORS.iter().any(|(name, _)| *name == sig.name),
+                "{} resolves the dataset group and is not in GROUP_ACCESSORS",
+                sig.name
+            ),
+            _ => {}
         }
-        assert!(
-            ACCESSORS
-                .iter()
-                .any(|(name, f, _)| *name == sig.name && *f == facet),
-            "{} resolves the {facet} facet and is not in ACCESSORS",
-            sig.name
-        );
     }
 }
 
 /// Every accessor answers the same on a prebuffered handle as on the
-/// handle `dataset_open` gives for its own facet, on every engine,
+/// handle `dataset_open` gives for its own facet, or for a group
+/// accessor the handle `dataset_group_open` gives, on every engine,
 /// with the handles resolved in the program and passed in as externs,
 /// and every engine gives the interpreter's answer. A prebuffered
 /// handle names the dataset rather than a facet, and each accessor
-/// resolves it to the facet it reads.
+/// resolves it to the facet or the group it reads.
 #[test]
 fn every_accessor_agrees_on_a_prebuffered_and_an_opened_handle() {
     let facet_handle = |facet: &str| format!("f_{facet}");
+    let calls = ACCESSORS
+        .iter()
+        .map(|(name, facet, rest)| (*name, facet_handle(facet), *rest))
+        .chain(
+            GROUP_ACCESSORS
+                .iter()
+                .map(|(name, rest)| (*name, "group".to_string(), *rest)),
+        );
     let mut body = String::new();
     let mut outputs: Vec<(String, String)> = Vec::new();
-    for (name, facet, rest) in ACCESSORS {
+    for (name, handle, rest) in calls {
         let (pre, open) = (format!("pre_{name}"), format!("open_{name}"));
         body.push_str(&format!("{pre} := {name}(pre{rest})\n"));
-        body.push_str(&format!(
-            "{open} := {name}({}{rest})\n",
-            facet_handle(facet)
-        ));
+        body.push_str(&format!("{open} := {name}({handle}{rest})\n"));
         outputs.push((pre, open));
     }
-    let handles: Vec<(String, String)> = std::iter::once((
-        "pre".to_string(),
-        format!("dataset_prebuffer(\"{SOURCE}\")"),
-    ))
+    let handles: Vec<(String, String)> = [
+        (
+            "pre".to_string(),
+            format!("dataset_prebuffer(\"{SOURCE}\")"),
+        ),
+        (
+            "group".to_string(),
+            format!("dataset_group_open(\"{SOURCE}\")"),
+        ),
+    ]
+    .into_iter()
     .chain(FIXTURE_FACETS.iter().map(|facet| {
         (
             facet_handle(facet),
@@ -452,6 +629,142 @@ fn vector_accessors_read_the_fixture() {
                query_n := query_count(q)\n\
                dim := vector_dim(b)\n";
     check_on_every_engine(src, &externs, &VECTOR_OUTPUTS, 8, vector_answer);
+}
+
+/// The ground-truth and metadata-results answers, by output name.
+fn ground_truth_answer(out: &str, c: u64) -> String {
+    let q = c as usize % PREDICATES.len();
+    let f32s = |v: &[f32]| Value::VecF32(SliceArc::from_vec(v.to_vec())).to_display_string();
+    let i32s = |v: &[i32]| Value::VecI32(SliceArc::from_vec(v.to_vec())).to_display_string();
+    match out {
+        "nn" => i32s(&NEIGHBORS[q]),
+        "nd" => f32s(&DISTANCES[q]),
+        "k" => NEIGHBORS[0].len().to_string(),
+        "fnn" => i32s(&FILTERED_NEIGHBORS[q]),
+        "fnd" => f32s(&FILTERED_DISTANCES[q]),
+        "results" => i32s(METADATA_RESULTS[q]),
+        "results_len" => METADATA_RESULTS[q].len().to_string(),
+        "results_n" => METADATA_RESULTS.len().to_string(),
+        other => panic!("no answer for {other}"),
+    }
+}
+
+const GROUND_TRUTH_OUTPUTS: [&str; 8] = [
+    "nn",
+    "nd",
+    "k",
+    "fnn",
+    "fnd",
+    "results",
+    "results_len",
+    "results_n",
+];
+
+/// The ground truth and the metadata results against the constants,
+/// through source strings and through handle externs. The query index
+/// wraps modulo the record count.
+#[test]
+fn ground_truth_accessors_read_the_fixture() {
+    let src = format!(
+        "input cycle: u64\n\
+         nn := neighbor_indices_at(\"{SOURCE}\", cycle)\n\
+         nd := neighbor_distances_at(\"{SOURCE}\", cycle)\n\
+         k := neighbor_count(\"{SOURCE}\")\n\
+         fnn := filtered_neighbor_indices_at(\"{SOURCE}\", cycle)\n\
+         fnd := filtered_neighbor_distances_at(\"{SOURCE}\", cycle)\n\
+         results := metadata_results_at(\"{SOURCE}\", cycle)\n\
+         results_len := metadata_results_len_at(\"{SOURCE}\", cycle)\n\
+         results_n := metadata_results_count(\"{SOURCE}\")\n"
+    );
+    check_on_every_engine(&src, &[], &GROUND_TRUTH_OUTPUTS, 6, ground_truth_answer);
+    let externs = opened(&[
+        (
+            "ni",
+            format!("dataset_open(\"{SOURCE}\", \"neighbor_indices\")"),
+        ),
+        (
+            "nd_h",
+            format!("dataset_open(\"{SOURCE}\", \"neighbor_distances\")"),
+        ),
+        (
+            "fni",
+            format!("dataset_open(\"{SOURCE}\", \"filtered_neighbor_indices\")"),
+        ),
+        (
+            "fnd_h",
+            format!("dataset_open(\"{SOURCE}\", \"filtered_neighbor_distances\")"),
+        ),
+        (
+            "mr",
+            format!("dataset_open(\"{SOURCE}\", \"metadata_results\")"),
+        ),
+    ]);
+    let src = "input cycle: u64\n\
+               extern ni: handle\n\
+               extern nd_h: handle\n\
+               extern fni: handle\n\
+               extern fnd_h: handle\n\
+               extern mr: handle\n\
+               nn := neighbor_indices_at(ni, cycle)\n\
+               nd := neighbor_distances_at(nd_h, cycle)\n\
+               k := neighbor_count(ni)\n\
+               fnn := filtered_neighbor_indices_at(fni, cycle)\n\
+               fnd := filtered_neighbor_distances_at(fnd_h, cycle)\n\
+               results := metadata_results_at(mr, cycle)\n\
+               results_len := metadata_results_len_at(mr, cycle)\n\
+               results_n := metadata_results_count(mr)\n";
+    check_on_every_engine(src, &externs, &GROUND_TRUTH_OUTPUTS, 6, ground_truth_answer);
+}
+
+/// The group answers the fixture's one profile determines, by output
+/// name.
+fn group_answer(out: &str, _c: u64) -> String {
+    match out {
+        "distance" => "EUCLIDEAN".to_string(),
+        "names" | "matching" | "name_at" | "tier_name" => "default".to_string(),
+        "profile_n" | "tiers" => "1".to_string(),
+        "base_n" | "tier_end" => METADATA.len().to_string(),
+        other => panic!("no answer for {other}"),
+    }
+}
+
+const GROUP_OUTPUTS: [&str; 9] = [
+    "distance",
+    "names",
+    "matching",
+    "name_at",
+    "tier_name",
+    "profile_n",
+    "base_n",
+    "tiers",
+    "tier_end",
+];
+
+/// The group accessors against the fixture's one profile, through a
+/// source string, a `dataset_group_open` handle, and a prebuffered
+/// handle.
+#[test]
+fn group_accessors_read_the_fixture() {
+    for group in [
+        format!("\"{SOURCE}\""),
+        format!("dataset_group_open(\"{SOURCE}\")"),
+        format!("dataset_prebuffer(\"{SOURCE}\")"),
+    ] {
+        let src = format!(
+            "input cycle: u64\n\
+             g := {group}\n\
+             distance := dataset_distance_function(g)\n\
+             names := dataset_profile_names(g)\n\
+             matching := matching_profiles(g, \"\")\n\
+             name_at := dataset_profile_name_at(g, cycle)\n\
+             tier_name := matching_profile_name_at(g, \"*\", cycle)\n\
+             profile_n := dataset_profile_count(g)\n\
+             base_n := profile_base_count(g, cycle)\n\
+             tiers := partition_count(profile_partitions(g, \"*\"))\n\
+             tier_end := end_of(partition_at(profile_partitions(g, \"*\"), 0))\n"
+        );
+        check_on_every_engine(&src, &[], &GROUP_OUTPUTS, 3, group_answer);
+    }
 }
 
 /// The checked-in facets are the bytes [`facet_files`] writes.

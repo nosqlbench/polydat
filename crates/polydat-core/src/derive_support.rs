@@ -619,7 +619,7 @@ impl<T: Wire> Wire for Config<T> {
 ///     group: Resolved<GroupResolver, DatasetHandle>,
 ///     prefix: &str,
 /// ) -> Vec<String> {
-///     let group: &TestDataGroup = group_of(&group);
+///     let group: &TestDataGroup = group.resolve_group();
 ///     // ... use group methods directly
 /// }
 /// ```

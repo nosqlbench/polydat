@@ -448,11 +448,11 @@ it rarely needs to, and
 |---|---|
 | `country_codes` | `country_codes(input) -> String` — country code (uniform selection over the full ISO list). |
 | `country_names` | `country_names(input) -> String` — country name (uniform selection over the full ISO list). |
-| `dataset_distance_function` | Return the dataset's distance function (e.g., "COSINE", "EUCLIDEAN"). Operates on the dataset group; takes a Group handle. |
-| `dataset_facets` | Report which facets are available for the default profile of a dataset group as a comma-separated list. Expects a Group handle. |
+| `dataset_distance_function` | Return the dataset's distance function (e.g., "COSINE", "EUCLIDEAN"). Operates on the dataset group; takes a group or prebuffered handle. |
+| `dataset_facets` | Report which facets are available for the default profile of a dataset group as a comma-separated list. Expects a group or prebuffered handle. |
 | `dataset_group_open` | `dataset_group_open(source: str) -> Handle` |
 | `dataset_open` | `dataset_open(source: str, facet: str) -> Handle` |
-| `dataset_prebuffer` | Eagerly download all facets for a dataset profile into the local cache, returning a `DatasetHandle::Group` handle that downstream facet accessors take as their first argument. After this returns, every subsequent facet read served by [`vectordata::TestDataView`] hits the merkle- verified mmap fast path with no further network traffic. |
+| `dataset_prebuffer` | Eagerly download all facets for a dataset profile into the local cache, returning a dataset handle that every facet accessor and every group accessor takes as its first argument. After this returns, every subsequent facet read served by [`vectordata::TestDataView`] hits the merkle- verified mmap fast path with no further network traffic. |
 | `dataset_profile_count` | Total number of profiles in a dataset group. |
 | `dataset_profile_name_at` | Look up a profile name by index from the canonical sorted list. |
 | `dataset_profile_names` | Comma-separated list of all profile names in canonical sort order (by base_count). |
@@ -478,11 +478,11 @@ it rarely needs to, and
 | `profile_base_count` | Return the base vector count for the profile at a given index. |
 | `profile_facets` | Return the comma-separated facet list for the profile at a given index. |
 | `profile_partitions` | Partition a dataset's vector space by its **profiles matching a pattern**, treated as cumulative size tiers (an SRD-71 partition source). One partition per masked profile, in canonical (base-count-ascending) order: partition `k` spans `[prev_masked_base_count, this_masked_base_count)` — exactly the vectors added at that tier — so a sweep's "load only the increment since the previously loaded set" is just the partition's `[start_of(p), end_of(p))`, and a partition inherently knows its start (no cross-iteration carry needed). `idx_of(p)` is the 0-based masked position (pairs with `matching_profile_name_at` to address the tier's own ground-truth facets); `count_of(p)` is the number of masked tiers; `base_extent` is the largest masked tier's size. |
-| `query_count` | Alias for [`VectorCount`] kept for clarity in workloads that distinguish base/query handles by name. |
-| `query_vector_at` | Access a query vector by index. Alias for [`VectorAt`] kept for clarity in workloads that distinguish base and query handles by name. |
+| `query_count` | Return the count of query vectors. Counts the query facet of a source string or prebuffered handle, as `vector_count` counts the base facet. |
+| `query_vector_at` | Access a query vector by index. Reads the query facet of a source string or prebuffered handle, as `vector_at` reads the base facet. |
 | `state_codes` | `state_codes(input) -> String` — US state abbreviation (uniform selection). |
-| `vector_at` | Access an `f32` vector by index, returning a typed `VecF32`. Works on any F32 handle (base or query facet). |
-| `vector_count` | Return the count of records in the facet a handle was opened against. This is the canonical "how many vectors / queries / neighbor-rows" accessor — `vector_count(base_handle)` for base vectors, `vector_count(query_handle)` for query vectors, etc. |
+| `vector_at` | Access an `f32` vector by index, returning a typed `VecF32`. Reads the base facet of a source string or prebuffered handle, and whatever facet an opened F32 handle names. |
+| `vector_count` | Return the count of records in the facet a handle was opened against. This is the canonical "how many vectors / queries / neighbor-rows" accessor — `vector_count(base_handle)` for base vectors, `vector_count(query_handle)` for query vectors, etc. A source string or prebuffered handle counts the base facet. |
 | `vector_dim` | Return the dimensionality (`f32` count per record) of a vector facet handle. |
 
 ### Regex (4)
