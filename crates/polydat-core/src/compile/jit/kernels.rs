@@ -164,8 +164,10 @@ pub(super) struct ConePlan {
     /// Beside each cone in `by_slot`, the slots no step writes that its
     /// units read, sorted: the inputs and externs a pull of the slot
     /// reads, through every member of every unit it runs, and the slot
-    /// itself when no step writes it. Only the refusal of an unset
-    /// extern consults it.
+    /// itself when no step writes it. The units split where extern
+    /// dependencies differ (`fusion_units::refine_by_externs`), so its
+    /// externs a host can clear are exactly the ones the slot depends
+    /// on. Only the refusal of an unset extern consults it.
     reads_by_slot: Vec<Option<std::sync::Arc<[usize]>>>,
 }
 

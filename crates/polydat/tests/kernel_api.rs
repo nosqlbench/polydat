@@ -299,6 +299,95 @@ fn only_a_pull_that_reads_an_unset_extern_is_refused() {
     }
 }
 
+/// A fusion unit's extern reads are the extern dependencies of every
+/// output it produces, so an unset extern answers for its dependents
+/// alone even where their producers are shared. `a` shares `t` with `b`
+/// but does not depend on `mode`, and every engine serves it by name and
+/// by index; `b` reads `mode` and `c` reads `b`, so both answer `None`,
+/// and pure native refuses each naming `mode`. Each program runs with
+/// `mode` declared without a default and with one a host clears.
+#[test]
+fn an_unset_extern_answers_for_its_dependents_and_not_their_unit_mates() {
+    const SHAPES: [&str; 4] = [
+        "input x: u64\nextern mode: u64\na := x + 1\nb := mode * 2\nc := b + 1\n",
+        "input x: u64\nextern mode: u64 = 3\na := x + 1\nb := mode * 2\nc := b + 1\n",
+        "input x: u64\nextern mode: u64\nt := hash(x)\na := hash(t)\n\
+         b := u64_mul(t, mode)\nc := u64_add(b, 1)\n",
+        "input x: u64\nextern mode: u64 = 3\nt := hash(x)\na := hash(t)\n\
+         b := u64_mul(t, mode)\nc := u64_add(b, 1)\n",
+    ];
+    let mut all = vec![
+        Engine::Interpreter(JitMode::Auto),
+        Engine::Closures(Provenance::PushPull),
+        Engine::Closures(Provenance::Raw),
+    ];
+    if cfg!(feature = "jit") {
+        all.push(Engine::Native(Provenance::PushPull));
+        all.push(Engine::Native(Provenance::Raw));
+        all.push(Engine::PureNative(Provenance::PushPull));
+        all.push(Engine::PureNative(Provenance::Raw));
+    }
+    for src in SHAPES {
+        let mut want = compile_polydat_with(src, Engine::Interpreter(JitMode::Off)).unwrap();
+        want.set_input("mode", Value::U64(5)).unwrap();
+        for engine in all.iter().copied() {
+            let mut k =
+                compile_polydat_with(src, engine).unwrap_or_else(|e| panic!("{engine}: {e}"));
+            let at = |name: &str| k.output_index(name).expect("declared");
+            let (a, b, c) = (at("a"), at("b"), at("c"));
+            k.set_input("mode", Value::None)
+                .unwrap_or_else(|e| panic!("{engine}: {e}"));
+            for x in [1u64, 2] {
+                k.set_inputs(&[x]);
+                want.set_inputs(&[x]);
+                for (name, index) in [("b", b), ("c", c)] {
+                    for by_index in [false, true] {
+                        let pulled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            if by_index {
+                                k.pull_at(index)
+                            } else {
+                                k.pull(name)
+                            }
+                        }));
+                        if matches!(engine, Engine::PureNative(_)) {
+                            let payload = pulled.expect_err("pure native refuses a reader");
+                            let text = payload
+                                .downcast_ref::<String>()
+                                .cloned()
+                                .or_else(|| {
+                                    payload.downcast_ref::<&str>().map(|s| (*s).to_string())
+                                })
+                                .unwrap_or_default();
+                            assert!(
+                                text.contains("extern 'mode'"),
+                                "{engine}: {name}: {src}: {text}"
+                            );
+                        } else {
+                            assert_eq!(
+                                pulled.unwrap_or_else(|_| panic!("{engine}: {name}: a None")),
+                                Value::None,
+                                "{engine}: {name}: {src}"
+                            );
+                        }
+                    }
+                }
+                let served = want.pull("a");
+                assert_eq!(k.pull("a"), served, "{engine}: a by name: {src}");
+                assert_eq!(k.pull_at(a), served, "{engine}: a by index: {src}");
+            }
+            k.set_input("mode", Value::U64(5))
+                .unwrap_or_else(|e| panic!("{engine}: {e}"));
+            for name in ["a", "b", "c"] {
+                assert_eq!(
+                    k.pull(name),
+                    want.pull(name),
+                    "{engine}: {name} once set: {src}"
+                );
+            }
+        }
+    }
+}
+
 /// One write rule, on every engine and by either road.
 ///
 /// A write into a declared slot either matches the slot's type or is

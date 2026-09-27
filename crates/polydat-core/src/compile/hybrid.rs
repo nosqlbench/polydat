@@ -924,6 +924,10 @@ pub(crate) fn build_hybrid(
     // ones (the segment would be never current and rerun them at every
     // round). A side channel never joins any other node (it would fire
     // whenever the segment ran, rather than when its own inputs changed).
+    // A node that reads an extern a host can clear never joins one that
+    // does not depend on it: a `None` on a segment's boundary makes every
+    // output of the segment `None`, and it must reach only the outputs
+    // that depend on the extern.
     let is_side = |k: usize| matches!(nodes[k].purity(), crate::ast::Purity::SideChannel { .. });
     let preds: Vec<Vec<usize>> = wiring
         .iter()
@@ -953,6 +957,17 @@ pub(crate) fn build_hybrid(
     let class: Vec<u64> = (0..nodes.len())
         .map(|k| constant[k] as u64 | (volatile[k] as u64) << 1)
         .collect();
+    let unset_read = externs.unset_read_slots();
+    let reads: Vec<Vec<usize>> = inputs_read
+        .iter()
+        .map(|ins| {
+            ins.iter()
+                .map(|&c| input_starts[c])
+                .filter(|s| unset_read.binary_search(s).is_ok())
+                .collect()
+        })
+        .collect();
+    let class = crate::compile::fusion_units::refine_by_externs(&preds, &reads, &class);
     let plan = crate::compile::fusion_units::plan_units(
         &preds,
         &inputs_read,

@@ -20,6 +20,10 @@
 //! and a producer of the unit, a cycle between units. A component that
 //! is not convex is split where a path that leaves it comes back, and
 //! nowhere else (`convex_pieces`).
+//!
+//! Every member of a unit depends on the same externs a host can leave
+//! with no value (`refine_by_externs`), so an unset extern answers for
+//! the outputs that depend on it and for no unit-mate of theirs.
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
@@ -80,6 +84,46 @@ fn lumped_components(
         by_root.entry(find(&mut parent, i)).or_default().push(i);
     }
     by_root.into_values().collect()
+}
+
+/// `class` refined by extern dependency: two nodes keep one class only
+/// when they had one and depend, directly or through their producers, on
+/// the same set of externs. `reads[i]` are the externs node `i` reads
+/// that a host can leave with no value, by any consistent id, and
+/// `preds` lists each node's producers, every one earlier than the node.
+///
+/// A unit runs whole, and before it every unit that feeds any of its
+/// members, so a pull of any output reads every extern its unit and
+/// those units read. Where every member of a unit depends on the same
+/// externs, that set is the extern dependencies of each output the unit
+/// produces, and an unset extern answers for exactly the outputs that
+/// depend on it on every engine (engines.md §3.3). A node reading an
+/// extern never shares a unit with one that does not depend on it, and
+/// a program without such externs keeps its classes unchanged. `class`
+/// keeps its low 32 bits, so a `lump` over them reads it alike.
+pub(crate) fn refine_by_externs(
+    preds: &[Vec<usize>],
+    reads: &[Vec<usize>],
+    class: &[u64],
+) -> Vec<u64> {
+    let mut depends: Vec<Vec<usize>> = Vec::with_capacity(preds.len());
+    let mut ids: std::collections::HashMap<Vec<usize>, u64> = Default::default();
+    ids.insert(Vec::new(), 0);
+    let mut refined = Vec::with_capacity(preds.len());
+    for (i, ps) in preds.iter().enumerate() {
+        let mut set: Vec<usize> = reads.get(i).cloned().unwrap_or_default();
+        for &p in ps {
+            debug_assert!(p < i, "a producer precedes its consumer");
+            set.extend_from_slice(&depends[p]);
+        }
+        set.sort_unstable();
+        set.dedup();
+        let next = ids.len() as u64;
+        let id = *ids.entry(set.clone()).or_insert(next);
+        refined.push(class[i] | id << 32);
+        depends.push(set);
+    }
+    refined
 }
 
 /// True when no path leaves `members` and comes back: walk the consumer
@@ -421,5 +465,35 @@ mod tests {
             &|_| false,
         );
         assert_eq!(p.units.len(), 2);
+    }
+
+    /// Nodes share a unit only where they depend on the same externs.
+    /// 0 reads extern 7 and 2 and 3 depend on it through 0; 1 and 4
+    /// depend on none; 5 reads extern 8. The wires 1 → 3 and 1 → 5 cross
+    /// dependency sets and are cut, and a node that depends on no extern
+    /// keeps its class.
+    #[test]
+    fn a_unit_depends_on_one_set_of_externs() {
+        let preds = vec![vec![], vec![], vec![0], vec![1, 2], vec![1], vec![1]];
+        let reads = vec![vec![7], vec![], vec![], vec![], vec![], vec![8]];
+        let class = refine_by_externs(&preds, &reads, &[1, 1, 1, 1, 1, 1]);
+        assert_eq!(class[1], 1);
+        assert_eq!(class[4], 1);
+        assert_eq!(class[0], class[3]);
+        assert_eq!(class[0] & 0xffff_ffff, 1);
+        let p = plan_units(
+            &preds,
+            &vec![Vec::new(); 6],
+            &[true; 6],
+            &class,
+            &[0, 1, 2, 3, 4, 5],
+            &|_| false,
+        );
+        assert_eq!(p.units.len(), 3, "{:?}", p.units);
+        assert_eq!(p.unit_of[0], p.unit_of[2]);
+        assert_eq!(p.unit_of[0], p.unit_of[3]);
+        assert_eq!(p.unit_of[1], p.unit_of[4]);
+        assert_ne!(p.unit_of[1], p.unit_of[3]);
+        assert_ne!(p.unit_of[1], p.unit_of[5]);
     }
 }

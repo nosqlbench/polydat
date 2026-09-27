@@ -92,6 +92,42 @@ impl ExternSlot {
     }
 }
 
+/// Whether only initialization reads the extern `name`: a const's slot
+/// or a const's fallback input.
+fn init_only(name: &str, is_const: bool, inits: &[crate::kernel::ConstInit]) -> bool {
+    is_const
+        || inits
+            .iter()
+            .any(|c| c.slot == name || c.fallback.as_deref() == Some(name))
+}
+
+/// Whether the extern `name` is a `shared` register with a computed
+/// start.
+fn register_start(name: &str, inits: &[crate::kernel::ConstInit]) -> bool {
+    inits.iter().any(|c| c.register && c.slot == name)
+}
+
+/// Per input of a program, whether it is an extern native code reads
+/// that a host can leave with no value: the rule of
+/// [`Externs::unset_read_slots`], by input index, for an engine that
+/// fuses before it has an extern set.
+#[cfg(feature = "jit")]
+pub(crate) fn unset_read_inputs(
+    input_defs: &[InputDef],
+    coord_count: usize,
+    inits: &[crate::kernel::ConstInit],
+) -> Vec<bool> {
+    input_defs
+        .iter()
+        .enumerate()
+        .map(|(i, def)| {
+            let is_const = def.kind == crate::kernel::InputKind::Const;
+            i >= coord_count
+                && (!init_only(&def.name, is_const, inits) || register_start(&def.name, inits))
+        })
+        .collect()
+}
+
 /// The parts of an extern set that only a *composed* program uses:
 /// what a binder asks of a parent, and the cells a descendant reads
 /// through. A program nobody built a subscope under carries all three
@@ -609,11 +645,8 @@ impl Externs {
     pub(crate) fn set_const_inits(&mut self, inits: &[crate::kernel::ConstInit]) {
         self.scope.const_inits = inits.to_vec();
         for s in &mut self.slots {
-            s.register_start = inits.iter().any(|c| c.register && c.slot == s.name);
-            s.init_only = s.is_const
-                || inits
-                    .iter()
-                    .any(|c| c.slot == s.name || c.fallback.as_deref() == Some(s.name.as_str()));
+            s.register_start = register_start(&s.name, inits);
+            s.init_only = init_only(&s.name, s.is_const, inits);
         }
         self.recount_unset();
     }
@@ -719,6 +752,26 @@ impl Externs {
             .filter(|s| s.value == Value::None)
             .map(|s| s.slot)
             .collect()
+    }
+
+    /// Every buffer slot of the externs native code reads that a host
+    /// can leave with no value, sorted: each extern but a const's slot
+    /// and a const's fallback input, with a `shared` register that has a
+    /// computed start among them, as it counts once seeded. What the
+    /// fusion units split by (`fusion_units::refine_by_externs`).
+    #[cfg(feature = "jit")]
+    pub(crate) fn unset_read_slots(&self) -> Vec<usize> {
+        let mut slots: Vec<usize> = self
+            .slots
+            .iter()
+            .filter(|s| !s.init_only || s.register_start)
+            .flat_map(|s| {
+                let pair = s.ty.slot_color() == crate::ast::SlotColor::Ref2;
+                std::iter::once(s.slot).chain(pair.then_some(s.slot + 1))
+            })
+            .collect();
+        slots.sort_unstable();
+        slots
     }
 
     /// The cursors the program declares, with their partitions where

@@ -356,7 +356,29 @@ mod jit_impl {
                     .collect()
             })
             .collect();
+        // Nor does a node that reads an extern a host can clear share
+        // one with a node that does not depend on it: a `None` on a
+        // cone's boundary makes every output of the cone `None`, and it
+        // must reach only the outputs that depend on the extern.
         let class: Vec<u64> = volatile.iter().map(|&v| v as u64).collect();
+        let unset_read = crate::compile::externs::unset_read_inputs(
+            &dag.input_defs,
+            dag.coord_count,
+            &dag.const_inits,
+        );
+        let reads: Vec<Vec<usize>> = dag
+            .wiring
+            .iter()
+            .map(|w| {
+                w.iter()
+                    .filter_map(|src| match src {
+                        WireSource::Input(c) if unset_read.get(*c) == Some(&true) => Some(*c),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .collect();
+        let class = crate::compile::fusion_units::refine_by_externs(&preds, &reads, &class);
         let components = crate::compile::fusion_units::components(&preds, &eligible, &class);
 
         // Consumer adjacency over the ORIGINAL node graph — the
@@ -368,6 +390,14 @@ mod jit_impl {
             }
         }
 
+        // Every node's output types, read before the members leave the
+        // graph: a cone's boundary input may be an output of a node an
+        // earlier cone took.
+        let out_types: Vec<Vec<PortType>> = dag
+            .nodes
+            .iter()
+            .map(|nd| nd.meta().outs.iter().map(|p| p.typ).collect())
+            .collect();
         let mut nodes_opt: Vec<Option<Box<dyn PolydatNode>>> = std::mem::take(&mut dag.nodes)
             .into_iter()
             .map(Some)
@@ -399,7 +429,7 @@ mod jit_impl {
                 );
                 continue;
             }
-            let Some(plan) = plan_cone(dag, members, &nodes_opt) else {
+            let Some(plan) = plan_cone(dag, members, &nodes_opt, &out_types) else {
                 // plan_cone audit-logs its own rejection reason;
                 // the component stays on the interpreter.
                 continue;
@@ -441,10 +471,13 @@ mod jit_impl {
 
     /// Compute the cone's boundaries; `None` rejects the component
     /// (dead outputs, oversized boundary, unmarshalable edge type).
+    /// `out_types` are every node's output types, the graph's before any
+    /// cone took its members.
     fn plan_cone(
         dag: &ResolvedDag,
         members: &[usize],
         nodes: &[Option<Box<dyn PolydatNode>>],
+        out_types: &[Vec<PortType>],
     ) -> Option<ConePlan> {
         let is_member = |j: usize| members.binary_search(&j).is_ok();
 
@@ -458,10 +491,10 @@ mod jit_impl {
             let wire_types: Vec<PortType> = dag.wiring[m]
                 .iter()
                 .map(|src| match src {
-                    WireSource::Input(i) => Some(dag.input_defs[*i].port_type),
-                    WireSource::NodeOutput(j, p) => Some(nodes[*j].as_ref()?.meta().outs[*p].typ),
+                    WireSource::Input(i) => dag.input_defs[*i].port_type,
+                    WireSource::NodeOutput(j, p) => out_types[*j][*p],
                 })
-                .collect::<Option<_>>()?;
+                .collect();
             // A node that lowers as a slot call runs the kit built for
             // its wire types (compiled_handles.md §6), so its advertised
             // port types do not bind its wires: a variadic that inspects
@@ -577,8 +610,8 @@ mod jit_impl {
         }
         let out_types: Vec<PortType> = boundary_out
             .iter()
-            .map(|(j, p)| nodes[*j].as_ref().map(|nd| nd.meta().outs[*p].typ))
-            .collect::<Option<_>>()?;
+            .map(|(j, p)| out_types[*j][*p])
+            .collect();
         if out_types.iter().any(|t| !scalar_ok(*t)) {
             audit_skip(members.len(), "a boundary output type is not marshalable");
             return None;

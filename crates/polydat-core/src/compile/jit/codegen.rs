@@ -2222,12 +2222,17 @@ pub fn compile_jit_raw(
 /// The fusion units of a pure-native program (compile::fusion_units):
 /// steps joined where one reads another's output, a volatile step never
 /// with a pure one, and a step marked `alone` (a side channel) in a unit
-/// of its own. The steps' own order is the preferred one.
+/// of its own. A step never shares a unit with one that depends on other
+/// externs of `unset_read`, the slots of the externs a host can leave
+/// with no value, sorted: a pull is refused for an unset extern only
+/// where its output depends on it. The steps' own order is the
+/// preferred one.
 fn pure_units(
     steps: &[(JitOp, Vec<usize>, Vec<usize>)],
     total_slots: usize,
     alone: &[bool],
     volatile: &[usize],
+    unset_read: &[usize],
 ) -> crate::compile::fusion_units::UnitPlan {
     let mut producer = vec![usize::MAX; total_slots + 1];
     for (i, (_, _, outs)) in steps.iter().enumerate() {
@@ -2268,6 +2273,16 @@ fn pure_units(
             class[v] = 1;
         }
     }
+    let reads: Vec<Vec<usize>> = inputs_read
+        .iter()
+        .map(|ins| {
+            ins.iter()
+                .copied()
+                .filter(|s| unset_read.binary_search(s).is_ok())
+                .collect()
+        })
+        .collect();
+    let class = crate::compile::fusion_units::refine_by_externs(&preds, &reads, &class);
     let rank: Vec<usize> = (0..steps.len()).collect();
     crate::compile::fusion_units::plan_units(&preds, &inputs_read, &fusible, &class, &rank, &|_| {
         false
@@ -2307,7 +2322,13 @@ pub(crate) fn compile_jit_raw_with(
 ) -> Result<JitKernelRaw, String> {
     // The dispatched entry, as push-pull has: raw differs in what a
     // write dirties (every unit, a new round) and not in how a pull runs.
-    let plan = pure_units(&steps, total_slots, &alone, &volatile);
+    let plan = pure_units(
+        &steps,
+        total_slots,
+        &alone,
+        &volatile,
+        &externs.unset_read_slots(),
+    );
     let (_, entry, code) = compile_jit_impl(&steps, Some(&plan.units), Some(total_slots))?;
     let cones =
         super::kernels::ConePlan::new(&steps, total_slots, &plan, output_map.values().copied());
@@ -2359,7 +2380,13 @@ pub(crate) fn compile_jit_push_pull(
     alone: Vec<bool>,
 ) -> Result<JitKernelPushPull, String> {
     let buffer_len = total_slots;
-    let plan = pure_units(&steps, total_slots, &alone, &volatile);
+    let plan = pure_units(
+        &steps,
+        total_slots,
+        &alone,
+        &volatile,
+        &externs.unset_read_slots(),
+    );
     let (_, entry, code) = compile_jit_impl(&steps, Some(&plan.units), Some(total_slots))?;
     let step_outs: Vec<&[usize]> = steps.iter().map(|(_, _, o)| o.as_slice()).collect();
     let slot_provenance =
@@ -5547,5 +5574,63 @@ mod tests {
         // Happy path still works.
         kernel.eval(&[42]);
         assert_eq!(kernel.get("out"), 42);
+    }
+
+    /// The engine ladder's graph (crates/polydat/examples), with each
+    /// `mod` as a `mul` and `u64_xor` as a `u64_add`, the nodes of the
+    /// same shape this crate's test library has.
+    const LADDER: &str = "input cycle: u64\ninput tenant_seed: u64\ninput operation_seed: u64\n\
+        seeded_cycle := u64_add(cycle, tenant_seed)\nidentity_entropy := hash(seeded_cycle)\n\
+        account_id := mul(identity_entropy, 10000000)\n\
+        route_seed := u64_add(account_id, operation_seed)\nroute_entropy := hash(route_seed)\n\
+        shard := mul(route_entropy, 64)\n\
+        payload_seed := u64_add(identity_entropy, operation_seed)\n\
+        payload_entropy := hash(payload_seed)\npayload_class := mul(payload_entropy, 8)\n\
+        token_seed := u64_add(route_entropy, payload_entropy)\nevent_token := hash(token_seed)\n";
+
+    /// Pure native's units and native's segments for `src`.
+    fn unit_counts(src: &str) -> (usize, usize) {
+        let asm = || crate::dsl::compile::compile_polydat_to_assembler(src).unwrap();
+        let pure = asm()
+            .try_compile_pure_jit_raw()
+            .unwrap()
+            .core
+            .cones
+            .unit_count();
+        let native = crate::dsl::compile::compile_polydat_with(
+            src,
+            crate::compile::select::Engine::Native(crate::compile::select::Provenance::Raw),
+        )
+        .unwrap()
+        .plan()
+        .native_segments;
+        (pure, native)
+    }
+
+    /// A program with no extern plans the units it always did: the
+    /// ladder's graph is one unit on pure native and one segment on
+    /// native. An extern splits the nodes that depend on it from those
+    /// that do not, on both: with `operation_seed` an extern, the
+    /// identity path, which does not read it, is a unit of its own.
+    #[test]
+    fn only_an_extern_splits_a_unit() {
+        assert_eq!(unit_counts(LADDER), (1, 1));
+        let extern_seed = LADDER.replace(
+            "input operation_seed: u64",
+            "extern operation_seed: u64 = 7",
+        );
+        assert_eq!(unit_counts(&extern_seed), (2, 2));
+        // `b` reads `mode` and `c` reads `b`; `t` and `a` depend on
+        // neither, so they are one unit and `b` and `c` another.
+        let shape = "input x: u64\nMODE\nt := hash(x)\na := hash(t)\n\
+                     b := u64_add(t, mode)\nc := add(b, 1)\n";
+        assert_eq!(
+            unit_counts(&shape.replace("MODE", "input mode: u64")),
+            (1, 1)
+        );
+        assert_eq!(
+            unit_counts(&shape.replace("MODE", "extern mode: u64 = 3")),
+            (2, 2)
+        );
     }
 }
