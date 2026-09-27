@@ -27,6 +27,8 @@ fn engines() -> Vec<Engine> {
     if cfg!(feature = "jit") {
         all.push(Engine::Native(Provenance::PushPull));
         all.push(Engine::Native(Provenance::Raw));
+        all.push(Engine::PureNative(Provenance::PushPull));
+        all.push(Engine::PureNative(Provenance::Raw));
     }
     all
 }

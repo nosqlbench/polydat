@@ -254,6 +254,8 @@ fn a_projection_body_runs_on_the_engine_of_the_kernel_rendering() {
     ];
     if cfg!(feature = "jit") {
         engines.push(Engine::Native(Provenance::Auto));
+        engines.push(Engine::PureNative(Provenance::PushPull));
+        engines.push(Engine::PureNative(Provenance::Raw));
     }
     for engine in engines {
         let mut k: Box<dyn Kernel> = polydat::dsl::compile_polydat_with(src, engine).unwrap();

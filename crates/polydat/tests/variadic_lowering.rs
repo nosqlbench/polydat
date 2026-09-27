@@ -88,6 +88,30 @@ fn agree(
     p3
 }
 
+/// P1 and pure native, both provenance modes, agree on every output
+/// over `cycles`, through the `Kernel` trait: each node, the tile render
+/// included, runs as a slot call inside the one native function.
+fn pure_agrees(src: &str, outputs: &[&str], cycles: u64) {
+    use polydat::{Engine, Kernel, Provenance};
+    let mut p1 = kernel(src, JitMode::Off);
+    for mode in [Provenance::PushPull, Provenance::Raw] {
+        let engine = Engine::PureNative(mode);
+        let mut pure = polydat::dsl::compile::compile_polydat_with(src, engine)
+            .unwrap_or_else(|e| panic!("{engine}: {e}\n{src}"));
+        for c in 0..cycles {
+            p1.set_inputs(&[c]);
+            pure.set_inputs(&[c]);
+            for out in outputs {
+                assert_eq!(
+                    Kernel::pull(pure.as_mut(), out).to_display_string(),
+                    p1.pull_ref(out).to_display_string(),
+                    "{engine}: {out} at cycle {c}\n{src}"
+                );
+            }
+        }
+    }
+}
+
 const WIRES: &str = "input cycle: u64\nh := hash(cycle)\nf := to_f64(h) / 7.0\nb := u64_gt(h, 5)\ns := __u64_to_string(h)\n";
 
 #[test]
@@ -182,14 +206,17 @@ fn tiles_without_projections_render_natively_and_agree() {
         "{WIRES}tile d : json := {{\"n\": ${{h}}, \"f\": ${{f | .2}}, \"s\": ${{s}}, \"t\": ${{b}}, \"in\": \"x-${{h}}-${{s}}\", \"hex\": ${{h | x}}}}\n"
     );
     agree(&json, &["d"], 6, &["tile_render"], &[]);
+    pure_agrees(&json, &["d"], 6);
     let csv = format!(
         "{WIRES}c := \"x,y\"\ntile r : csv := \"${{h}},${{f | .1}},${{s}},${{c}},${{b: bool}}\"\n"
     );
     agree(&csv, &["r"], 6, &["tile_render"], &[]);
+    pure_agrees(&csv, &["r"], 6);
     let text = format!(
         "{WIRES}tile t : text := \"hello ${{s}} #${{h | 06}} @if b {{yes}} @else {{no}}\"\n"
     );
     agree(&text, &["t"], 6, &["tile_render"], &[]);
+    pure_agrees(&text, &["t"], 6);
 }
 
 #[test]
@@ -202,6 +229,7 @@ fn a_hole_that_names_a_kernel_input_still_renders_natively() {
     let p3 = agree(src, &["d"], 5, &["tile_render"], &[]);
     let n = cones(&p3).len();
     assert!(n >= 1, "{:?}", cones(&p3));
+    pure_agrees(src, &["d"], 5);
 }
 
 #[test]
@@ -212,6 +240,7 @@ fn a_tile_with_a_projection_renders_natively_and_agrees() {
     let src =
         "input cycle: u64\ntile t : text := \"${cycle}: @for k in 1..4 sep \\\",\\\" {${k}}\"\n";
     agree(src, &["t"], 3, &["tile_render"], &[]);
+    pure_agrees(src, &["t"], 3);
 }
 
 /// A projection body with its own fusable work: the body program's
@@ -224,6 +253,7 @@ fn a_projection_body_with_cones_renders_inside_a_render() {
     p3.set_inputs(&[2]);
     let text = p3.pull_ref("t").to_display_string();
     assert!(text.contains("\"hk\":"), "{text}");
+    pure_agrees(src, &["t"], 5);
 }
 
 /// The same tile on the hybrid kernel: the render node runs as a

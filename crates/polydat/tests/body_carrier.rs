@@ -60,12 +60,16 @@ fn a_projection_renders_the_same_on_every_engine() {
     let src = "input cycle: u64\n\
                base := mod(cycle, 5)\n\
                tile rows : csv := <<<@for k in 1..4 sep \",\" {${k}:${base}}>>>\n";
-    let engines = [
+    let mut engines = vec![
         Engine::Interpreter(JitMode::Off),
         Engine::Interpreter(JitMode::Auto),
         Engine::Closures(Provenance::Raw),
         Engine::Native(Provenance::PushPull),
     ];
+    if cfg!(feature = "jit") {
+        engines.push(Engine::PureNative(Provenance::PushPull));
+        engines.push(Engine::PureNative(Provenance::Raw));
+    }
     let mut answers = Vec::new();
     for engine in engines {
         let mut k = polydat::dsl::compile::compile_polydat_with(src, engine)
