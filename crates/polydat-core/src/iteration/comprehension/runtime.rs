@@ -71,7 +71,7 @@ use std::sync::Arc;
 use crate::ast::Value;
 use crate::iteration::comprehension::ast::Comprehension;
 use crate::iteration::comprehension::cardinality::{Interval, ProductMeasure};
-use crate::iteration::comprehension::eval_source::{EvalContext, SourceEval};
+use crate::iteration::comprehension::eval_source::{EvalContext, NoneRead, evaluate_reading};
 use crate::iteration::comprehension::measure::AxisMeasure;
 use crate::iteration::comprehension::metadata::{IndexFn, cycle_length};
 use crate::iteration::comprehension::predicate::CompiledPredicate;
@@ -450,6 +450,12 @@ impl Indexed {
 ///
 /// An empty stream is a legal value of the algebra, so none of these
 /// is an error. What a host does about one is the host's policy.
+///
+/// `reads_none` says why an evaluation yielded nothing when the reason
+/// is a read of None (comprehension_forms.md §5 V3, none_semantics.md
+/// Rule 1): the names the source read, after composition, that nothing
+/// binds or that are bound to None. A host that holds an unbound name
+/// in a source as an error reads it here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClauseYield {
     /// The clause's element name.
@@ -460,6 +466,11 @@ pub struct ClauseYield {
     pub evaluations: usize,
     /// How many values it produced, summed over those evaluations.
     pub values: usize,
+    /// Each name whose read made an evaluation of the source yield
+    /// nothing, with whether it was unbound or bound to None: over
+    /// every evaluation, once each, ordered by [`NoneRead`]'s order.
+    /// Empty when no evaluation read None.
+    pub reads_none: Vec<NoneRead>,
 }
 
 /// A traversal's tuples, and what each leaf clause yielded reaching
@@ -515,6 +526,7 @@ impl<'a> EvalState<'a> {
                     source: source.to_text(),
                     evaluations: 0,
                     values: 0,
+                    reads_none: Vec::new(),
                 });
             }
             Comprehension::Cartesian { children }
@@ -530,14 +542,21 @@ impl<'a> EvalState<'a> {
         }
     }
 
-    /// Record the evaluations of a leaf and the values each produced:
-    /// one evaluation standing for `mult` identical ones.
-    fn record_yield(&mut self, source: &Source, values: usize) {
+    /// Record the evaluations of a leaf, the values each produced, and
+    /// the names whose reads of None made it yield nothing: one
+    /// evaluation standing for `mult` identical ones.
+    fn record_yield(&mut self, source: &Source, values: usize, reads_none: Vec<NoneRead>) {
         if let Some(&i) = self.by_leaf.get(&(std::ptr::from_ref(source) as usize)) {
-            self.yields[i].evaluations = self.yields[i].evaluations.saturating_add(self.mult);
-            self.yields[i].values = self.yields[i]
+            let clause = &mut self.yields[i];
+            clause.evaluations = clause.evaluations.saturating_add(self.mult);
+            clause.values = clause
                 .values
                 .saturating_add(values.saturating_mul(self.mult));
+            if !reads_none.is_empty() {
+                clause.reads_none.extend(reads_none);
+                clause.reads_none.sort();
+                clause.reads_none.dedup();
+            }
         }
     }
 }
@@ -624,24 +643,25 @@ impl EvalState<'_> {
             scope: self.scope,
             prefix,
         };
-        let evaluated = source.evaluate(Some(&ctx)).map_err(|e| match e {
-            crate::iteration::comprehension::eval_source::EvalError::EvalFailed {
-                var,
-                source,
-                message,
-            } => RuntimeError::SourceEval {
-                var,
-                source,
-                message,
-            },
-            crate::iteration::comprehension::eval_source::EvalError::NeedsContext => {
-                RuntimeError::UnsupportedShape(format!(
-                    "clause '{name}': source requires kernel context but evaluator \
+        let (evaluated, reads_none) =
+            evaluate_reading(source, Some(&ctx)).map_err(|e| match e {
+                crate::iteration::comprehension::eval_source::EvalError::EvalFailed {
+                    var,
+                    source,
+                    message,
+                } => RuntimeError::SourceEval {
+                    var,
+                    source,
+                    message,
+                },
+                crate::iteration::comprehension::eval_source::EvalError::NeedsContext => {
+                    RuntimeError::UnsupportedShape(format!(
+                        "clause '{name}': source requires kernel context but evaluator \
                              provided none — internal bug in runtime walker"
-                ))
-            }
-        })?;
-        self.record_yield(source, evaluated.values.len());
+                    ))
+                }
+            })?;
+        self.record_yield(source, evaluated.values.len(), reads_none);
         Ok(evaluated)
     }
 
@@ -1032,7 +1052,7 @@ impl EvalState<'_> {
                 bound.push(name.clone());
             }
             Comprehension::Clause { name, source } => {
-                let references = c.referenced_source_names();
+                let references = c.source_names_read();
                 if let Some(dep) = bound.iter().find(|b| references.contains(*b)) {
                     return Err(RuntimeError::UnsupportedShape(format!(
                         "clause '{name}' references '{dep}' beside a continuous axis; \
@@ -1230,7 +1250,7 @@ impl EvalState<'_> {
                 } else {
                     ((i128::from(*hi) - i128::from(*lo)) as u128).div_ceil(step as u128) as u64
                 };
-                self.record_yield(source, len as usize);
+                self.record_yield(source, len as usize, Vec::new());
                 ClauseValues::Range { lo: *lo, step, len }
             }
             _ => {
@@ -1400,17 +1420,14 @@ impl EvalState<'_> {
     }
 }
 
-/// `true` when a child of a cartesian references, in its sources, a
-/// name that an earlier child binds: the child's tuples then depend on
-/// the tuple before it (comprehension_forms.md §3.2).
+/// `true` when a child of a cartesian reads, in its sources, a name that
+/// an earlier child binds, a composed name's leaf included: the child's
+/// tuples then depend on the tuple before it (comprehension_forms.md
+/// §3.2).
 fn references_an_earlier_axis(children: &[Comprehension]) -> bool {
     let mut bound: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for child in children {
-        if child
-            .referenced_source_names()
-            .iter()
-            .any(|n| bound.contains(n))
-        {
+        if child.source_names_read().iter().any(|n| bound.contains(n)) {
             return true;
         }
         collect_clause_names(child, &mut bound);

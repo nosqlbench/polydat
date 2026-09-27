@@ -131,11 +131,11 @@ fn flatten_source(
     }
 }
 
-/// Whether `source` references a coordinate the comprehension binds or
-/// a name `scope` does not resolve.
+/// Whether `source` reads a coordinate the comprehension binds or a
+/// name `scope` does not resolve ([`Source::names_read`]).
 fn context_required(source: &Source, scope: &dyn Lookup, bound: &BTreeSet<String>) -> bool {
     source
-        .referenced_names()
+        .names_read()
         .iter()
         .any(|n| bound.contains(n) || scope.lookup(n).is_none())
 }

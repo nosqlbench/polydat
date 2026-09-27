@@ -86,7 +86,7 @@ pub use streamer_value::StreamerValue;
 // resolves to the algebra type; same for Source, ZipMode, etc.
 pub use ast::Comprehension;
 pub use cardinality::{CardinalityClass, Hybrid, Interval, MeasureName, ProductMeasure};
-pub use eval_source::{EvalClass, EvalContext, EvalError, EvaluatedSource, SourceEval};
+pub use eval_source::{EvalClass, EvalContext, EvalError, EvaluatedSource, NoneRead, SourceEval};
 pub use metadata::{IndexFn, Materialization, Metadata, NaturalOrder};
 pub use runtime::{
     ClauseYield, EvaluatedIteration, IndexedTuples, evaluate_for_iteration,

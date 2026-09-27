@@ -238,21 +238,29 @@ fn write_unresolved(
     reads: &[NameRead],
     lax: bool,
 ) -> std::fmt::Result {
-    let each: Vec<String> = reads
+    // `all(<cursor>)` reads the cursor's two extent outputs; each names
+    // the cursor, once.
+    let mut each: Vec<String> = reads
         .iter()
-        .map(|r| format!("`{}` read by {}", r.name, r.site))
+        .map(
+            |r| match polydat_grammar::comprehension::source::cursor_of_extent_name(&r.name) {
+                Some(cursor) => format!("the extent of cursor `{cursor}` read by {}", r.site),
+                None => format!("`{}` read by {}", r.name, r.site),
+            },
+        )
         .collect();
+    each.dedup();
     write!(
         f,
         "V3: {} {} bound neither by the comprehension nor by the scope it is evaluated in",
         each.join(", "),
-        if reads.len() == 1 { "is" } else { "are" }
+        if each.len() == 1 { "is" } else { "are" }
     )?;
     if lax {
         write!(
             f,
             ", so {} None, as a name nothing binds does outside `pragma strict`",
-            if reads.len() == 1 {
+            if each.len() == 1 {
                 "it reads"
             } else {
                 "each reads"
@@ -433,7 +441,11 @@ impl Surface<'_> {
 /// Every name `c` reads where it does not bind it, in tree order, once
 /// per place it is read (comprehension_forms.md §5 V3).
 ///
-/// A clause's source reads with the names the clauses before it in every
+/// A clause's source reads the names evaluating it reads
+/// ([`Source::names_read`](crate::iteration::comprehension::source::Source::names_read)):
+/// a composed name's leaves, whose composition is read when the source
+/// is evaluated, and a cursor's extent for `all(<cursor>)`. It reads
+/// with the names the clauses before it in every
 /// enclosing cartesian bind in front of it, the dependent product of
 /// §3.2; a zip's and a union's operands see only what their enclosing
 /// cartesians bind. A filter's predicate reads each tuple of its input,
@@ -449,7 +461,7 @@ pub fn outer_reads(c: &Comprehension) -> Vec<NameRead> {
 fn collect_outer_reads(c: &Comprehension, before: &mut Vec<String>, out: &mut Vec<NameRead>) {
     match c {
         Comprehension::Clause { name, source } => {
-            for read in source.referenced_names() {
+            for read in source.names_read() {
                 if !before.contains(&read) {
                     out.push(NameRead {
                         name: read,

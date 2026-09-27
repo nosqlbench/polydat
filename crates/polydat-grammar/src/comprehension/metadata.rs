@@ -1039,59 +1039,11 @@ fn detect_dependent_sources(children: &[Comprehension]) -> bool {
     false
 }
 
-/// Extract `{name}` interpolation references from source
-/// expressions in a comprehension subtree. Sources that carry
-/// raw strings (`Generator`, `WorkloadParamList`) are walked;
-/// `Literal`, `IntRange`, `ContinuousInterval`, `Distribution`
-/// contain no string references.
-fn collect_source_name_references(c: &Comprehension) -> Vec<String> {
-    let mut out = Vec::new();
-    walk_source_refs(c, &mut out);
-    out
-}
-
-fn walk_source_refs(c: &Comprehension, out: &mut Vec<String>) {
-    match c {
-        Comprehension::Clause { source, .. } => {
-            extract_source_refs(source, out);
-        }
-        Comprehension::Cartesian { children }
-        | Comprehension::Zip { children, .. }
-        | Comprehension::Union { children } => {
-            for c in children {
-                walk_source_refs(c, out);
-            }
-        }
-        Comprehension::Filter { child, .. } | Comprehension::Order { child, .. } => {
-            walk_source_refs(child, out);
-        }
-    }
-}
-
-fn extract_source_refs(source: &Source, out: &mut Vec<String>) {
-    let s = match source {
-        Source::Generator { expr, .. } => expr.as_str(),
-        Source::WorkloadParamList { name, .. } => name.as_str(),
-        _ => return,
-    };
-    let bytes = s.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'{'
-            && let Some(close) = s[i + 1..].find('}')
-        {
-            let name = s[i + 1..i + 1 + close].trim();
-            if !name.is_empty()
-                && name.chars().all(|c| c.is_alphanumeric() || c == '_')
-                && !out.contains(&name.to_string())
-            {
-                out.push(name.to_string());
-            }
-            i += close + 2;
-            continue;
-        }
-        i += 1;
-    }
+/// The names the sources of a comprehension subtree read when they are
+/// evaluated ([`Source::names_read`]), a composed name's leaves
+/// included.
+fn collect_source_name_references(c: &Comprehension) -> std::collections::BTreeSet<String> {
+    c.source_names_read()
 }
 
 #[cfg(test)]

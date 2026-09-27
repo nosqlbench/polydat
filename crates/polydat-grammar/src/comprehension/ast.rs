@@ -197,6 +197,16 @@ impl Comprehension {
         out
     }
 
+    /// The names every source in this subtree reads when it is evaluated
+    /// ([`Source::names_read`]): a composed name's leaves, and a cursor's
+    /// extent outputs for `all(<cursor>)`. What a clause's tuples depend
+    /// on, and what a traversal's scope supplies to its sources.
+    pub fn source_names_read(&self) -> std::collections::BTreeSet<String> {
+        let mut out = std::collections::BTreeSet::new();
+        self.walk_sources(&mut |source| out.extend(source.names_read()));
+        out
+    }
+
     /// Visit every leaf [`Source`] in this comprehension subtree.
     fn walk_sources(&self, visit: &mut impl FnMut(&super::source::Source)) {
         match self {

@@ -41,13 +41,33 @@ use polydat::iteration::comprehension::validate::{
     Mode, Surface, ValidationError, ValidationWarning, check_names, unresolved_names, validate,
 };
 
+/// The traversals' scope: an input, a cursor whose extent `all(row)`
+/// reads, and the lists composed names read (`{k_{k}_limits}`,
+/// `{t_{n}_vals}`), some compositions of which nothing binds.
 fn scope() -> polydat::kernel::PolydatKernel {
-    polydat::dsl::compile_polydat_interpreter("input cycle: u64\n").unwrap()
+    polydat::dsl::compile_polydat_interpreter(SCOPE).unwrap()
 }
+
+const SCOPE: &str = "input cycle: u64\ncursor row = range(0, 5)\n\
+                     const k_values := \"1, 10\"\nconst k_1_limits := \"1, 2\"\n\
+                     const k_10_limits := \"10, 20, 30\"\n\
+                     const t_0_vals := \"0, 1\"\nconst t_2_vals := \"5\"\n\
+                     const t_s1_vals := \"7, 8\"\n";
 
 /// The names [`scope`] has.
 fn in_scope(name: &str) -> bool {
-    name == "cycle"
+    matches!(
+        name,
+        "cycle"
+            | "__cursor_extent_row_start"
+            | "__cursor_extent_row_end"
+            | "k_values"
+            | "k_1_limits"
+            | "k_10_limits"
+            | "t_0_vals"
+            | "t_2_vals"
+            | "t_s1_vals"
+    )
 }
 
 /// Assert the two evaluators agree on `ast`, and the streaming surface
@@ -501,6 +521,18 @@ fn generator(name: &str, expr: &str) -> Comprehension {
     )
 }
 
+/// A clause over the list a `{name}` placeholder reads, `name` composed
+/// or not.
+fn param(name: &str, list: &str) -> Comprehension {
+    Comprehension::clause(
+        name,
+        Source::WorkloadParamList {
+            name: list.into(),
+            len_hint: None,
+        },
+    )
+}
+
 fn unit(name: &str) -> Comprehension {
     Comprehension::clause(
         name,
@@ -633,6 +665,26 @@ fn every_shape_indexes_as_it_materializes() {
             Comprehension::order(unit("u"), StrategyName::Halton, Some(2)),
             Comprehension::order(unit("u"), StrategyName::Sobol, Some(3)),
         ]),
+        // `all(<cursor>)` reads the cursor's extent (§10.9.1), and over
+        // a cursor nothing declares reads None.
+        generator("xval", "all(row)"),
+        generator("xval", "all(zz)"),
+        // A composed name reads what it composes to with the earlier
+        // axis bound, braced and bare-prior; a composition nothing binds
+        // yields nothing for its tuple (§5 V3).
+        Comprehension::cartesian(vec![param("k", "k_values"), param("limit", "k_{k}_limits")]),
+        Comprehension::cartesian(vec![
+            generator("k", "k_values"),
+            param("limit", "k_{k}_limits"),
+        ]),
+        Comprehension::cartesian(vec![ints("n", &[0, 1, 2]), param("v", "t_{n}_vals")]),
+        Comprehension::filter(
+            Comprehension::cartesian(vec![
+                generator("xval", "all(row)"),
+                param("limit", "k_{xval}_limits"),
+            ]),
+            "{limit} != 2",
+        ),
     ];
     for strategy in [
         StrategyName::Halton,
@@ -683,6 +735,28 @@ fn every_shape_indexes_as_it_materializes() {
     }
     for shape in &shapes {
         assert_equivalent(shape, &scope);
+    }
+    // The cursor and composed-name forms yield what they read.
+    for (shape, count) in [
+        (generator("xval", "all(row)"), 5),
+        (generator("xval", "all(zz)"), 0),
+        (
+            Comprehension::cartesian(vec![param("k", "k_values"), param("limit", "k_{k}_limits")]),
+            5,
+        ),
+        (
+            Comprehension::cartesian(vec![
+                generator("k", "k_values"),
+                param("limit", "k_{k}_limits"),
+            ]),
+            5,
+        ),
+        (
+            Comprehension::cartesian(vec![ints("n", &[0, 1, 2]), param("v", "t_{n}_vals")]),
+            3,
+        ),
+    ] {
+        assert_eq!(assert_equivalent(&shape, &scope), count, "{shape:?}");
     }
 }
 
@@ -1008,6 +1082,8 @@ struct Shapes {
     called: u64,
     /// Filters whose predicate reads a name its input does not bind.
     outer: u64,
+    /// Sources over a cursor's extent or a composed name.
+    composed: u64,
 }
 
 impl Shapes {
@@ -1036,6 +1112,25 @@ impl Shapes {
                 Source::Generator {
                     expr: "0..{zz}".into(),
                     cardinality_hint: None,
+                }
+            }
+            2 if self.rng.coin(15) => {
+                // A cursor's extent (§10.9.1).
+                self.composed += 1;
+                Source::Generator {
+                    expr: "all(row)".into(),
+                    cardinality_hint: None,
+                }
+            }
+            2 if !bound.is_empty() && self.rng.coin(30) => {
+                // A name composed over an earlier axis: the scope binds
+                // some compositions and not others, which read None and
+                // yield nothing (§5 V3).
+                self.composed += 1;
+                let over = &bound[self.rng.below(bound.len() as u64) as usize];
+                Source::WorkloadParamList {
+                    name: format!("t_{{{over}}}_vals"),
+                    len_hint: None,
                 }
             }
             2 if !bound.is_empty() => {
@@ -1216,6 +1311,7 @@ fn generated_shapes_index_as_they_materialize() {
     let (mut compared, mut tuples, mut emptied, mut mismatched) = (0u64, 0usize, 0u64, 0u64);
     let (mut streamed_tuples, mut sampled, mut called) = (0usize, 0u64, 0u64);
     let (mut outer, mut chained) = (0u64, 0u64);
+    let (mut composed, mut composed_none) = (0u64, 0u64);
     for case in 0..cases {
         let mut shapes = Shapes {
             rng: Rng(0x5EED_0000 + case),
@@ -1224,6 +1320,7 @@ fn generated_shapes_index_as_they_materialize() {
             sampled: 0,
             called: 0,
             outer: 0,
+            composed: 0,
         };
         let shape = shapes.shape(3, &[]);
         if bound(&shape) > 4000 {
@@ -1236,6 +1333,16 @@ fn generated_shapes_index_as_they_materialize() {
         sampled += shapes.sampled;
         called += shapes.called;
         outer += shapes.outer;
+        composed += shapes.composed;
+        if shapes.composed > 0
+            && let Ok(reported) = evaluate_for_iteration_reported(&shape, &scope)
+        {
+            composed_none += reported
+                .clauses
+                .iter()
+                .filter(|c| !c.reads_none.is_empty())
+                .count() as u64;
+        }
         if found.tuples > 0 && order_chains(&shape) > 0 {
             chained += 1;
         }
@@ -1253,7 +1360,16 @@ fn generated_shapes_index_as_they_materialize() {
     eprintln!(
         "{compared} shapes compared, {tuples} tuples, {streamed_tuples} through streams, \
          {chained} yielding through order chains, {outer} predicates and sources reading outer \
-         names"
+         names, {composed} sources over a cursor or a composed name, {composed_none} clauses \
+         reading None"
+    );
+    assert!(
+        composed >= cases / 20,
+        "only {composed} compared sources read a cursor or a composed name"
+    );
+    assert!(
+        composed_none >= cases / 100,
+        "only {composed_none} compared clauses reported a read of None"
     );
     assert!(compared > cases / 2, "only {compared} of {cases} compared");
     assert!(tuples > 0, "no generated shape produced a tuple");

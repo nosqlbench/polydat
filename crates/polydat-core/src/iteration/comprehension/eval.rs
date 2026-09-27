@@ -40,6 +40,7 @@
 use std::collections::HashMap;
 
 use crate::ast::Value;
+use crate::iteration::comprehension::eval_source::NoneRead;
 use crate::kernel::interp::Lookup;
 use crate::kernel::interp::interpolate_with_lookup;
 
@@ -62,30 +63,166 @@ use crate::kernel::interp::interpolate_with_lookup;
 ///
 /// Errors propagate from interpolation (unresolved placeholder,
 /// runaway round count, etc.) — those are the user-facing
-/// actionable diagnostics.
+/// actionable diagnostics. A name the source reads that nothing binds
+/// is such an error here; a name bound to None reads None, and the
+/// source yields nothing (none_semantics.md Rule 1). A clause source
+/// evaluated as part of a comprehension reads an unbound name as None
+/// too (comprehension_forms.md §5 V3).
 pub fn evaluate_spec(
     spec_text: &str,
     kernel: &dyn Lookup,
 ) -> Result<Vec<Value>, crate::dsl::compile::EmbeddingError> {
-    evaluate_spec_internal(spec_text, kernel).map_err(|msg| {
-        if let Some(rest) = msg.strip_prefix("interpolation: unresolved placeholder '{")
-            && let Some(end) = rest.find('}')
+    match evaluate_spec_internal(spec_text, kernel) {
+        Ok(values) => Ok(values),
+        Err(SpecError::ReadsNone { reads, .. })
+            if reads.iter().all(|r| matches!(r, NoneRead::BoundNone(_))) =>
         {
-            let name = rest[..end].to_string();
-            return crate::dsl::compile::EmbeddingError::UnresolvedPlaceholder {
-                name,
-                source: spec_text.to_string(),
-            };
+            Ok(Vec::new())
         }
-        crate::dsl::compile::EmbeddingError::Parse {
+        Err(e) => Err(spec_error(spec_text, String::from(e))),
+    }
+}
+
+/// The error [`evaluate_spec`] reports for `spec_text` failing with
+/// `message`.
+pub(crate) fn spec_error(spec_text: &str, message: String) -> crate::dsl::compile::EmbeddingError {
+    if let Some(rest) = message.strip_prefix("interpolation: unresolved placeholder '{")
+        && let Some(end) = rest.find('}')
+    {
+        return crate::dsl::compile::EmbeddingError::UnresolvedPlaceholder {
+            name: rest[..end].to_string(),
             source: spec_text.to_string(),
-            message: msg,
-            position: None,
+        };
+    }
+    crate::dsl::compile::EmbeddingError::Parse {
+        source: spec_text.to_string(),
+        message,
+        position: None,
+    }
+}
+
+/// Why a source's spec text yields no values.
+#[derive(Debug, Clone)]
+pub(crate) enum SpecError {
+    /// The source read names that nothing binds or that are bound to
+    /// None, after composition, so it reads None and yields nothing
+    /// (none_semantics.md Rule 1, comprehension_forms.md §5 V3).
+    /// `message` is the diagnostic an API that refuses such a read
+    /// reports ([`evaluate_spec`]).
+    ReadsNone {
+        /// Each such name, once, with how it read None.
+        reads: Vec<NoneRead>,
+        /// The diagnostic for the first read.
+        message: String,
+    },
+    /// Evaluating the text failed.
+    Failed(String),
+}
+
+impl From<String> for SpecError {
+    fn from(message: String) -> Self {
+        SpecError::Failed(message)
+    }
+}
+
+impl From<SpecError> for String {
+    fn from(e: SpecError) -> Self {
+        match e {
+            SpecError::ReadsNone { message, .. } | SpecError::Failed(message) => message,
         }
+    }
+}
+
+/// What `kernel` binds `name` to, for a source that reads it: a name
+/// nothing binds, or one bound to None, is [`SpecError::ReadsNone`],
+/// with `unbound` the diagnostic for the first.
+fn read_name(
+    kernel: &dyn Lookup,
+    name: &str,
+    unbound: impl FnOnce() -> String,
+) -> Result<Value, SpecError> {
+    match kernel.lookup(name) {
+        Some(Value::None) => Err(SpecError::ReadsNone {
+            reads: vec![NoneRead::BoundNone(name.to_string())],
+            message: format!("`{name}` is None"),
+        }),
+        Some(value) => Ok(value),
+        None => Err(SpecError::ReadsNone {
+            reads: vec![NoneRead::Unbound(name.to_string())],
+            message: unbound(),
+        }),
+    }
+}
+
+/// Interpolate `text`'s `{name}` placeholders against `kernel`, inside
+/// out, so a composed name (`{k_{k}_limits}`) reads the name its leaves
+/// compose to. A placeholder that names what nothing binds, or what is
+/// bound to None, is a read of None ([`SpecError::ReadsNone`]); any
+/// other failure is [`SpecError::Failed`].
+fn interpolate_reading(text: &str, kernel: &dyn Lookup) -> Result<String, SpecError> {
+    let reads = std::cell::RefCell::new(Vec::new());
+    let interpolated = interpolate_with_lookup(text, |name| match kernel.lookup(name) {
+        Some(Value::None) => {
+            reads
+                .borrow_mut()
+                .push(NoneRead::BoundNone(name.to_string()));
+            None
+        }
+        Some(value) => Some(value.to_display_string()),
+        None => {
+            if is_name_path(name) {
+                reads.borrow_mut().push(NoneRead::Unbound(name.to_string()));
+            }
+            None
+        }
+    });
+    interpolated.map_err(|message| {
+        let mut reads = reads.into_inner();
+        if reads.is_empty() {
+            return SpecError::Failed(message);
+        }
+        reads.sort();
+        reads.dedup();
+        SpecError::ReadsNone { reads, message }
     })
 }
 
-fn evaluate_spec_internal(spec_text: &str, kernel: &dyn Lookup) -> Result<Vec<Value>, String> {
+/// Whether a placeholder body is a name — an identifier, or a dotted
+/// path (`q.cursor.idx`, or `t_0.5_vals` composed from a float) — rather
+/// than an expression or a format specifier.
+fn is_name_path(body: &str) -> bool {
+    let mut chars = body.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+}
+
+/// The names `text` reads as free identifiers of the language that
+/// `kernel` does not bind or binds to None, as [`SpecError::ReadsNone`]
+/// with `message`; [`SpecError::Failed`] with `message` when there are
+/// none. An evaluation of `text` that failed reading such a name failed
+/// because the name reads None.
+fn failure_reading(text: &str, kernel: &dyn Lookup, message: String) -> SpecError {
+    let reads: Vec<NoneRead> = polydat_grammar::refs::referenced_names(text)
+        .into_iter()
+        .filter_map(|name| match kernel.lookup(&name) {
+            None => Some(NoneRead::Unbound(name)),
+            Some(Value::None) => Some(NoneRead::BoundNone(name)),
+            Some(_) => None,
+        })
+        .collect();
+    if reads.is_empty() {
+        SpecError::Failed(message)
+    } else {
+        SpecError::ReadsNone { reads, message }
+    }
+}
+
+pub(crate) fn evaluate_spec_internal(
+    spec_text: &str,
+    kernel: &dyn Lookup,
+) -> Result<Vec<Value>, SpecError> {
     if let Some(values) = try_eval_all_cursor(spec_text, kernel)? {
         return Ok(values);
     }
@@ -95,68 +232,79 @@ fn evaluate_spec_internal(spec_text: &str, kernel: &dyn Lookup) -> Result<Vec<Va
     // `{name}` interpolation path uses — and its value is peeled or
     // wrapped by `iteration_interior`, so `mnc in mnc_values` works
     // identically to `mnc in {mnc_values}`. A bare name that does
-    // not resolve is a hard error with a quoting hint; it is never
-    // bound as its own name-string.
+    // not resolve reads None, and the diagnostic an API that refuses
+    // it reports carries a quoting hint; it is never bound as its own
+    // name-string.
     if is_single_bare_ident(spec_text) {
-        return match kernel.lookup(spec_text.trim()) {
-            Some(v) => Ok(
-                match crate::iteration::comprehension::source_values::iteration_interior(&v) {
-                    Some(interior) => interior,
-                    None => vec![v],
-                },
-            ),
-            None => Err(format!(
+        let src = spec_text.trim();
+        let v = read_name(kernel, src, || {
+            format!(
                 "comprehension source `{src}` did not resolve to a value — no \
                  wire, const, param, or outer iter-var by that name is in scope \
                  here. If you meant the literal string \"{src}\", quote it: \
-                 `\"{src}\"`.",
-                src = spec_text.trim(),
-            )),
-        };
+                 `\"{src}\"`."
+            )
+        })?;
+        return Ok(
+            match crate::iteration::comprehension::source_values::iteration_interior(&v) {
+                Some(interior) => interior,
+                None => vec![v],
+            },
+        );
     }
-    let interpolated = crate::kernel::interp::interpolate_with_lookup(spec_text, |name| {
-        kernel.lookup(name).map(|v| v.to_display_string())
-    })?;
+    let interpolated = interpolate_reading(spec_text, kernel)?;
+    // What the interpolated text evaluates to. A failure that reads a
+    // free name the scope does not bind, or binds to None, is that read
+    // of None.
+    evaluate_interpolated(&interpolated, kernel).map_err(|e| match e {
+        SpecError::Failed(message) => failure_reading(&interpolated, kernel, message),
+        reads_none => reads_none,
+    })
+}
+
+/// [`evaluate_spec_internal`] past interpolation: the source forms over
+/// the interpolated text.
+fn evaluate_interpolated(interpolated: &str, kernel: &dyn Lookup) -> Result<Vec<Value>, SpecError> {
     // List comprehension sugar `[e1, e2…, e3]`
     // (comprehension_forms.md §3.1.3). Resolved after interpolation so `{name}` placeholders inside
     // elements expand first; before the const-eval fallthrough so
     // bracket structure isn't misparsed as an array-literal expr.
-    if let Some(values) = try_eval_bracket_list(&interpolated, kernel)? {
+    if let Some(values) = try_eval_bracket_list(interpolated, kernel)? {
         return Ok(values);
     }
     // Range operator (`a..b`, `a..=b`, `a..b..s`, `a..=b..s`;
     // comprehension_forms.md §3.1, polydat_grammar.md §16.2). Bounds
     // and step are Polydat const expressions evaluated at this
     // (post-interpolation) point.
-    if let Some(values) = try_eval_range(&interpolated, kernel.ledger())? {
+    if let Some(values) = try_eval_range(interpolated, kernel.ledger())? {
         return Ok(values);
     }
     // Named generators (comprehension_forms.md §3.1).
-    if let Some(values) = try_eval_generator(&interpolated)? {
+    if let Some(values) = try_eval_generator(interpolated)? {
         return Ok(values);
     }
     // Set operators on lists (comprehension_forms.md §3.1).
-    if let Some(values) = try_eval_setop(&interpolated, kernel)? {
+    if let Some(values) = try_eval_setop(interpolated, kernel)? {
         return Ok(values);
     }
     // Sequencer expansions (bucket / concat_seq / interval_seq;
     // comprehension_forms.md §3.1).
-    if let Some(values) = try_eval_sequencer(&interpolated, kernel)? {
+    if let Some(values) = try_eval_sequencer(interpolated, kernel)? {
         return Ok(values);
     }
     // Kernel-aware partition sources — `subdivide(outer, n)` where
     // `outer` is a partition iter-var bound by an enclosing clause
     // (cursor_partitions.md §7.1).
-    if let Some(values) = try_eval_partition_call(&interpolated, kernel)? {
+    if let Some(values) = try_eval_partition_call(interpolated, kernel, false)? {
         return Ok(values);
     }
     // `<param>.partitions` in comprehension position resolves the
     // param's spec string and expands it into its PartitionList
     // (cursor_partitions.md §7.1).
-    if let Some(values) = try_eval_param_partitions(&interpolated, kernel)? {
+    if let Some(values) = try_eval_param_partitions(interpolated, kernel, false)? {
         return Ok(values);
     }
-    match crate::dsl::compile::eval_const_expr_for(&interpolated, kernel.ledger()) {
+    match crate::dsl::compile::eval_const_expr_for(interpolated, kernel.ledger()) {
         // Relaxed source resolution (comprehension_forms.md §3.1.2):
         // a resolved value is peeled one level if it has an iteration
         // interior (native vector, JSON array, PartitionList, or a
@@ -185,12 +333,12 @@ fn evaluate_spec_internal(spec_text: &str, kernel: &dyn Lookup) -> Result<Vec<Va
             // reference, resolved or refused above. An unbracketed
             // bare label list (`a, b, c`) keeps string-token striping
             // (comprehension_forms.md §3.1.4).
-            if looks_like_literal_list(&interpolated) {
+            if looks_like_literal_list(interpolated) {
                 // A bare unquoted token list strips on the same
                 // separator rule as a string comprehension.
                 Ok(
                     crate::iteration::comprehension::source_values::strip_string_tokens(
-                        &interpolated,
+                        interpolated,
                     ),
                 )
             } else {
@@ -201,7 +349,8 @@ fn evaluate_spec_internal(spec_text: &str, kernel: &dyn Lookup) -> Result<Vec<Va
                      it should contain only literal values separated by commas. \
                      If it was meant as an expression, fix the underlying \
                      evaluation error."
-                ))
+                )
+                .into())
             }
         }
     }
@@ -220,7 +369,7 @@ fn evaluate_spec_internal(spec_text: &str, kernel: &dyn Lookup) -> Result<Vec<Va
 /// kernel), a quoted token is a string, numbers/bools are
 /// literals. Returns `Ok(None)` when `text` is not a bracketed
 /// list (so the caller falls through to the other source forms).
-fn try_eval_bracket_list(text: &str, kernel: &dyn Lookup) -> Result<Option<Vec<Value>>, String> {
+fn try_eval_bracket_list(text: &str, kernel: &dyn Lookup) -> Result<Option<Vec<Value>>, SpecError> {
     let t = text.trim();
     if !(t.starts_with('[') && t.ends_with(']') && t.len() >= 2) {
         return Ok(None);
@@ -241,7 +390,9 @@ fn try_eval_bracket_list(text: &str, kernel: &dyn Lookup) -> Result<Option<Vec<V
             (elem, false)
         };
         if expr.is_empty() {
-            return Err("empty element in list comprehension `[...]`".to_string());
+            return Err("empty element in list comprehension `[...]`"
+                .to_string()
+                .into());
         }
         let value = eval_element_value(expr, kernel)?;
         if spread {
@@ -254,7 +405,8 @@ fn try_eval_bracket_list(text: &str, kernel: &dyn Lookup) -> Result<Option<Vec<V
                      {ty:?}. Use `[{expr}]` to pass it as a single element, \
                      or supply a list.",
                         ty = value.port_type(),
-                    ));
+                    )
+                    .into());
                 }
             }
         } else {
@@ -268,12 +420,13 @@ fn try_eval_bracket_list(text: &str, kernel: &dyn Lookup) -> Result<Option<Vec<V
 /// peeling). A bare identifier is a wire/param/const reference
 /// resolved against the kernel; anything else (quoted string,
 /// number, bool, expression) goes through the const evaluator.
-/// An unresolved bare reference is a hard error with a quoting hint,
-/// not a silent literal-name binding (comprehension_forms.md §3.1.4).
-fn eval_element_value(expr: &str, kernel: &dyn Lookup) -> Result<Value, String> {
+/// An unresolved bare reference reads None, never a silent literal-name
+/// binding, and the diagnostic an API that refuses it reports carries a
+/// quoting hint (comprehension_forms.md §3.1.4).
+fn eval_element_value(expr: &str, kernel: &dyn Lookup) -> Result<Value, SpecError> {
     let e = expr.trim();
     if is_single_bare_ident(e) {
-        return kernel.lookup(e).ok_or_else(|| {
+        return read_name(kernel, e, || {
             format!(
                 "list element `{e}` did not resolve to a value — no wire, const, \
              param, or outer iter-var by that name is in scope here. \
@@ -281,8 +434,13 @@ fn eval_element_value(expr: &str, kernel: &dyn Lookup) -> Result<Value, String> 
             )
         });
     }
-    crate::dsl::compile::eval_const_expr_for(e, kernel.ledger())
-        .map_err(|err| format!("list element `{e}` failed to evaluate: {err}"))
+    crate::dsl::compile::eval_const_expr_for(e, kernel.ledger()).map_err(|err| {
+        failure_reading(
+            e,
+            kernel,
+            format!("list element `{e}` failed to evaluate: {err}"),
+        )
+    })
 }
 
 /// True when `text` is exactly one bare identifier
@@ -434,12 +592,12 @@ pub fn pre_evaluate_clause(
     // iter-var may not be installed yet; `try_eval_partition_call`
     // then returns a single placeholder partition so iter-var type
     // detection yields `ext`.
-    if let Some(values) = try_eval_partition_call(&interpolated, parent_kernel)? {
+    if let Some(values) = try_eval_partition_call(&interpolated, parent_kernel, true)? {
         return Ok(values);
     }
     // `<param>.partitions` in comprehension position, by the same rule
     // as the runtime path; the param may already be installed here.
-    if let Some(values) = try_eval_param_partitions(&interpolated, parent_kernel)? {
+    if let Some(values) = try_eval_param_partitions(&interpolated, parent_kernel, true)? {
         return Ok(values);
     }
     let value_str =
@@ -516,59 +674,52 @@ pub fn parse_list_with_types(text: &str) -> Vec<Value> {
 /// resolved extent at scope-init time. `all(<cursor>)` lowers to
 /// the half-open ordinal range `[start, end)` as a `Vec<Value::U64>`.
 ///
+/// The source reads the cursor's extent, not a value named after the
+/// cursor ([`polydat_grammar::comprehension::source::Source::names_read`]).
+///
 /// Returns:
 /// - `Ok(Some(values))` if `spec_text` matches the `all(<ident>)`
 ///   shape and the cursor's extent resolved successfully.
 /// - `Ok(None)` if `spec_text` doesn't match — caller continues
 ///   with the normal interpolation + const-eval pipeline.
-/// - `Err(...)` if the form matched but the cursor's extent
-///   couldn't be resolved (cursor not in scope, extent wires
-///   missing, etc.) — surfaced as a clause-level diagnostic.
-fn try_eval_all_cursor(spec_text: &str, kernel: &dyn Lookup) -> Result<Option<Vec<Value>>, String> {
-    let trimmed = spec_text.trim();
-    let Some(stripped) = trimmed.strip_prefix("all(") else {
+/// - [`SpecError::ReadsNone`] if an extent output is not bound in
+///   scope (no cursor of that name is declared at or above it) or is
+///   bound to None.
+/// - [`SpecError::Failed`] if the extent is not an ordinal range.
+fn try_eval_all_cursor(
+    spec_text: &str,
+    kernel: &dyn Lookup,
+) -> Result<Option<Vec<Value>>, SpecError> {
+    use polydat_grammar::comprehension::source::{all_cursor_argument, cursor_extent_names};
+    let Some(cursor_name) = all_cursor_argument(spec_text) else {
         return Ok(None);
     };
-    let Some(arg) = stripped.strip_suffix(')') else {
-        return Ok(None);
-    };
-    let cursor_name = arg.trim();
-    if cursor_name.is_empty() || !is_valid_ident(cursor_name) {
-        return Ok(None);
-    }
-
-    let start_key = format!("__cursor_extent_{cursor_name}_start");
-    let end_key = format!("__cursor_extent_{cursor_name}_end");
-    let start = kernel
-        .lookup(&start_key)
-        .and_then(|v| match v {
-            Value::U64(n) => Some(n),
-            _ => None,
-        })
-        .ok_or_else(|| {
+    let [start_key, end_key] = cursor_extent_names(cursor_name);
+    let extent = |key: &str| -> Result<u64, SpecError> {
+        match read_name(kernel, key, || {
             format!(
                 "all({cursor_name}): cursor '{cursor_name}' has no resolvable extent — \
-             check that the cursor is declared at or above this scope and that \
-             its range arguments are init-resolvable. Looked for output '{start_key}'."
+                 check that the cursor is declared at or above this scope and that \
+                 its range arguments are init-resolvable. Looked for output '{key}'."
             )
-        })?;
-    let end = kernel
-        .lookup(&end_key)
-        .and_then(|v| match v {
-            Value::U64(n) => Some(n),
-            _ => None,
-        })
-        .ok_or_else(|| {
-            format!(
-                "all({cursor_name}): missing auxiliary output '{end_key}' on the parent kernel."
+        })? {
+            Value::U64(n) => Ok(n),
+            other => Err(format!(
+                "all({cursor_name}): extent output '{key}' is {}, not an ordinal",
+                other.to_display_string()
             )
-        })?;
+            .into()),
+        }
+    };
+    let start = extent(&start_key)?;
+    let end = extent(&end_key)?;
 
     if end < start {
         return Err(format!(
             "all({cursor_name}): cursor extent end={end} is less than start={start} — \
              cannot enumerate a negative-extent range."
-        ));
+        )
+        .into());
     }
     Ok(Some((start..end).map(Value::U64).collect()))
 }
@@ -1301,15 +1452,18 @@ fn generate_binomial(n: u64, call: &str) -> Result<Vec<Value>, String> {
 ///       phases: [walk]
 /// ```
 ///
-/// When the ident does not resolve (synthesis-time
+/// When the ident does not resolve and `probe` is set (synthesis-time
 /// pre-evaluation probes the clause before the outer iteration
 /// installs its value), a single placeholder partition is
 /// returned so iter-var type detection still classifies the
-/// variable as `ext`. At runtime dispatch the value is always
-/// installed; a still-unresolved ident there falls out as an
-/// unresolved-clause error downstream, never a silent empty
-/// iteration.
-fn try_eval_partition_call(text: &str, kernel: &dyn Lookup) -> Result<Option<Vec<Value>>, String> {
+/// variable as `ext`. At evaluation (`probe` clear) the source reads
+/// the ident as any source reads a name: unbound or bound to None, it
+/// reads None ([`SpecError::ReadsNone`]).
+fn try_eval_partition_call(
+    text: &str,
+    kernel: &dyn Lookup,
+    probe: bool,
+) -> Result<Option<Vec<Value>>, SpecError> {
     let Some((name, args)) = parse_func_call(text) else {
         return Ok(None);
     };
@@ -1320,33 +1474,29 @@ fn try_eval_partition_call(text: &str, kernel: &dyn Lookup) -> Result<Option<Vec
                 return Err(format!(
                     "subdivide(p, n): expected 2 arguments (a partition and a count), got {}",
                     arg_list.len()
-                ));
+                )
+                .into());
             }
             let src = arg_list[0].trim();
             let n = parse_u64_arg(arg_list[1], "subdivide.n")?;
-            let Some(value) = kernel.lookup(src) else {
+            if probe && kernel.lookup(src).is_none() {
                 // Pre-evaluation probe: the outer iter-var isn't
                 // installed yet. Return one placeholder so the clause's
                 // iter-var type-detects as `ext`; real values arrive at
                 // runtime dispatch.
-                let placeholder = crate::iteration::cursor_partition::Partition {
-                    idx: 0,
-                    count: 1,
-                    start_ord: 0,
-                    end_ord: 1,
-                    start_pct: 0.0,
-                    end_pct: 100.0,
-                    base_extent: 1,
-                };
-                return Ok(Some(vec![Value::from_partition(placeholder)]));
-            };
+                return Ok(Some(vec![placeholder_partition()]));
+            }
+            let value = read_name(kernel, src, || {
+                format!("subdivide({src}, {n}): `{src}` is not bound in scope")
+            })?;
             let Some(p) = value.as_partition().copied() else {
                 return Err(format!(
                     "subdivide({src}, {n}): `{src}` resolved to {} — expected a \
                      Partition value (an iter-var from `for: \"p in partitions(...)\"` \
                      or a cursor's `.cursor` projection)",
                     value.to_display_string(),
-                ));
+                )
+                .into());
             };
             let subs = crate::iteration::cursor_partition::subdivide_partition(&p, n)?;
             Ok(Some(subs.into_iter().map(Value::from_partition).collect()))
@@ -1366,15 +1516,19 @@ fn try_eval_partition_call(text: &str, kernel: &dyn Lookup) -> Result<Option<Vec
                 return Err(format!(
                     "partitions(spec, [extent]): expected 1 or 2 arguments, got {}",
                     arg_list.len(),
-                ));
+                )
+                .into());
             }
             let spec = resolve_partition_spec_arg(arg_list[0], kernel)?;
             let extent = match arg_list.get(1) {
                 Some(a) => parse_u64_arg(a, "partitions.extent")?,
                 None => 100,
             };
-            desugar_partition_spec(&spec, extent, "comprehension source `partitions(...)`")
-                .map(Some)
+            Ok(Some(desugar_partition_spec(
+                &spec,
+                extent,
+                "comprehension source `partitions(...)`",
+            )?))
         }
         // Profile-driven partition source: `profile_partitions(dataset,
         // pattern)` cuts the dataset's vector space at the cumulative
@@ -1389,7 +1543,9 @@ fn try_eval_partition_call(text: &str, kernel: &dyn Lookup) -> Result<Option<Vec
         "profile_partitions" => {
             #[cfg(not(feature = "vectordata"))]
             {
-                Err("profile_partitions requires the `vectordata` Cargo feature".to_string())
+                Err("profile_partitions requires the `vectordata` Cargo feature"
+                    .to_string()
+                    .into())
             }
 
             #[cfg(feature = "vectordata")]
@@ -1398,7 +1554,8 @@ fn try_eval_partition_call(text: &str, kernel: &dyn Lookup) -> Result<Option<Vec
                     return Err(format!(
                         "profile_partitions(dataset, pattern): expected 2 arguments, got {}",
                         arg_list.len()
-                    ));
+                    )
+                    .into());
                 }
                 // Both args are literal strings after `{...}` interpolation;
                 // strip matching outer quotes.
@@ -1423,22 +1580,28 @@ fn try_eval_partition_call(text: &str, kernel: &dyn Lookup) -> Result<Option<Vec
                         // Probe / dataset unavailable: one placeholder so the
                         // clause's iter-var type-detects as `ext`. Real tiers
                         // arrive once the catalog resolves the group.
-                        let placeholder = crate::iteration::cursor_partition::Partition {
-                            idx: 0,
-                            count: 1,
-                            start_ord: 0,
-                            end_ord: 1,
-                            start_pct: 0.0,
-                            end_pct: 100.0,
-                            base_extent: 1,
-                        };
-                        Ok(Some(vec![Value::from_partition(placeholder)]))
+                        Ok(Some(vec![placeholder_partition()]))
                     }
                 }
             }
         }
         _ => Ok(None),
     }
+}
+
+/// The one partition a pre-evaluation probe stands in for a partition
+/// source whose values are not installed yet, so the clause's iter-var
+/// type-detects as `ext`.
+fn placeholder_partition() -> Value {
+    Value::from_partition(crate::iteration::cursor_partition::Partition {
+        idx: 0,
+        count: 1,
+        start_ord: 0,
+        end_ord: 1,
+        start_pct: 0.0,
+        end_pct: 100.0,
+        base_extent: 1,
+    })
 }
 
 /// Comprehension-position desugaring (cursor_partitions.md §7.1): a `<ident>.partitions`
@@ -1459,14 +1622,15 @@ fn try_eval_partition_call(text: &str, kernel: &dyn Lookup) -> Result<Option<Vec
 /// comprehension eval has the kernel needed to look the param up.
 ///
 /// Returns `Ok(None)` when `text` is not a `<ident>.partitions` form. When the
-/// ident does not resolve (a pre-evaluation probe before the value is
-/// installed), a single placeholder partition is returned so iter-var type
-/// detection yields `ext` — the same contract as
-/// [`try_eval_partition_call`].
+/// ident does not resolve and `probe` is set (a pre-evaluation probe before
+/// the value is installed), a single placeholder partition is returned so
+/// iter-var type detection yields `ext`; at evaluation the ident reads None
+/// — the same contract as [`try_eval_partition_call`].
 fn try_eval_param_partitions(
     text: &str,
     kernel: &dyn Lookup,
-) -> Result<Option<Vec<Value>>, String> {
+    probe: bool,
+) -> Result<Option<Vec<Value>>, SpecError> {
     let Some(ident) = text.trim().strip_suffix(".partitions") else {
         return Ok(None);
     };
@@ -1474,20 +1638,14 @@ fn try_eval_param_partitions(
     if !is_single_bare_ident(ident) {
         return Ok(None);
     }
-    let Some(value) = kernel.lookup(ident) else {
+    if probe && kernel.lookup(ident).is_none() {
         // Pre-eval probe: the param value isn't installed yet. Return one
         // placeholder so the clause's iter-var type-detects as `ext`.
-        let placeholder = crate::iteration::cursor_partition::Partition {
-            idx: 0,
-            count: 1,
-            start_ord: 0,
-            end_ord: 1,
-            start_pct: 0.0,
-            end_pct: 100.0,
-            base_extent: 1,
-        };
-        return Ok(Some(vec![Value::from_partition(placeholder)]));
-    };
+        return Ok(Some(vec![placeholder_partition()]));
+    }
+    let value = read_name(kernel, ident, || {
+        format!("comprehension source `{ident}.partitions`: `{ident}` is not bound in scope")
+    })?;
     // Already a resolved PartitionList → unpack directly.
     if let Some(list) = value.as_partition_list() {
         return Ok(Some(
@@ -1505,14 +1663,14 @@ fn try_eval_param_partitions(
              {} — expected a partition-spec string (a workload param such as \
              `cursor=linear:4`) or a PartitionList.",
             value.to_display_string(),
-        ));
+        )
+        .into());
     };
-    desugar_partition_spec(
+    Ok(Some(desugar_partition_spec(
         spec,
         100,
         &format!("comprehension source `{ident}.partitions`"),
-    )
-    .map(Some)
+    )?))
 }
 
 /// Parse + resolve a partition spec string into its unpacked partition
@@ -1534,7 +1692,7 @@ fn desugar_partition_spec(spec: &str, extent: u64, ctx: &str) -> Result<Vec<Valu
 /// string literal yields its inner text; a bare identifier resolves against
 /// the kernel chain to its string value; anything else is taken verbatim (an
 /// unquoted spec such as a raw percentage list).
-fn resolve_partition_spec_arg(arg: &str, kernel: &dyn Lookup) -> Result<String, String> {
+fn resolve_partition_spec_arg(arg: &str, kernel: &dyn Lookup) -> Result<String, SpecError> {
     let a = arg.trim();
     if a.len() >= 2
         && ((a.starts_with('"') && a.ends_with('"')) || (a.starts_with('\'') && a.ends_with('\'')))
@@ -1542,15 +1700,15 @@ fn resolve_partition_spec_arg(arg: &str, kernel: &dyn Lookup) -> Result<String, 
         return Ok(a[1..a.len() - 1].to_string());
     }
     if is_single_bare_ident(a) {
-        return match kernel.lookup(a) {
-            Some(Value::Str(s)) => Ok(s.to_string()),
-            Some(other) => Err(format!(
+        return match read_name(kernel, a, || {
+            format!("partitions(...): `{a}` did not resolve to a spec string in scope")
+        })? {
+            Value::Str(s) => Ok(s.to_string()),
+            other => Err(format!(
                 "partitions(...): `{a}` resolved to {} — expected a spec string",
                 other.to_display_string(),
-            )),
-            None => Err(format!(
-                "partitions(...): `{a}` did not resolve to a spec string in scope"
-            )),
+            )
+            .into()),
         };
     }
     Ok(a.to_string())
@@ -1616,17 +1774,16 @@ fn generate_log_steps(start: f64, end: f64, n: u64) -> Result<Vec<Value>, String
 // ============================================================
 
 /// Recognise `concat(...)`, `unique(...)`, etc. Each set op
-/// recursively evaluates its arguments through `evaluate_spec`
+/// recursively evaluates its arguments as sources
 /// (so `concat(1..10, fib(8))` works), then combines the
-/// resulting lists.
-fn try_eval_setop(text: &str, kernel: &dyn Lookup) -> Result<Option<Vec<Value>>, String> {
+/// resulting lists. An argument that reads None makes the whole
+/// source read None.
+fn try_eval_setop(text: &str, kernel: &dyn Lookup) -> Result<Option<Vec<Value>>, SpecError> {
     let Some((name, args)) = parse_func_call(text) else {
         return Ok(None);
     };
     let arg_texts = split_args_top_level(args);
-    let recursively_evaluate = |t: &str| -> Result<Vec<Value>, String> {
-        evaluate_spec(t, kernel).map_err(|e| e.to_string())
-    };
+    let recursively_evaluate = |t: &str| evaluate_spec_internal(t, kernel);
     match name {
         "concat" => {
             let mut out = Vec::new();
@@ -1669,17 +1826,16 @@ fn try_eval_setop(text: &str, kernel: &dyn Lookup) -> Result<Option<Vec<Value>>,
         }
         "subtract" => {
             if arg_texts.len() != 2 {
-                return Err(format!(
-                    "subtract(a, b): expected 2 args, got {}",
-                    arg_texts.len()
-                ));
+                return Err(
+                    format!("subtract(a, b): expected 2 args, got {}", arg_texts.len()).into(),
+                );
             }
             let a = recursively_evaluate(arg_texts[0])?;
             let b = recursively_evaluate(arg_texts[1])?;
             Ok(Some(a.into_iter().filter(|v| !b.contains(v)).collect()))
         }
         "interleave" => {
-            let lists: Result<Vec<Vec<Value>>, String> =
+            let lists: Result<Vec<Vec<Value>>, SpecError> =
                 arg_texts.iter().map(|a| recursively_evaluate(a)).collect();
             let lists = lists?;
             let mut out = Vec::new();
@@ -1695,10 +1851,9 @@ fn try_eval_setop(text: &str, kernel: &dyn Lookup) -> Result<Option<Vec<Value>>,
         }
         "cycle" => {
             if arg_texts.len() != 2 {
-                return Err(format!(
-                    "cycle(a, n): expected 2 args, got {}",
-                    arg_texts.len()
-                ));
+                return Err(
+                    format!("cycle(a, n): expected 2 args, got {}", arg_texts.len()).into(),
+                );
             }
             let a = recursively_evaluate(arg_texts[0])?;
             let n = parse_u64_arg(arg_texts[1], "cycle.n")?;
@@ -1716,10 +1871,7 @@ fn try_eval_setop(text: &str, kernel: &dyn Lookup) -> Result<Option<Vec<Value>>,
         }
         "reverse" => {
             if arg_texts.len() != 1 {
-                return Err(format!(
-                    "reverse(a): expected 1 arg, got {}",
-                    arg_texts.len()
-                ));
+                return Err(format!("reverse(a): expected 1 arg, got {}", arg_texts.len()).into());
             }
             let mut a = recursively_evaluate(arg_texts[0])?;
             a.reverse();
@@ -1727,10 +1879,7 @@ fn try_eval_setop(text: &str, kernel: &dyn Lookup) -> Result<Option<Vec<Value>>,
         }
         "take" => {
             if arg_texts.len() != 2 {
-                return Err(format!(
-                    "take(a, n): expected 2 args, got {}",
-                    arg_texts.len()
-                ));
+                return Err(format!("take(a, n): expected 2 args, got {}", arg_texts.len()).into());
             }
             let a = recursively_evaluate(arg_texts[0])?;
             let n = parse_u64_arg(arg_texts[1], "take.n")?;
@@ -1738,10 +1887,7 @@ fn try_eval_setop(text: &str, kernel: &dyn Lookup) -> Result<Option<Vec<Value>>,
         }
         "skip" => {
             if arg_texts.len() != 2 {
-                return Err(format!(
-                    "skip(a, n): expected 2 args, got {}",
-                    arg_texts.len()
-                ));
+                return Err(format!("skip(a, n): expected 2 args, got {}", arg_texts.len()).into());
             }
             let a = recursively_evaluate(arg_texts[0])?;
             let n = parse_u64_arg(arg_texts[1], "skip.n")?;
@@ -1766,7 +1912,7 @@ fn try_eval_setop(text: &str, kernel: &dyn Lookup) -> Result<Option<Vec<Value>>,
 /// outputs match `build_bucket_lut` / `build_concat_lut` /
 /// `build_interval_lut` byte-for-byte (covered by the
 /// the host's op-sequencing tests).
-fn try_eval_sequencer(text: &str, kernel: &dyn Lookup) -> Result<Option<Vec<Value>>, String> {
+fn try_eval_sequencer(text: &str, kernel: &dyn Lookup) -> Result<Option<Vec<Value>>, SpecError> {
     let Some((name, args)) = parse_func_call(text) else {
         return Ok(None);
     };
@@ -1782,8 +1928,8 @@ fn try_eval_sequencer(text: &str, kernel: &dyn Lookup) -> Result<Option<Vec<Valu
     let (items, ratios): (Vec<Value>, Vec<usize>) = match arg_texts.len() {
         1 => parse_ratio_prefix_shorthand(arg_texts[0])?,
         2 => {
-            let items = evaluate_spec(arg_texts[0], kernel)?;
-            let raw_ratios = evaluate_spec(arg_texts[1], kernel)?;
+            let items = evaluate_spec_internal(arg_texts[0], kernel)?;
+            let raw_ratios = evaluate_spec_internal(arg_texts[1], kernel)?;
             let ratios: Result<Vec<usize>, String> = raw_ratios
                 .iter()
                 .map(|v| match v {
@@ -1799,7 +1945,8 @@ fn try_eval_sequencer(text: &str, kernel: &dyn Lookup) -> Result<Option<Vec<Valu
             return Err(format!(
                 "{name}: expected `(items, ratios)` or `(\"r1:item1, r2:item2, ...\")`; got {} args",
                 arg_texts.len()
-            ));
+            )
+            .into());
         }
     };
 
@@ -1808,7 +1955,8 @@ fn try_eval_sequencer(text: &str, kernel: &dyn Lookup) -> Result<Option<Vec<Valu
             "{name}: items.len() ({}) != ratios.len() ({})",
             items.len(),
             ratios.len(),
-        ));
+        )
+        .into());
     }
     // The output length is the sum of the ratios, which come from the
     // spec text: summed checked, and reserved fallibly, so an absurd
@@ -2370,6 +2518,58 @@ mod tests {
             .to_string();
         assert!(err.contains("did not resolve"), "got: {err}");
         assert!(err.contains("quote it"), "should hint quoting: {err}");
+    }
+
+    /// A source reads None for the names it reads after composition: the
+    /// composed target of `{k_{k}_limits}`, and a name bound to None, are
+    /// reads of None, and a failure over a name the scope has is not.
+    #[test]
+    fn a_read_of_none_is_decided_on_the_composed_name() {
+        let kernel = crate::dsl::compile::compile_polydat_interpreter(
+            "const k_1_limits := \"1, 2\"\nconst n := 3\n",
+        )
+        .unwrap();
+        let at = |k: u64| vec![("k".to_string(), Value::U64(k))];
+        let reads = |spec: &str, prefix: &[(String, Value)]| {
+            let scope = crate::kernel::interp::Layered {
+                prefix,
+                inner: &kernel,
+            };
+            match evaluate_spec_internal(spec, &scope) {
+                Ok(values) => Ok(values.len()),
+                Err(SpecError::ReadsNone { reads, .. }) => Err(Some(reads)),
+                Err(SpecError::Failed(_)) => Err(None),
+            }
+        };
+        assert_eq!(reads("{k_{k}_limits}", &at(1)), Ok(2));
+        assert_eq!(
+            reads("{k_{k}_limits}", &at(7)),
+            Err(Some(vec![NoneRead::Unbound("k_7_limits".into())]))
+        );
+        let none = [("z".to_string(), Value::None)];
+        for spec in ["{z}", "z", "[z]", "pow2({z})", "concat(z, 1..3)"] {
+            assert_eq!(
+                reads(spec, &none),
+                Err(Some(vec![NoneRead::BoundNone("z".into())])),
+                "{spec}"
+            );
+        }
+        assert_eq!(
+            reads("u64_add(zz, 1)", &[]),
+            Err(Some(vec![NoneRead::Unbound("zz".into())]))
+        );
+        assert_eq!(reads("pow2(99999)", &[]), Err(None));
+        // The public evaluator reads a name bound to None as None and
+        // still refuses one nothing binds.
+        let scope = crate::kernel::interp::Layered {
+            prefix: &none,
+            inner: &kernel,
+        };
+        assert_eq!(evaluate_spec("{z}", &scope).unwrap(), Vec::<Value>::new());
+        assert!(matches!(
+            evaluate_spec("{zz}", &scope),
+            Err(crate::dsl::compile::EmbeddingError::UnresolvedPlaceholder { .. })
+        ));
     }
 
     #[test]

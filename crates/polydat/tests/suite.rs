@@ -113,6 +113,8 @@ mod lint_pragmas;
 mod local_modules;
 #[path = "nodes_reference.rs"]
 mod nodes_reference;
+#[path = "none_source_reads.rs"]
+mod none_source_reads;
 #[path = "optimizer_worked_examples.rs"]
 mod optimizer_worked_examples;
 #[path = "polydat_examples_test.rs"]

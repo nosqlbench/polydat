@@ -190,7 +190,8 @@ impl CompiledComprehension {
 }
 
 /// The first clause of `ast` whose source needs a scope
-/// (comprehension_forms.md §10.7.0), with the names it references:
+/// (comprehension_forms.md §10.7.0), with the names it reads
+/// ([`Source::names_read`](crate::iteration::comprehension::source::Source::names_read)):
 /// the scope-less surfaces refuse such a comprehension by name. A source
 /// that reads a name resolved nowhere, bound neither by an earlier axis
 /// nor in the enclosing scope (`in_scope`), reads None and yields
@@ -206,7 +207,7 @@ fn first_context_required(
     ) -> Option<(String, Vec<String>)> {
         match c {
             Comprehension::Clause { name, source } => {
-                let references = source.referenced_names();
+                let references = source.names_read();
                 let reads_none = references
                     .iter()
                     .any(|n| !before.contains(n) && !in_scope(n));

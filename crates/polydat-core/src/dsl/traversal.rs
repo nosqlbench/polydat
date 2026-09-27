@@ -653,9 +653,9 @@ pub fn child_file(
     let declared = body_declared(&f.body, elements);
     let mut referenced = BTreeSet::new();
     body_references(&f.body, &mut referenced);
-    // Outer wires the comprehension's own sources reference through
-    // `{name}` also cascade, so the tuple evaluation sees them.
-    referenced.extend(comprehension.referenced_source_names());
+    // Outer wires the comprehension's own sources read also cascade, so
+    // the tuple evaluation sees them.
+    referenced.extend(comprehension.source_names_read());
 
     let mut cascade = Vec::new();
     for name in referenced {

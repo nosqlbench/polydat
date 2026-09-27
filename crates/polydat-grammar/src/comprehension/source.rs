@@ -167,6 +167,32 @@ impl Source {
         out
     }
 
+    /// The names evaluating this source reads from the prior axes and
+    /// the scope it is evaluated in (comprehension_forms.md §5 V3,
+    /// §10.9.1). This differs from [`Self::referenced_names`] in two
+    /// forms. A composed name (`{k_{k}_limits}`) reads its leaves
+    /// (`k`) here; the name they compose to is known only once the
+    /// leaves are bound, and is read when the source is evaluated. The
+    /// cursor form `all(<cursor>)` reads the cursor's extent outputs
+    /// ([`cursor_extent_names`]), not a value named after the cursor.
+    pub fn names_read(&self) -> std::collections::BTreeSet<String> {
+        let mut out = std::collections::BTreeSet::new();
+        match self {
+            Source::WorkloadParamList { name, .. } => {
+                crate::refs::collect_string_interpolation_refs(&format!("{{{name}}}"), &mut out);
+            }
+            Source::Generator { expr, .. } => match all_cursor_argument(expr) {
+                Some(cursor) => out.extend(cursor_extent_names(cursor)),
+                None => out.extend(self.referenced_names()),
+            },
+            Source::Literal { .. }
+            | Source::IntRange { .. }
+            | Source::ContinuousInterval { .. }
+            | Source::Distribution { .. } => {}
+        }
+        out
+    }
+
     /// Declare this source's cardinality class for use by
     /// `clause` metadata propagation.
     pub fn cardinality(&self) -> CardinalityClass {
@@ -245,9 +271,81 @@ pub fn split_string_comprehension(s: &str) -> Vec<&str> {
         .collect()
 }
 
+// ── the cursor form `all(<cursor>)` (comprehension_forms.md §10.9.1) ──
+
+/// The cursor `text` enumerates when it is the source form
+/// `all(<cursor>)`, whitespace aside; `None` for any other text.
+pub fn all_cursor_argument(text: &str) -> Option<&str> {
+    let cursor = text.trim().strip_prefix("all(")?.strip_suffix(')')?.trim();
+    let mut chars = cursor.chars();
+    let starts = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
+    (starts && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')).then_some(cursor)
+}
+
+/// The auxiliary outputs a `cursor <name> = ...` declaration compiles
+/// to, holding its extent: `[start, end]`. `all(<cursor>)` reads these.
+pub fn cursor_extent_names(cursor: &str) -> [String; 2] {
+    [
+        format!("__cursor_extent_{cursor}_start"),
+        format!("__cursor_extent_{cursor}_end"),
+    ]
+}
+
+/// The cursor whose extent the output `name` holds, when `name` is one
+/// of [`cursor_extent_names`].
+pub fn cursor_of_extent_name(name: &str) -> Option<&str> {
+    let rest = name.strip_prefix("__cursor_extent_")?;
+    rest.strip_suffix("_start")
+        .or_else(|| rest.strip_suffix("_end"))
+        .filter(|cursor| !cursor.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A composed name reads its leaves, and the cursor form reads the
+    /// cursor's extent; every other source reads what it references.
+    #[test]
+    fn names_read_are_the_leaves_of_a_composition_and_a_cursor_extent() {
+        let names = |s: Source| s.names_read().into_iter().collect::<Vec<_>>();
+        assert_eq!(
+            names(Source::WorkloadParamList {
+                name: "k_{k}_limits".into(),
+                len_hint: None,
+            }),
+            ["k"]
+        );
+        assert_eq!(
+            names(Source::WorkloadParamList {
+                name: "k_values".into(),
+                len_hint: None,
+            }),
+            ["k_values"]
+        );
+        assert_eq!(
+            names(Source::Generator {
+                expr: " all( row ) ".into(),
+                cardinality_hint: None,
+            }),
+            ["__cursor_extent_row_end", "__cursor_extent_row_start"]
+        );
+        assert_eq!(
+            names(Source::Generator {
+                expr: "pow2({n})".into(),
+                cardinality_hint: None,
+            }),
+            ["n"]
+        );
+        assert_eq!(all_cursor_argument("all(1)"), None);
+        assert_eq!(all_cursor_argument("all(a, b)"), None);
+        for extent in cursor_extent_names("row") {
+            assert_eq!(cursor_of_extent_name(&extent), Some("row"));
+        }
+        assert_eq!(cursor_of_extent_name("row"), None);
+    }
 
     #[test]
     fn literal_cardinality_is_list_length() {

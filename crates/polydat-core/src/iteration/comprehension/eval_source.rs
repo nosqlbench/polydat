@@ -40,8 +40,8 @@
 //! | [`EvalClass::ContextRequired`] | `WorkloadParamList`, a `Generator` whose expression references a name | no — needs `&Context` |
 //! | [`EvalClass::Distribution`] | `ContinuousInterval`, `Distribution` (in their "not yet sampled" state) | yes, but `values` is empty — enclosing `Order(_, sampling-strategy, Some(n))` materializes |
 //!
-//! The class of a generator is decided by its expression's free
-//! names ([`Source::referenced_names`]), never by a table of
+//! The class of a generator is decided by the names its expression
+//! reads ([`Source::names_read`]), never by a table of
 //! generator names: a context-free call evaluates in the empty
 //! scope ([`crate::kernel::interp::NoScope`]), and the compile
 //! flattens it into a literal of its values
@@ -68,6 +68,7 @@ use std::sync::Arc;
 
 use crate::ast::Value;
 use crate::iteration::comprehension::cardinality::ProductMeasure;
+use crate::iteration::comprehension::eval::{SpecError, spec_error};
 use crate::iteration::comprehension::metadata::IndexFn;
 use crate::iteration::comprehension::source::{LiteralValue, Source};
 use crate::kernel::interp::{Layered, Lookup};
@@ -90,6 +91,38 @@ pub struct EvaluatedSource {
     pub cardinality: u64,
     /// The addressing scheme the values satisfy.
     pub index_fn: IndexFn,
+}
+
+/// A name a source read that made it yield nothing
+/// (none_semantics.md Rule 1, comprehension_forms.md §5 V3): the name
+/// as read, after composition, so a composed `{k_{k}_limits}` read with
+/// `k = 3` is `k_3_limits`, and `all(<cursor>)` reads the cursor's
+/// extent outputs.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum NoneRead {
+    /// Nothing binds the name in the scope the source is evaluated in,
+    /// nor does an earlier axis.
+    Unbound(String),
+    /// The name is bound to None.
+    BoundNone(String),
+}
+
+impl NoneRead {
+    /// The name read.
+    pub fn name(&self) -> &str {
+        match self {
+            NoneRead::Unbound(name) | NoneRead::BoundNone(name) => name,
+        }
+    }
+}
+
+impl std::fmt::Display for NoneRead {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NoneRead::Unbound(name) => write!(f, "`{name}` is not bound"),
+            NoneRead::BoundNone(name) => write!(f, "`{name}` is None"),
+        }
+    }
 }
 
 /// The eval-class partition of comprehension_forms.md §10.7.0.
@@ -200,131 +233,166 @@ impl SourceEval for Source {
                 EvalClass::Distribution
             }
             // A generator's class is its expression's: context-free
-            // when it references no name (comprehension_forms.md
+            // when it reads no name (comprehension_forms.md
             // §10.7.0).
-            Source::Generator { .. } if self.referenced_names().is_empty() => EvalClass::Static,
+            Source::Generator { .. } if self.names_read().is_empty() => EvalClass::Static,
             Source::Generator { .. } => EvalClass::ContextRequired,
             Source::WorkloadParamList { .. } => EvalClass::ContextRequired,
         }
     }
 
     fn evaluate(&self, ctx: Option<&EvalContext<'_>>) -> Result<EvaluatedSource, EvalError> {
-        match self {
-            Source::Literal { values } => {
-                let vals: Vec<Value> = values.iter().map(literal_to_value).collect();
-                let n = vals.len() as u64;
-                Ok(EvaluatedSource {
-                    values: vals,
-                    cardinality: n,
-                    // Literal lists carry no shape claim other
-                    // than length — call them a 1-axis Lattice
-                    // of that length. Strategies that need
-                    // arithmetic progression shape (e.g. Halton
-                    // over a Lattice axis) still get useful
-                    // behavior because the lookup is by index,
-                    // not by value.
-                    index_fn: IndexFn::Lattice {
-                        axis_sizes: vec![n],
-                    },
-                })
-            }
-            Source::IntRange { lo, hi, step } => {
-                let step = (*step).max(1);
-                let mut vals = Vec::new();
-                let mut cur = *lo;
-                while cur < *hi {
-                    vals.push(Value::U64(cur as u64));
-                    cur += step;
-                }
-                let n = vals.len() as u64;
-                Ok(EvaluatedSource {
-                    values: vals,
-                    cardinality: n,
-                    index_fn: IndexFn::Lattice {
-                        axis_sizes: vec![n],
-                    },
-                })
-            }
-            Source::Generator { .. } | Source::WorkloadParamList { .. } => {
-                let spec_text = match self {
-                    Source::Generator { expr, .. } => expr.clone(),
-                    Source::WorkloadParamList { name, .. } => format!("{{{name}}}"),
-                    _ => unreachable!(),
-                };
-                // A context-free generator evaluates in the empty
-                // scope; anything that references a name needs the
-                // caller's.
-                let empty = crate::kernel::interp::NoScope::new();
-                let (var_name, scope): (&str, Layered<'_>) = match ctx {
-                    Some(ctx) => (
-                        ctx.var_name,
-                        Layered {
-                            prefix: ctx.prefix,
-                            inner: ctx.scope,
-                        },
-                    ),
-                    None if self.eval_class() == EvalClass::Static => (
-                        "<context-free>",
-                        Layered {
-                            prefix: &[],
-                            inner: &empty,
-                        },
-                    ),
-                    None => return Err(EvalError::NeedsContext),
-                };
-                // A source over None yields nothing (none_semantics.md
-                // Rule 1, comprehension_forms.md §5 V3): a name it reads
-                // that nothing binds, or that is bound to None, reads None.
-                let reads_none = self
-                    .referenced_names()
-                    .iter()
-                    .any(|name| matches!(scope.lookup(name), None | Some(Value::None)));
-                if reads_none {
-                    return Ok(EvaluatedSource {
-                        values: Vec::new(),
-                        cardinality: 0,
-                        index_fn: IndexFn::Lattice {
-                            axis_sizes: vec![0],
-                        },
-                    });
-                }
-                let vals = crate::iteration::comprehension::eval::evaluate_spec(&spec_text, &scope)
-                    .map_err(|e| EvalError::EvalFailed {
-                        var: var_name.to_string(),
-                        source: spec_text,
-                        message: e.to_string(),
-                    })?;
-                let n = vals.len() as u64;
-                let index_fn = classify_observed_values(&vals);
-                Ok(EvaluatedSource {
+        evaluate_reading(self, ctx).map(|(evaluated, _)| evaluated)
+    }
+}
+
+/// [`SourceEval::evaluate`], with the names whose reads made the source
+/// yield nothing: a source that reads, after composition, a name nothing
+/// binds or a name bound to None yields nothing (none_semantics.md
+/// Rule 1, comprehension_forms.md §5 V3), and those names are the second
+/// part, empty whenever the source yields.
+pub(crate) fn evaluate_reading(
+    source: &Source,
+    ctx: Option<&EvalContext<'_>>,
+) -> Result<(EvaluatedSource, Vec<NoneRead>), EvalError> {
+    let evaluated = match source {
+        Source::Generator { .. } | Source::WorkloadParamList { .. } => {
+            return evaluate_spec_source(source, ctx);
+        }
+        other => evaluate_static(other),
+    };
+    Ok((evaluated, Vec::new()))
+}
+
+/// Evaluate a `Generator` or `WorkloadParamList` source's spec text in
+/// the context's scope, with the prior-axis bindings in front.
+fn evaluate_spec_source(
+    source: &Source,
+    ctx: Option<&EvalContext<'_>>,
+) -> Result<(EvaluatedSource, Vec<NoneRead>), EvalError> {
+    let spec_text = match source {
+        Source::Generator { expr, .. } => expr.clone(),
+        Source::WorkloadParamList { name, .. } => format!("{{{name}}}"),
+        _ => unreachable!("only spec-text sources"),
+    };
+    // A context-free generator evaluates in the empty
+    // scope; anything that references a name needs the
+    // caller's.
+    let empty = crate::kernel::interp::NoScope::new();
+    let (var_name, scope): (&str, Layered<'_>) = match ctx {
+        Some(ctx) => (
+            ctx.var_name,
+            Layered {
+                prefix: ctx.prefix,
+                inner: ctx.scope,
+            },
+        ),
+        None if source.eval_class() == EvalClass::Static => (
+            "<context-free>",
+            Layered {
+                prefix: &[],
+                inner: &empty,
+            },
+        ),
+        None => return Err(EvalError::NeedsContext),
+    };
+    match crate::iteration::comprehension::eval::evaluate_spec_internal(&spec_text, &scope) {
+        Ok(vals) => {
+            let n = vals.len() as u64;
+            let index_fn = classify_observed_values(&vals);
+            Ok((
+                EvaluatedSource {
                     values: vals,
                     cardinality: n,
                     index_fn,
-                })
+                },
+                Vec::new(),
+            ))
+        }
+        // A source over None yields nothing: the evaluation read, after
+        // composition, a name nothing binds or one bound to None.
+        Err(SpecError::ReadsNone { reads, .. }) => Ok((
+            EvaluatedSource {
+                values: Vec::new(),
+                cardinality: 0,
+                index_fn: IndexFn::Lattice {
+                    axis_sizes: vec![0],
+                },
+            },
+            reads,
+        )),
+        Err(SpecError::Failed(message)) => Err(EvalError::EvalFailed {
+            var: var_name.to_string(),
+            message: spec_error(&spec_text, message).to_string(),
+            source: spec_text,
+        }),
+    }
+}
+
+/// The evaluation of a source that reads no name: literals, ranges, and
+/// continuous measures.
+fn evaluate_static(source: &Source) -> EvaluatedSource {
+    match source {
+        Source::Literal { values } => {
+            let vals: Vec<Value> = values.iter().map(literal_to_value).collect();
+            let n = vals.len() as u64;
+            EvaluatedSource {
+                values: vals,
+                cardinality: n,
+                // Literal lists carry no shape claim other
+                // than length — call them a 1-axis Lattice
+                // of that length. Strategies that need
+                // arithmetic progression shape (e.g. Halton
+                // over a Lattice axis) still get useful
+                // behavior because the lookup is by index,
+                // not by value.
+                index_fn: IndexFn::Lattice {
+                    axis_sizes: vec![n],
+                },
             }
-            Source::ContinuousInterval { interval, measure } => Ok(EvaluatedSource {
-                values: Vec::new(),
-                cardinality: 0,
-                index_fn: IndexFn::Continuous {
-                    intervals: vec![interval.clone()],
-                    measure: measure.clone(),
+        }
+        Source::IntRange { lo, hi, step } => {
+            let step = (*step).max(1);
+            let mut vals = Vec::new();
+            let mut cur = *lo;
+            while cur < *hi {
+                vals.push(Value::U64(cur as u64));
+                cur += step;
+            }
+            let n = vals.len() as u64;
+            EvaluatedSource {
+                values: vals,
+                cardinality: n,
+                index_fn: IndexFn::Lattice {
+                    axis_sizes: vec![n],
                 },
-            }),
-            Source::Distribution {
-                distribution,
-                support,
-                ..
-            } => Ok(EvaluatedSource {
-                values: Vec::new(),
-                cardinality: 0,
-                // The parameters travel on the AST carrier; the
-                // runtime's sampler reads them there
-                // (comprehension_forms.md §10.7.6).
-                index_fn: IndexFn::Continuous {
-                    intervals: vec![support.clone()],
-                    measure: ProductMeasure::Named(*distribution),
-                },
-            }),
+            }
+        }
+        Source::ContinuousInterval { interval, measure } => EvaluatedSource {
+            values: Vec::new(),
+            cardinality: 0,
+            index_fn: IndexFn::Continuous {
+                intervals: vec![interval.clone()],
+                measure: measure.clone(),
+            },
+        },
+        Source::Distribution {
+            distribution,
+            support,
+            ..
+        } => EvaluatedSource {
+            values: Vec::new(),
+            cardinality: 0,
+            // The parameters travel on the AST carrier; the
+            // runtime's sampler reads them there
+            // (comprehension_forms.md §10.7.6).
+            index_fn: IndexFn::Continuous {
+                intervals: vec![support.clone()],
+                measure: ProductMeasure::Named(*distribution),
+            },
+        },
+        Source::Generator { .. } | Source::WorkloadParamList { .. } => {
+            unreachable!("a spec-text source reads names")
         }
     }
 }
