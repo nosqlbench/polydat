@@ -523,14 +523,36 @@ Synthesis pillar (S1, S2): where the substrate states that the
 chain synthesises scope state into slots, Context Fusion
 performs that synthesis.
 
-T1 and T2 (type-checked slots) are enforced during synthesis:
-each slot's declared `PortType` is checked against the outer
-binding's value type, and a mismatch goes through the boundary
-adapter catalog (T2). L2 (lifecycle bridging) is the
-classification that selects the synthesis path: only slots
-with the effectively-const lifecycle (per H1) are filled by
-Context Fusion, and dynamic slots are written per cycle under
-S3.
+The binder, the part of Context Fusion that wires a child
+under its parent, fills each input the child declares from the
+parent binding of the same name, and the kind of that binding
+decides how the child sees it. Take a parent with these bindings:
+
+```
+extern region: str = "us"
+const batch := 1000
+load := hash(cycle)
+shared errors := 0
+```
+
+A child that mentions all four gets them as follows:
+
+- `region` and `batch` are copied into the child's inputs once,
+  when the child is created. A later change to either on the
+  parent is not seen by the child until the child is created or
+  bound again.
+- `load` is linked: the child's input reads the parent's output,
+  so each recompute of `load` on the parent is seen by the child.
+- `errors` is one register that parent and child share. Either
+  side reads the current value, and a write from either side is
+  seen by both.
+
+This is the value-copy, cell, and transit classification of
+CF3, applied to the parent's binding kinds. T1 and T2
+(type-checked slots) are enforced as each input is filled: the
+input's declared `PortType` is checked against the parent
+binding's value type, and a value copy that does not match goes
+through the boundary adapter catalog (T2).
 
 ---
 

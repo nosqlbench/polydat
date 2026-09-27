@@ -433,16 +433,23 @@ executor only passes `[cycle]`.
 
 An `extern name: type = default` declaration produces an
 `InputDef` with `InputKind::ExternalWrite`. External producers
-write these inputs through the deprecated `Dataflow::set_wire`
-API (on the interpreter kernel) or through `Kernel::set_input`
-(on all four engines). The boundary accepts `Value::None`,
-accepts a value that satisfies the declared slot type, applies
-a registered boundary adapter when one exists, and otherwise
-returns an error.
+write these inputs through `Kernel::set_input` (by name) or
+`Kernel::set_input_at` (by input index), on all four engines
+(interpreter, closure tier, native, and pure native). A write
+never converts a value. The write accepts a value that
+satisfies the input's declared type, or `None`, which clears
+the input to unset; it refuses anything else with
+`WriteError::TypeMismatch`, naming the input, its declared
+type, and the type given. A host that holds a value of another
+type converts it with `polydat::convert::to_port` before the
+write, or opens the input with `CompileOptions::input_variance`
+so that the compiler places a converter in front of its readers
+([input_variance.md](input_variance.md)). The same rule is
+Axiom S4 of [composition_substrate.md](composition_substrate.md).
 
 ```
 Producer writes to slot "user_name"
-  → kernel.set_wire("user_name", value)?
+  → kernel.set_input("user_name", value)?
   → input slot in the kernel holds the value
 
 Consumer pulls a binding that reads {user_name}

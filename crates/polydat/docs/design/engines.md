@@ -26,7 +26,7 @@ runtime's evaluation rule and the ownership of every output).
 | Interpreter (P1) | `PolydatKernel` over `Box<dyn PolydatNode>` and typed `Value` buffers, with native cones per its `JitMode` | `Engine::Interpreter(mode)`; `compile_polydat_interpreter` and `PolydatAssembler::compile` for the concrete type |
 | Closure tier (P2) | Every node's generated closure over one flat `u64` slot buffer | `Engine::Closures(provenance)` |
 | Native (P3) | Cranelift native code for every node with a lowering and the node's closure elsewhere, over the same slot buffer, one native function per fusion unit: a connected, convex group of eligible nodes (§8) | `Engine::Native(provenance)`, in every build: without the `jit` feature the same kernel runs with every step a closure and no native segment in it |
-| Pure native | Cranelift native code and nothing else: no closure fallback, so a node without a lowering refuses the program | `Engine::PureNative(provenance)`, with `Raw` or `PushPull` only; refused by a build without the `jit` feature |
+| Pure native | Cranelift native code and nothing else: no closure fallback, so a node with a kit but no lowering runs through its kit, and a node with neither refuses the program | `Engine::PureNative(provenance)`, with `Raw` or `PushPull` only; refused by a build without the `jit` feature |
 
 The closure tier, native, and pure native are the three **compiled engines**;
 in this document "every compiled engine" means those three, and "all four
@@ -38,9 +38,10 @@ not internal. It differs from `Native` only in what it does with a node that
 has neither a native form nor a kit (the function the `#[polydat_node]` macro
 generates to run the node's body directly on the slot buffer, which native code
 can call; [compiled_handles.md](compiled_handles.md) §5): `Native` runs that node's closure and always succeeds, while
-pure native refuses the program and names the node. Pure native is therefore
-the only engine that tells a host whether a program is fully native; `Native`
-cannot, because it never fails for that reason. Every node in this library
+pure native refuses the program and names the node. Pure native runs the whole
+program as one native function, calling a node's kit where the node has no
+lowering, so it is the only engine that refuses a program in which some node
+neither lowers nor has a kit; `Native` never fails for that reason. Every node in this library
 has a native form, so the two tiers accept the same library programs; they
 differ only on a host's own registered nodes, which is where a node with no
 native form occurs in practice. Pure native supports the two provenance modes
@@ -203,7 +204,8 @@ function, a run does not execute the whole program:
   first dirties the units holding volatile steps (`volatile_units`), so each
   read runs them again.
 
-It refuses a node without a lowering and is `#[doc(hidden)]`: the
+It calls a node's kit where the node has no native lowering, refuses a node
+that has neither, and is `#[doc(hidden)]`: the
 differential suites and the ladder benchmarks construct it, and one engine's
 concrete kernel, through builders of their own, which are not a host
 surface. A host selects an engine with `Engine`.
@@ -665,7 +667,10 @@ inside an engine, not refusals:
     holds for pure native's units (the class bits of `compile/hybrid.rs`)
     and for the interpreter's native cones (`compile/cone.rs` passes the
     volatile class to `fusion_units::components`).
-  - A side channel is always a segment by itself.
+  - A side channel never shares a fusion unit with another node, so it fires
+    under its own currency on all four engines: on native it runs as a
+    closure step (`fusible` in `compile/hybrid.rs` excludes it), and on pure
+    native as a unit of its own (`side_channels` in `compile/assembly.rs`).
   - A leaf that reads only kernel inputs and that nothing reads, such as the
     copy exposing an input as an output, joins the first segment that reads
     one of the same inputs rather than being a native call of its own for one
@@ -691,7 +696,8 @@ inside an engine, not refusals:
     word) has no compiled form, because the compiled engines write an extern
     either as one slot value or as a pair naming the value the state stores.
     A program with such an extern runs on the interpreter.
-  - A build without the `jit` feature has no P3.
+  - A build without the `jit` feature refuses pure native. `Engine::Native`
+    still runs in such a build, with every step a closure (§1).
 - **The one runtime exception to "computes what the interpreter
   computes": an unset extern on pure native.** The interpreter, the
   closure tier, and P3 return `None` for a cleared or never-set extern

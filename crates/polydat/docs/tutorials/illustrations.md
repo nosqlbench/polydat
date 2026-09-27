@@ -397,9 +397,11 @@ halton/5        5  (2,20) (1,30) (3,10) (1,20) (2,30)
 where           4  (2,10) (2,30) (3,10) (3,30)
 ```
 
-Every strategy is a decidable permutation of the same nine points, so
-the optimizer can reason about it and a run can be replayed from its
-position. `extrema` visits the corners first, `shells` works inward
+Each strategy visits the nine points in a decidable order, so a run
+can be replayed from its position. The number after the slash keeps a
+prefix of that order (the first k strata for `extrema`, the first n
+points for `halton`), and `where` keeps the points that satisfy it.
+`extrema` visits the corners first, `shells` works inward
 from the boundary, and `halton` is a low-discrepancy sample that
 covers the space evenly however early it is cut off. A
 `CoordinateStream` yields the tuples; a `ScopedKernelStream` yields a

@@ -656,8 +656,10 @@ sinks have no combined total-order guarantee.
 Every node exposes `PolydatNode::purity()`.
 `Purity::SideChannel` names its sink; `Purity::Nondeterministic`
 names the reason that input-only determinism does not hold. A
-side-channel step is never fused into a native segment, so it fires under the same currency rule on all four
-engines.
+side channel never shares a fusion unit with another node, so it fires
+under its own currency on all four engines: on native it runs as a closure
+step, and on pure native as a unit of its own
+([engines.md](engines.md) §8).
 
 ### Axiom D3 — Cost Determinism
 

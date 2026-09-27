@@ -2043,11 +2043,11 @@ index function to either `cartesian_0[i]` (i < 500_000) or
 `cartesian_1[i - 500_000]` (i ≥ 500_000), then descend into the
 chosen cartesian's lattice.
 
-Working set after all four rewrites (R4 → R5 → R2): 50 Halton
+Working set after all three rewrites (R4 → R5 → R2): 50 Halton
 draws + per-axis cursors. Sources stream. Total per-pull O(1)
 above the cursor count.
 
-If the author's intent was per-sub-space Halton (15 spread points
+If the author's intent was per-sub-space Halton (25 spread points
 per sub-space rather than 50 spread across the combined
 concatenation), N1 says they must author that form explicitly:
 
@@ -2205,6 +2205,7 @@ enum NaturalOrder {
   Lockstep,                        // zip
   Sequential,                      // union (operand 0 fully, then 1, ...)
   Strategy(StrategyName),          // order(non-Lex, _)
+  PendingSampling,                 // continuous source, no sampling order yet
 }
 
 enum Materialization {
@@ -2219,6 +2220,9 @@ closed-form numeric/symbolic descriptor. `IndexFn` is a typed
 enum, never an opaque callback. `StrategyName` is the §3.6
 named-strategy enum; adding a new strategy is a coordinated
 type extension (§14), not an open registration point.
+`PendingSampling` is the natural order of a continuous source
+that is waiting for a sampling order, and V8 refuses to dispense
+a source whose natural order is still `PendingSampling`.
 
 #### 10.7.2 Propagation rules
 
@@ -3296,8 +3300,9 @@ AST: `order(cartesian(clause(k, [1, 2, 4, 8]), clause(theta, 0.0..2*pi)), Lhs, S
   intervals: [(0,1), (0,1)], measure: Uniform }` *before*
   the outer order, `Bounded(100)` after; `index_addressable =
   Some(Continuous { ... })` before, `None` at the order's
-  output (per §10.7); `natural_order = Lex` before (cartesian's
-  natural order), `Strategy(Halton)` after.
+  output (per §10.7); `natural_order = PendingSampling` before
+  (a continuous cartesian has no order until it is sampled),
+  `Strategy(Halton)` after.
 
 This is the canonical continuous-parameter-sweep idiom. Most
 real workloads with continuous coordinates take this shape:
