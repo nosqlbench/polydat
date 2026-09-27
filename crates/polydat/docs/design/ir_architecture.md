@@ -111,14 +111,18 @@ For the AST `cartesian(clause(k, [1, 2]), clause(b, [10, 20]))`:
 Per spec §6.2 + §6.3, exactly two opcodes are materialization
 barriers:
 
-- `OrderMaterialize` — non-Lex `order` strategy. The
-  `OrderMaterializeStream` pulls its input fully on first
-  `advance()`, applies the strategy, then emits permuted
-  tuples one at a time.
-- `Zip { mode: Cycle }` — the shorter children buffer their
-  values for replay. `ZipStream`'s Cycle branch pulls all
-  children to exhaustion on first `advance()`, then iterates
-  with modular cursors.
+- `OrderMaterialize` — non-Lex `order` strategy. Over an
+  index-addressable input, the strategy selects positions from
+  the input's shape and the stream computes only the tuples it
+  selects. Over any other input, `OrderMaterializeStream` pulls
+  the input fully on the first `advance()`, applies the
+  strategy, and emits the permuted tuples one at a time.
+- `Zip { mode: Cycle }` — each child follows the plan carried
+  on `Op::Zip` ([comprehension_forms.md](comprehension_forms.md)
+  §3.3). An index-addressable child is read at `i mod |child|`
+  and holds nothing. Of the others, one streams and is rewound
+  when it runs out first, and the rest buffer their values for
+  replay. An empty child empties the zip.
 
 Every other stream type is **streaming**: each `advance()` uses
 O(operator-local state) above its arity. `CartesianStream` is
