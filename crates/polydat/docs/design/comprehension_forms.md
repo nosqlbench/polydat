@@ -354,6 +354,16 @@ child's K-th value. Strict mode errors on length mismatch;
 `Truncate` truncates to the shortest; `Cycle` cycles shorter to
 longest.
 
+The Strict error is `RuntimeError::ZipLengthMismatch`, naming each
+child's length, on every path. A traversal reports it when it opens.
+A streaming surface yields tuples while every child has a value and
+reports the error when one child ends before another, so the tuples
+before the mismatch stay delivered; a consumer that stops early never
+sees it. A Strict zip whose addressable children differ in length is
+not index-addressable, so an enclosing order, cartesian, or cycle zip
+pulls it and meets the error rather than reading positions only up to
+the shortest child.
+
 - Children must have **disjoint name sets** (same as cartesian).
 - Children must be **bounded** under `Strict` and `Truncate`
   (cardinality must be known to compute the diagonal endpoint).
@@ -891,7 +901,7 @@ Each constructor's cardinality is a function of its inputs:
 | `cartesian(c1, ..., cN)` | When **independent** (no cross-references between clause sources): discrete × discrete = product (Unbounded if any Unbounded); all-Continuous = `Continuous { intervals: [...K-D...], measure: Product([...]) }`; mixed discrete + Continuous = `Hybrid { discrete_axes, continuous_axes, measure }`. When **dependent** (any clause source references a prior clause's variable): cardinality is a dependent sum `Σ_{outer} |C_inner(outer)|` rather than a product. The independence pass (§3.2) determines which rule applies. |
 | `zip(c1, ..., cN, Strict)` | common cardinality (load-error if mismatch). All children must be discrete; continuous or mixed-class children rejected by V7. |
 | `zip(c1, ..., cN, Truncate)` | `min` of children's cardinalities. All children must be discrete (V7). |
-| `zip(c1, ..., cN, Cycle)` | `max` of children's cardinalities (Unbounded if any are); `Bounded(0)` when any child is empty (§3.3). All children must be discrete (V7). |
+| `zip(c1, ..., cN, Cycle)` | `max` of children's cardinalities (Unbounded if any are); `Bounded(0)` when any child is empty (§3.3); `BoundedAtMost(max)` when a child's count is only an upper bound. All children must be discrete (V7). |
 | `union(c1, ..., cN)` | sum for discrete (Unbounded if any Unbounded). Continuous or mixed-class children rejected by V9. |
 | `filter(c, _)` | discrete in → `BoundedAtMost`/`Unbounded` (existing rules); `Continuous` in → `ContinuousAtMost` with measure ≤ input measure; `Hybrid` in → `Hybrid` with reduced measure on the continuous axes and the same discrete-axis shape (filter cannot grow the space, only shrink the realized subset) |
 | `order(c, _, None)` | `c.cardinality` (continuous stays continuous, unsampled) |
@@ -1290,7 +1300,8 @@ sequence.
 Every well-formed comprehension AST compiles to a finite
 sequence of operators from this set. **Every operator is a
 stream transducer.** Operands flow as `Stream<Tuple>` —
-`advance() -> Option<Tuple>` — never as `Vec<Tuple>`. The two
+`advance() -> Result<Option<Tuple>, RuntimeError>` — never as
+`Vec<Tuple>`. The two
 exceptions (the only places memory is held above per-tuple
 state) are called out explicitly as materialization barriers.
 
@@ -1491,8 +1502,9 @@ IR but keep separate dispense state.
 
 **First-order: coordinate tuples.** Each `advance()` on a
 `CoordinateStream` returns the next named coordinate tuple, one
-`Vec<(String, Value)>`, and nothing more; it returns `None` when the
-comprehension is exhausted. These are the tuples §9.1's `DISPENSE`
+`Vec<(String, Value)>`, and nothing more; it returns `Ok(None)` when
+the comprehension is exhausted and `Err` when evaluation fails
+(§9.5.2). These are the tuples §9.1's `DISPENSE`
 opcode produces. The consumer uses the tuple however it needs:
 inspection, logging, export to another system, or input to a
 non-polydat computation.
@@ -1522,6 +1534,15 @@ CompiledComprehension::coordinate_stream(&self) -> CoordinateStream
 CompiledComprehension::scoped_kernel_stream<K: KernelScope>(&self, parent: K) -> ScopedKernelStream<K>
 CompiledComprehension::scope_once<K: KernelScope>(&self, parent: &K, coords: &Tuple) -> ScopedKernelInstance<K::Scoped>
 ```
+
+Each stream's `advance()` returns `Result<Option<_>, RuntimeError>`:
+`Ok(Some(_))` for the next item, `Ok(None)` when the comprehension is
+exhausted, and `Err` when evaluation fails partway, as a strict zip
+does when one operand ends before another
+(`RuntimeError::ZipLengthMismatch`). A stream reports an error at the
+point it discovers it, so the items before it stay delivered. As
+iterators the streams yield `Result` items, yield an error once, and
+then end.
 
 - `coordinate_stream()` returns a new first-order stream positioned
   at the first tuple.
@@ -1994,9 +2015,9 @@ held before the first tuple is emitted.
 The optimizer recognizes:
 - `zip_cycle(c1, c2)` has **a closed-form index addressing
   function**: tuple at index i is `(c1[i mod |c1|],
-  c2[i mod |c2|])`. The zip's index space is `0..max(|c1|,
-  |c2|)` when one operand is finite and the other unbounded;
-  `0..max(|c1|, |c2|)` when both finite under Cycle.
+  c2[i mod |c2|])`. The zip's index space is `0..L`, where `L` is
+  the cycle length (`metadata::cycle_length`): the largest child
+  count, or 0 when any child is empty.
 - Halton over an index space of size N emits draws by
   computing `floor(N · halton_k(i))` for the i-th Halton
   point.
@@ -2325,7 +2346,7 @@ construction, not in a guard predicate.
 - cardinality: per §6.1
 - index_addressable: `Some(Lockstep { length: |c| })` for Strict/Truncate and `Some(Modular { axis_sizes })` for Cycle, when every child is addressable and bounded; else `None`
 - natural_order: `Lockstep`
-- materialization: `Streaming` for Strict/Truncate. For Cycle, from the operand plan (§3.3, `metadata::cycle_operands`): `Streaming` when no child is buffered, `BoundedBarrier { working_set_size: Σ buffered bounds }` when every buffered child has a bound, and `UnboundedBarrier` when one does not
+- materialization: `Streaming` for Strict/Truncate. For Cycle, from the operand plan (§3.3, `metadata::cycle_operands`): `Streaming` when no child is buffered or a child is known to be empty (the zip then holds nothing), `BoundedBarrier { working_set_size: Σ buffered bounds }` when every buffered child has a bound, and `UnboundedBarrier` when one does not
 
 `union(c1, ..., cN)` (children must all be discrete per V9):
 - cardinality: sum per §6.1
@@ -3445,14 +3466,14 @@ let parent = PolydatKernelScope::new(canonical, parent_kernel);
 
 // First-order: a stream of coordinate tuples.
 let mut coords: CoordinateStream = sweep.coordinate_stream()?;
-while let Some(tuple) = coords.advance() {
+while let Some(tuple) = coords.advance()? {
     log::info!("coords: {tuple:?}");
 }
 
 // Second-order: a stream of scoped kernel instances.
 let mut kernels: ScopedKernelStream<PolydatKernelScope> =
     compiled.scoped_kernel_stream(parent.clone());
-while let Some(scoped) = kernels.advance() {
+while let Some(scoped) = kernels.advance()? {
     let result = run(&scoped.scoped);
     record(result);
 }
