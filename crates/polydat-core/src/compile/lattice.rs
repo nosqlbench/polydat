@@ -149,7 +149,7 @@ impl std::fmt::Display for LatticeReport {
             writeln!(
                 f,
                 "  headroom: {} node{} p2-capable without p3 — candidates \
-                 for P2-at-cone-boundaries (SRD-105)",
+                 for P2-at-cone-boundaries (engines.md §2)",
                 self.p2_headroom,
                 if self.p2_headroom == 1 { "" } else { "s" },
             )?;
