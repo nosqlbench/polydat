@@ -470,15 +470,13 @@ fn visit_zip(
             .push(ValidationWarning::SingletonCombinator { combinator: "zip" });
     }
 
-    // V6: Strict/Truncate require bounded children. Checked
-    // here on direct-clause children via source cardinality;
-    // combinator children are left to the metadata-based
-    // checks.
+    // V6: Strict/Truncate require bounded children, read off each
+    // child's metadata, so a child the optimizer unwraps is judged as
+    // it is judged wrapped.
     if matches!(mode, ZipMode::Strict | ZipMode::Truncate) {
         for child in children {
-            if let Some(card) = direct_source_cardinality(child)
-                && matches!(card, CardinalityClass::Unbounded)
-            {
+            let card = child.metadata().cardinality;
+            if matches!(card, CardinalityClass::Unbounded) {
                 return Err(ValidationError::V6UnboundedDiscrete {
                     operator: "zip",
                     cardinality: card,
@@ -806,17 +804,6 @@ fn contains_continuous_source(c: &Comprehension) -> bool {
         Comprehension::Filter { child, .. } | Comprehension::Order { child, .. } => {
             contains_continuous_source(child)
         }
-    }
-}
-
-/// Return the source's cardinality if `c` is a direct clause;
-/// `None` otherwise. Used by the V6 check on direct-clause
-/// children; combinator children are covered by the
-/// metadata-based checks.
-fn direct_source_cardinality(c: &Comprehension) -> Option<CardinalityClass> {
-    match c {
-        Comprehension::Clause { source, .. } => Some(source.cardinality()),
-        _ => None,
     }
 }
 

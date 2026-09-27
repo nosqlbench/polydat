@@ -14,7 +14,8 @@
 //!    decreases a metadata-derived measure or leaves the AST
 //!    unchanged.
 //! 4. **Bounds-improving.** Peak memory never grows.
-//! 5. **No rejections.** Validity is decided pre-optimizer.
+//! 5. **No rejections.** Validity is decided on the tree as written,
+//!    before any rewrite, and every rewrite keeps a valid tree valid.
 //!
 //! ## R-rule catalog
 //!

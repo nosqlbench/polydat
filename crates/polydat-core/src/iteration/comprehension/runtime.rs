@@ -1072,14 +1072,22 @@ impl EvalState<'_> {
             .iter()
             .map(|p| input.tuples[p as usize].clone())
             .collect();
-        // Order may produce a different index_fn (e.g., Lex
-        // preserves; non-Lex destroys), but downstream
-        // consumers of evaluate_for_iteration only read tuples.
         Ok(EvaluatedNode {
             tuples: out,
-            index_fn: None,
+            index_fn: passed_through(strategy, truncation, input.index_fn),
         })
     }
+}
+
+/// The addressing an order's output keeps: an untruncated `Lex` passes
+/// its input through, positions and all, and any other order leaves
+/// its output with none, as the metadata algebra says (§10.7.2).
+fn passed_through(
+    strategy: StrategyName,
+    truncation: Option<u64>,
+    input: Option<IndexFn>,
+) -> Option<IndexFn> {
+    input.filter(|_| strategy == StrategyName::Lex && truncation.is_none())
 }
 
 /// The index-addressed evaluator ([`evaluate_indexed`]). Each node
@@ -1172,7 +1180,7 @@ impl EvalState<'_> {
                         child: Box::new(inner),
                         selection,
                     },
-                    None,
+                    passed_through(*strategy, *truncation, index_fn),
                 ))
             }
         }

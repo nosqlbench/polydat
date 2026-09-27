@@ -14,14 +14,18 @@
 //! cartesians (independent and dependent), the three zip modes, unions,
 //! every order strategy with and without truncation and seed, filters
 //! over comparisons, mixed kinds, negation, membership, and function
-//! calls, and sampled continuous spaces. On every shape the scope-less
-//! streaming surface compiles, every tuple binds every name of the shape
-//! and that surface yields exactly the traversal's tuples in the same
-//! order; where the traversal refuses a shape, a stream that reaches the
-//! fault fails with the same kind of error, a strict mismatch after the
-//! tuples before it. On every shape a traversal yields, the cardinality
-//! its metadata reports holds: an exact count is the count yielded, and
-//! an at-most count is never exceeded.
+//! calls, and sampled continuous spaces. On every shape the validator
+//! accepts as written, the optimizer's rewrite validates too and no
+//! traversal refuses the shape at its strategy. On every shape the
+//! scope-less streaming surface compiles, the rewritten tree the stream
+//! compiles ends as the shape as written does, every tuple binds every
+//! name of the shape, and the stream yields exactly the traversal's
+//! tuples in the same order; where the traversal refuses a shape, a
+//! stream that reaches the fault fails with the same kind of error, a
+//! strict mismatch after the tuples before it. No rewrite is excused.
+//! On every shape a traversal yields, the cardinality its metadata
+//! reports holds: an exact count is the count yielded, and an at-most
+//! count is never exceeded.
 
 use polydat::iteration::comprehension::ast::Comprehension;
 use polydat::iteration::comprehension::cardinality::{Interval, ProductMeasure};
@@ -32,6 +36,7 @@ use polydat::iteration::comprehension::runtime::{
 use polydat::iteration::comprehension::source::{LiteralValue, Source};
 use polydat::iteration::comprehension::strategies::Tuple;
 use polydat::iteration::comprehension::strategy::{StrategyName, ZipMode};
+use polydat::iteration::comprehension::validate::{Mode, validate};
 
 fn scope() -> polydat::kernel::PolydatKernel {
     polydat::dsl::compile_polydat_interpreter("input cycle: u64\n").unwrap()
@@ -49,18 +54,6 @@ struct Compared {
     tuples: usize,
     /// Whether the streaming surface compiled the shape.
     streamed: bool,
-    /// How the optimizer's rewrite of the shape changes its outcome, if
-    /// it does.
-    rewritten: Option<Rewrite>,
-}
-
-/// The rewrites known to change a shape's outcome.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Rewrite {
-    /// A rewrite of an order's input (R0a dropping a `true` filter, R3
-    /// commuting a filter) changes whether the strategy accepts the
-    /// input's shape (V4).
-    StrategyAdmission,
 }
 
 /// [`assert_equivalent`], reporting what it found.
@@ -112,39 +105,44 @@ fn compare(ast: &Comprehension, scope: &polydat::kernel::PolydatKernel) -> Compa
         ),
     };
     let tuples = outcome.as_ref().map_or(0, Vec::len);
+    // Acceptance is decided on the tree as written (comprehension_forms.md
+    // §5): a tree the validator accepts still validates once the
+    // optimizer has rewritten it, and no traversal of it refuses it at
+    // its strategy (V4).
+    let flat = polydat::iteration::comprehension::flatten::flatten_static_sources(
+        ast,
+        &polydat::kernel::interp::NoScope::new(),
+    );
+    if validate(&flat, Mode::Permissive).is_ok() {
+        let rewritten = polydat::iteration::comprehension::optimize::optimize(flat.clone());
+        if let Err(e) = validate(&rewritten, Mode::Permissive) {
+            panic!("the validator accepts {ast:?}, and refuses its rewrite {rewritten:?}: {e}");
+        }
+        assert!(
+            !matches!(outcome, Err(RuntimeError::StrategyRejectsInput { .. })),
+            "the validator accepts {ast:?}, which the traversal refuses at its strategy: {:?}",
+            outcome.as_ref().err()
+        );
+    }
     let Some(streamed) = streamed(ast) else {
         return Compared {
             tuples,
             streamed: false,
-            rewritten: None,
         };
     };
-    // The streaming surface compiles the optimized tree (§10.6). Where
-    // the optimizer's rewrite keeps the shape's outcome, the stream is
-    // held to the traversal of the shape as written; where it does not,
-    // to the traversal of the tree it compiles, and the rewrite must be
-    // one known to change an outcome: a rewrite of an order's input
-    // changing whether its strategy accepts the input's shape (V4).
+    // The streaming surface compiles the optimized tree (§10.6), whose
+    // traversal ends as the traversal of the shape as written does, and
+    // the stream is held to it.
     let optimized_ast = polydat::iteration::comprehension::optimize::optimize(ast.clone());
     let optimized = evaluate_indexed(&optimized_ast, scope).map(|t| t.to_vec());
-    let rewritten = (!same_outcome(&outcome, &optimized)).then(|| {
-        let fails = |kind: fn(&RuntimeError) -> bool| {
-            [&outcome, &optimized]
-                .iter()
-                .any(|r| r.as_ref().err().is_some_and(kind))
-        };
-        if fails(|e| matches!(e, RuntimeError::StrategyRejectsInput { .. })) {
-            Rewrite::StrategyAdmission
-        } else {
-            panic!(
-                "the optimizer's rewrite changes the outcome of {ast:?}:\n  as written: {:?}\n  \
-                 optimized: {:?}",
-                outcome.as_ref().map(Vec::len),
-                optimized.as_ref().map(Vec::len)
-            )
-        }
-    });
-    match &optimized {
+    assert!(
+        same_outcome(&outcome, &optimized),
+        "the optimizer's rewrite changes the outcome of {ast:?}:\n  as written: {:?}\n  \
+         optimized: {:?}",
+        outcome.as_ref().map(Vec::len),
+        optimized.as_ref().map(Vec::len)
+    );
+    match &outcome {
         Ok(expected) => {
             assert_counts(&optimized_ast, expected.len());
             // On a shape that validates, which the streaming surface
@@ -185,7 +183,7 @@ fn compare(ast: &Comprehension, scope: &polydat::kernel::PolydatKernel) -> Compa
                 } else {
                     let another_fault = match error {
                         RuntimeError::ZipLengthMismatch { .. } => strict_zips(ast) > 0,
-                        _ => evaluate_indexed(&truncated(&optimized_ast), scope)
+                        _ => evaluate_indexed(&truncated(ast), scope)
                             .err()
                             .is_some_and(|e| std::mem::discriminant(&e) == kind),
                     };
@@ -201,7 +199,6 @@ fn compare(ast: &Comprehension, scope: &polydat::kernel::PolydatKernel) -> Compa
     Compared {
         tuples,
         streamed: true,
-        rewritten,
     }
 }
 
@@ -1151,7 +1148,6 @@ fn generated_shapes_index_as_they_materialize() {
         .unwrap_or(1500);
     let (mut compared, mut tuples, mut emptied, mut mismatched) = (0u64, 0usize, 0u64, 0u64);
     let (mut streamed_tuples, mut sampled, mut called) = (0usize, 0u64, 0u64);
-    let mut rewritten = std::collections::BTreeMap::new();
     for case in 0..cases {
         let mut shapes = Shapes {
             rng: Rng(0x5EED_0000 + case),
@@ -1170,9 +1166,6 @@ fn generated_shapes_index_as_they_materialize() {
         emptied += shapes.emptied;
         sampled += shapes.sampled;
         called += shapes.called;
-        if let Some(rewrite) = found.rewritten {
-            *rewritten.entry(format!("{rewrite:?}")).or_insert(0u64) += 1;
-        }
         if found.streamed {
             streamed_tuples += found.tuples;
             // Strict zips over operands of random lengths often end
@@ -1184,10 +1177,7 @@ fn generated_shapes_index_as_they_materialize() {
             }
         }
     }
-    eprintln!(
-        "{compared} shapes compared, {tuples} tuples, {streamed_tuples} through streams; \
-         optimizer rewrites that change an outcome: {rewritten:?}"
-    );
+    eprintln!("{compared} shapes compared, {tuples} tuples, {streamed_tuples} through streams");
     assert!(compared > cases / 2, "only {compared} of {cases} compared");
     assert!(tuples > 0, "no generated shape produced a tuple");
     assert!(
@@ -1291,6 +1281,77 @@ fn predicates_group_by_the_one_precedence_table() {
     // The grouping `!` over the whole disjunction keeps other tuples.
     assert_ne!(traversal("!{a} || {b}"), traversal("!({a} || {b})"));
     assert_ne!(stream("!{a} || {b}"), stream("!({a} || {b})"));
+}
+
+/// Acceptance is decided on the tree as written (comprehension_forms.md
+/// §5), before any rewrite, so it is the same for the stream, which
+/// compiles the rewritten tree, and the traversal, which evaluates the
+/// tree as written: a child the optimizer unwraps is judged as it is
+/// judged wrapped, and a tree the validator accepts is accepted at every
+/// strategy.
+#[test]
+fn acceptance_is_decided_on_the_tree_as_written() {
+    let scope = scope();
+    let refused = |c: &Comprehension| {
+        assert!(validate(c, Mode::Permissive).is_err(), "{c:?}");
+        assert!(streamed(c).is_none(), "{c:?}");
+    };
+    // V6: a strict zip over an operand of unknown count, bare or under
+    // an untruncated `Lex` order that R0a drops.
+    let dependent = || generator("d", "0..{a}");
+    for operand in [
+        dependent(),
+        Comprehension::order(dependent(), StrategyName::Lex, None),
+    ] {
+        refused(&Comprehension::cartesian(vec![
+            range("a", 1, 3, 1),
+            Comprehension::zip(vec![operand, ints("z", &[1, 2])], ZipMode::Strict),
+        ]));
+    }
+    // V4: a truncated `Lex` order keeps a prefix, which has no index
+    // space for another strategy to rank, whether or not a filter sits
+    // between the two; the traversal refuses it at the strategy.
+    for input in [
+        Comprehension::order(range("a", 0, 5, 1), StrategyName::Lex, Some(3)),
+        Comprehension::filter(
+            Comprehension::order(range("a", 0, 5, 1), StrategyName::Lex, Some(3)),
+            "{a} > 0",
+        ),
+    ] {
+        let shape = Comprehension::order(input, StrategyName::ReverseLex, None);
+        refused(&shape);
+        assert!(matches!(
+            evaluate_indexed(&shape, &scope),
+            Err(RuntimeError::StrategyRejectsInput { .. })
+        ));
+    }
+    // An untruncated `Lex` order passes its input's positions through,
+    // so a strategy over it is accepted on every path.
+    let through = Comprehension::order(
+        Comprehension::order(range("a", 0, 5, 1), StrategyName::Lex, None),
+        StrategyName::ReverseLex,
+        Some(2),
+    );
+    validate(&through, Mode::Permissive).unwrap();
+    assert_eq!(assert_equivalent(&through, &scope), 2);
+    // A filter that is always true is accepted under a strategy as
+    // written and once R0a drops it, and orders alike.
+    let trivially = Comprehension::order(
+        Comprehension::filter(range("a", 0, 5, 1), "true"),
+        StrategyName::Halton,
+        Some(2),
+    );
+    validate(&trivially, Mode::Permissive).unwrap();
+    assert_eq!(
+        evaluate_indexed(&trivially, &scope).unwrap().to_vec(),
+        evaluate_indexed(
+            &Comprehension::order(range("a", 0, 5, 1), StrategyName::Halton, Some(2)),
+            &scope
+        )
+        .unwrap()
+        .to_vec()
+    );
+    assert_eq!(assert_equivalent(&trivially, &scope), 2);
 }
 
 /// A predicate the totality check calls total (comprehension_forms.md
@@ -1449,7 +1510,6 @@ fn an_order_over_a_filter_ranks_the_survivors() {
 /// Both evaluators, the stream, and the validator agree.
 #[test]
 fn an_order_chain_folds_only_under_a_shape_strategy() {
-    use polydat::iteration::comprehension::validate::{Mode, validate};
     let scope = scope();
     let product = || Comprehension::cartesian(vec![range("a", 0, 4, 1), ints("b", &[5, 6, 7])]);
     let shuffled = || Comprehension::order_seeded(product(), StrategyName::Shuffle, None, Some(5));

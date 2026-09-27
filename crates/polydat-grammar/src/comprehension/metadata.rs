@@ -477,7 +477,11 @@ fn order_metadata(
 
     let (index_addressable, natural_order, materialization) = match strategy {
         StrategyName::Lex => (
-            child_meta.index_addressable, // inherit through Lex
+            // An untruncated `Lex` passes its input through, positions
+            // and all; a prefix of an index space is not one.
+            child_meta
+                .index_addressable
+                .filter(|_| truncation.is_none()),
             NaturalOrder::Lex,
             child_meta.materialization, // counter wrapper at most
         ),
@@ -1582,15 +1586,23 @@ mod tests {
         assert_eq!(m.index_addressable, None);
     }
 
+    /// An untruncated `Lex` order passes its input's addressing through;
+    /// a truncated one keeps a prefix, which is no lattice.
     #[test]
-    fn lex_order_inherits_addressability() {
+    fn lex_order_inherits_addressability_untruncated() {
         let inner =
             Comprehension::cartesian(vec![clause("k", &[1, 2]), clause("limit", &[10, 20])]);
-        let ordered = Comprehension::order(inner, StrategyName::Lex, Some(2));
-        let m = ordered.metadata();
-        assert_eq!(m.cardinality, CardinalityClass::Bounded(2));
-        assert!(matches!(m.index_addressable, Some(IndexFn::Lattice { .. })));
-        assert_eq!(m.natural_order, NaturalOrder::Lex);
+        let whole = Comprehension::order(inner.clone(), StrategyName::Lex, None).metadata();
+        assert_eq!(whole.cardinality, CardinalityClass::Bounded(4));
+        assert!(matches!(
+            whole.index_addressable,
+            Some(IndexFn::Lattice { .. })
+        ));
+        assert_eq!(whole.natural_order, NaturalOrder::Lex);
+        let prefix = Comprehension::order(inner, StrategyName::Lex, Some(2)).metadata();
+        assert_eq!(prefix.cardinality, CardinalityClass::Bounded(2));
+        assert_eq!(prefix.index_addressable, None);
+        assert_eq!(prefix.natural_order, NaturalOrder::Lex);
     }
 
     #[test]
