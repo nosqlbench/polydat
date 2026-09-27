@@ -203,12 +203,13 @@ impl Compiler {
 
         // Module inlining is the *flatten* combinator
         // (module_system.md §5): the module's `Statement`s splice into
-        // this host's DAG. The module body is still a pragma scope
-        // (polydat_grammar.md §14): its bindings compile under the
-        // host's set plus the module's own pragmas, and the host's set
-        // is restored once they are inlined, so a module's pragma never
-        // reaches its host.
-        let module_pragmas = self.pragmas.nested(&module_stmts);
+        // this host's DAG. The module body is still a pragma scope of
+        // its own (polydat_grammar.md §14.1): its bindings, and the
+        // holes and projection bodies of its tiles, compile under the
+        // module's own pragmas, whatever its host declares, and the
+        // host's set is restored once they are inlined, so a module's
+        // pragma never reaches its host either.
+        let module_pragmas = super::pragmas::PragmaSet::default().nested(&module_stmts);
         for pragma in super::pragmas::declared_in(&module_stmts) {
             self.pending_events
                 .push(super::compile::pragma_event(&pragma));
@@ -329,7 +330,7 @@ impl Compiler {
         // Inline each statement from the module, rewriting names, under
         // the module's pragma scope.
         let host_pragmas = std::mem::replace(&mut self.pragmas, module_pragmas);
-        asm.set_scope_strict_values(self.pragmas.strict_values());
+        let host_mark = asm.set_scope_strict_values(Some(self.pragmas.strict_values()));
         for stmt in &module_stmts {
             match stmt {
                 Statement::InputDecl(_) => {} // skip — kernel inputs handled by caller
@@ -431,7 +432,7 @@ impl Compiler {
         }
 
         // The target nodes below are the host's bindings.
-        asm.set_scope_strict_values(host_pragmas.strict_values());
+        asm.set_scope_strict_values(host_mark);
         self.pragmas = host_pragmas;
 
         // Wire module outputs to caller's targets via identity nodes.

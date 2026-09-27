@@ -141,6 +141,8 @@ mod surfaces_independence;
 mod tier_concurrency_bench;
 #[path = "tile_host_surfaces.rs"]
 mod tile_host_surfaces;
+#[path = "tile_pragmas.rs"]
+mod tile_pragmas;
 #[path = "tile_projections.rs"]
 mod tile_projections;
 #[path = "tile_render.rs"]

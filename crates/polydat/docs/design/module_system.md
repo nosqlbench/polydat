@@ -149,8 +149,9 @@ compiler:
 Input declarations are satisfied by the caller and are not copied into the
 host graph. Nested module definitions, extern declarations, and cursor
 declarations are not inlined as body nodes. A module body is a pragma
-scope: its bindings compile under the host's pragmas plus the module's
-own, and the module's pragmas do not apply to the host
+scope of its own: its bindings, and the holes and projection bodies of
+its tiles, compile under the module's own pragmas and no others, and the
+module's pragmas do not apply to the host
 ([polydat_grammar.md §14.1](polydat_grammar.md#sec-pragma-scoping)). The resulting nodes go through the host program's
 single wiring validation, lifecycle analysis, topological ordering,
 dead-code elimination, fusion, and engine selection passes. No runtime
@@ -184,12 +185,15 @@ own. The body is compiled from this same record on each of the four
 engines (the interpreter, the closure tier, native, and pure native), so a
 body sees the same modules on all four.
 
-A tile projection body ([Polytile](polytile.md) §6) compiles with the
-default settings, registered nodes and the embedded standard library. It
-does not inherit the enclosing program's directory, library paths,
-pragmas, or program-local modules.
+A tile projection body ([Polytile](polytile.md) §6) compiles as a `for`
+body does, with the settings of the scope the tile is written in: the
+source directory, the library paths, the strict flag, the modules
+resolved so far, and the pragma set in force there. A tile has no
+pragmas of its own, so its projection bodies and its holes compile
+under that scope's set.
 
 A tile declared inside a module body is inlined with the call under the
-call's prefix, as every other statement of the body is. A producer bound
+call's prefix, as every other statement of the body is, and compiles
+under the module's pragmas (§5). A producer bound
 in a module body (`name := for ...`) is bound under the prefix as the
 `streamer` constant the `for` expression lowers to.

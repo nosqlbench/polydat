@@ -609,6 +609,18 @@ strict flag, its pragmas, and the modules it has resolved
 enclosing program, so a bad reference in a projection body is a compile
 error of that program rather than a failure when the tile renders.
 
+A tile is not a pragma scope ([polydat_grammar.md
+§14.1](polydat_grammar.md#sec-pragma-scoping)). Its body declares no
+pragmas, and its holes and projection bodies compile under the pragmas
+of the scope the tile is written in, as the statements of a `for` body
+do: a tile in a program under the program's, a tile in a `for` body
+under the body's, and a tile in a module body under the module's own,
+whatever the host that calls the module declares. Under
+`strict_values`, a constant that fails a port's constraint in a hole or
+a projection body fails the build, and a constrained port there fed by
+any other source gets a runtime guard
+([graph_compiler.md §2.3](graph_compiler.md#sec-strict-wires)).
+
 ## 7. Runtime
 
 ### 7.1 The render program

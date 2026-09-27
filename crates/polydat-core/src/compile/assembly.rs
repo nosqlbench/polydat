@@ -55,10 +55,12 @@ struct PendingNode {
     name: String,
     node: Box<dyn PolydatNode>,
     inputs: Vec<WireRef>,
-    /// The node was added in a scope under `pragma strict_values`, so
-    /// its constrained wire inputs are checked whatever the program's
-    /// own pragmas say (polydat_grammar.md §14).
-    strict_values: bool,
+    /// Whether the scope the node was written in has `strict_values`
+    /// on, when that scope is not the program's own: `Some` for a node
+    /// of a module body, which decides for the node whatever the
+    /// program's pragmas say, and `None` for a node of the program,
+    /// which follows the program's set (polydat_grammar.md §14).
+    strict_values: Option<bool>,
 }
 
 /// Errors that can occur during assembly.
@@ -607,9 +609,9 @@ pub struct PolydatAssembler {
     /// build and splices an `AssertValue` in front of every other
     /// constrained wire input.
     pub(crate) strict_values: bool,
-    /// Whether nodes added now are marked as written under
-    /// `strict_values`; see [`Self::set_scope_strict_values`].
-    scope_strict_values: bool,
+    /// The `strict_values` mark nodes added now carry; see
+    /// [`Self::set_scope_strict_values`].
+    scope_strict_values: Option<bool>,
     /// Strict mode: an implicit type coercion is refused at wire
     /// resolution, and a config wire fed from a cycle-time source, a
     /// nondeterministic node no `volatile` output acknowledges, and a
@@ -690,7 +692,7 @@ impl PolydatAssembler {
             template: false,
             const_outputs: std::collections::HashSet::new(),
             strict_values: false,
-            scope_strict_values: false,
+            scope_strict_values: None,
             strict: false,
             input_variance: crate::dsl::compile::InputVariance::Fixed,
             jit_mode: None,
@@ -761,13 +763,15 @@ impl PolydatAssembler {
         self
     }
 
-    /// Mark the nodes added from here on as written under
-    /// `pragma strict_values`, or stop marking them. The compiler
-    /// sets it for a module body whose own pragmas turn
-    /// `strict_values` on, so the module's nodes are checked and its
-    /// host's are not (polydat_grammar.md §14).
-    pub(crate) fn set_scope_strict_values(&mut self, on: bool) {
-        self.scope_strict_values = on;
+    /// Set the `strict_values` mark of the nodes added from here on and
+    /// return the mark it replaces. `Some(on)` says the nodes are
+    /// written in a scope other than the program's own, whose pragmas
+    /// decide for them; `None` says they follow the program's set. The
+    /// compiler sets it while a module body inlines, so the module's
+    /// own pragmas decide for the module's nodes and the host's decide
+    /// for the host's (polydat_grammar.md §14).
+    pub(crate) fn set_scope_strict_values(&mut self, mark: Option<bool>) -> Option<bool> {
+        std::mem::replace(&mut self.scope_strict_values, mark)
     }
 
     /// Set the binding modifier for a named output.
@@ -2059,7 +2063,7 @@ impl PolydatAssembler {
                                 name: conv_name,
                                 node: Box::new(converter),
                                 inputs: vec![],
-                                strict_values: false,
+                                strict_values: None,
                             });
                             converters.insert((input_idx, expected_type), idx);
                             idx
@@ -2114,7 +2118,7 @@ impl PolydatAssembler {
                         name: adapter_name,
                         node: adapter,
                         inputs: vec![],
-                        strict_values: false,
+                        strict_values: None,
                     });
 
                     node_wiring.push(WireSource::NodeOutput(adapter_idx, 0));
@@ -2140,8 +2144,9 @@ impl PolydatAssembler {
                 //
                 // After a wire is resolved (and any type adapter
                 // inserted), the sink port's declared `constraint`
-                // is checked under strict_values, the program's or
-                // the scope's the sink was written in. A compile-time
+                // is checked under strict_values as the scope the
+                // sink was written in sets it: a module body's own
+                // pragmas, or the program's. A compile-time
                 // constant source is checked now, and a violation
                 // stops the build; the guard this pass inserted for
                 // the same constraint needs no second guard; any
@@ -2150,7 +2155,7 @@ impl PolydatAssembler {
                 let sink_port = &all_nodes[node_idx].node.meta().wire_inputs()[port_idx];
                 if let Some(constraint) = sink_port.constraint {
                     let last_source = node_wiring.last().expect("wire just pushed").clone();
-                    let proof = if strict_values || all_nodes[node_idx].strict_values {
+                    let proof = if all_nodes[node_idx].strict_values.unwrap_or(strict_values) {
                         constraint_proof(
                             &all_nodes,
                             &inserted_guards,
@@ -2210,7 +2215,7 @@ impl PolydatAssembler {
                                 constraint,
                             ),
                             inputs: vec![],
-                            strict_values: false,
+                            strict_values: None,
                         });
                         inserted_guards.insert(assert_idx, constraint);
 
@@ -2297,7 +2302,7 @@ impl PolydatAssembler {
                         }),
                         inputs: vec![], // wiring is in resolved_wiring
                         // The strict-wire pass has run.
-                        strict_values: false,
+                        strict_values: None,
                     })
                     .collect();
             }
@@ -3643,13 +3648,14 @@ mod strict_values_tests {
     #[test]
     fn scope_strictness_marks_only_the_nodes_added_under_it() {
         let mut asm = PolydatAssembler::new(vec!["cycle".into()]);
-        asm.set_scope_strict_values(true);
+        let before = asm.set_scope_strict_values(Some(true));
+        assert_eq!(before, None);
         asm.add_node(
             "inner",
             Box::new(NonZeroSink::new()),
             vec![WireRef::input("cycle")],
         );
-        asm.set_scope_strict_values(false);
+        asm.set_scope_strict_values(before);
         asm.add_node(
             "outer",
             Box::new(NonZeroSink::new()),
@@ -3657,6 +3663,30 @@ mod strict_values_tests {
         );
         asm.add_output("a", WireRef::node("inner"));
         asm.add_output("b", WireRef::node("outer"));
+        assert_eq!(inserted(asm), 1);
+    }
+
+    /// A node added under a scope whose pragmas leave `strict_values`
+    /// off is unchecked though the program's own pragmas turn it on;
+    /// the program's nodes are checked.
+    #[test]
+    fn a_non_strict_scope_is_unchecked_under_a_strict_program() {
+        let mut asm = PolydatAssembler::new(vec!["cycle".into()]);
+        let before = asm.set_scope_strict_values(Some(false));
+        asm.add_node(
+            "inner",
+            Box::new(NonZeroSink::new()),
+            vec![WireRef::input("cycle")],
+        );
+        asm.set_scope_strict_values(before);
+        asm.add_node(
+            "outer",
+            Box::new(NonZeroSink::new()),
+            vec![WireRef::input("cycle")],
+        );
+        asm.add_output("a", WireRef::node("inner"));
+        asm.add_output("b", WireRef::node("outer"));
+        asm.set_strict_wires(false, true);
         assert_eq!(inserted(asm), 1);
     }
 }

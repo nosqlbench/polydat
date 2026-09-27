@@ -43,10 +43,13 @@
 //!
 //! Scoping is lexical. A pragma applies to the scope it is written in
 //! and to every scope nested in it: a program, a `for` body, and a
-//! module body are scopes. A nested scope compiles under
-//! [`PragmaSet::nested`], its enclosing set plus the pragmas its own
-//! statements declare. Pragmas are presence-only, so a nested scope
-//! can add to the set and never conflicts with it.
+//! module body are scopes. A `for` body is nested in the scope it is
+//! written in and compiles under [`PragmaSet::nested`], its enclosing
+//! set plus the pragmas its own statements declare. A module body is
+//! nested in no host and compiles under its own pragmas alone. A tile
+//! is not a scope: it compiles under the set of the scope it is
+//! written in. Pragmas are presence-only, so a nested scope can add to
+//! the set and never conflicts with it.
 
 use crate::ast::Statement;
 

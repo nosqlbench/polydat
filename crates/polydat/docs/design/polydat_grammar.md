@@ -920,10 +920,22 @@ pragma strict_types
 Pragma scoping is **lexical**. A pragma applies to the scope it is
 written in and to every scope nested in it. The scopes are a program, a
 `for` body, and a module body. A pragma applies to its whole scope,
-wherever in the scope it is written. A nested scope compiles under the
-enclosing scope's pragmas plus its own. Pragmas are presence-only, so a
-nested scope can add to the set and never conflicts with it. A pragma
-never reaches an enclosing scope.
+wherever in the scope it is written. A `for` body is a nested scope: it
+compiles under the enclosing scope's pragmas plus its own. Pragmas are
+presence-only, so a nested scope can add to the set and never conflicts
+with it. A pragma never reaches an enclosing scope.
+
+A module body is a scope of its own and is not nested in the program
+that calls the module. It compiles under the pragmas it declares and no
+others, whether the module is defined in the calling program or in a
+library file, so a module compiles the same way under every host.
+
+A tile (§[17](#sec-tiles)) is not a scope. It declares no pragmas, and
+its holes and its projection bodies compile under the pragmas of the
+scope the tile is written in: a tile in a program under the program's, a
+tile in a `for` body under the body's, and a tile in a module body under
+the module's own ([Polytile](polytile.md) §6). A projection body is
+compiled as a `for` body is, with that scope's set.
 
 A pragma in a `for` body applies to the body. The program around it is
 unchecked:
@@ -954,7 +966,9 @@ b := mod_wire(cycle, s)
 ```
 
 The module's `mod_wire` is checked: its divisor is the constant 7, which
-is checked at build. The host's `mod_wire` is not checked.
+is checked at build. The host's `mod_wire` is not checked. In the other
+direction, a `pragma strict_values` in the host checks the host's
+bindings and none of the bindings of a module that declares no pragma.
 
 An enclosing scope's pragma applies to every nested scope, so this
 program fails at build on the constant zero divisor in its body:
