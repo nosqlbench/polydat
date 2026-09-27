@@ -122,9 +122,10 @@ returns it again on every later `advance`.
 | A const that reads a coordinate is refused on all four engines | such a const; the compiled engines accepted it before | read an extern or another const, or drop `const` ([evaluation_model.md](../design/evaluation_model.md), "Compilation of a const") |
 | `session_start_millis()` and `elapsed_millis()` are removed | a call to either (unknown function) | `const session_start := current_epoch_millis()` in the root scope, read in children through `extern session_start: u64`; elapsed time is `current_epoch_millis() - session_start` in a volatile binding |
 | `is_stable` takes a window: `is_stable(samples: vec_f64, margin, min_samples)` | the 0.5.0 form `is_stable(value, margin, min_samples, horizon)` | keep the recent samples in the host and pass them, for example as JSON through `str_to_vec_f64` ([evaluation_model.md](../design/evaluation_model.md), "Non-Deterministic Nodes") |
-| A predicate compiled without a scope may name only what its tuples bind | a coordinate stream whose `where` names an enclosing wire, now `ValidationError::PredicateContextRequired` | traverse it with `for`, which captures those names when it opens |
+| A predicate compiled without a scope may name only what its tuples bind | a coordinate stream whose `where` names an enclosing wire, now `ValidationError::PredicateContextRequired` (a name nothing provides is V3, below) | traverse it with `for`, which captures those names when it opens, or build the stream with `from_ast_in` naming the scope's names |
 | `order reverse_lex` over a filter is refused on streams, as it was on traversals | a stream of such an order (V4) | order before filtering, or use `lex` ([comprehension_forms.md](../design/comprehension_forms.md) §5, V4) |
-| A non-Lex order over a truncated `lex` order is refused at compile | `order(order(c, lex, 10), halton, 3)`, which was accepted before; a truncated order has no position function to select from | apply the non-Lex order first, or truncate after it ([comprehension_forms.md](../design/comprehension_forms.md) §5, V4) |
+| A non-Lex order over a truncated `lex` of a filter or a dependent cartesian is refused at compile | such an order, which was accepted before; that prefix streams and holds no positions to select from | apply the non-Lex order first, or truncate after it ([comprehension_forms.md](../design/comprehension_forms.md) §5, V4) |
+| A name that nothing binds is refused at compile (V3) | a clause source or predicate naming something that neither the comprehension nor, for a traversal, the program provides; a bare word in a predicate, which is a name and never resolves | bind or declare the name, or quote the text; the error `ValidationError::V3UnresolvedNames { reads }` names each unresolved name and where it is read ([comprehension_forms.md](../design/comprehension_forms.md) §5, V3) |
 | V6's bound check reads every zip operand, including one inside a wrapper | a zip whose unbounded operand was hidden by a rewrite and accepted | bound the operand, or use a cycle zip ([comprehension_forms.md](../design/comprehension_forms.md) §5, V6) |
 | Under `pragma strict_values`, a constant that violates the constraint of the port it feeds fails the build | a program such as `mod_wire(cycle, 0)`, which compiled before because a constant source was skipped unchecked | pass a value the constraint accepts; the error names the port, the constraint, and the constant ([graph_compiler.md](../design/graph_compiler.md) §2.3) |
 
@@ -335,6 +336,16 @@ a rule the specifications now state and every engine follows.
   shuffled tuples. The optimizer dropped the inner order in both cases
   before ([comprehension_forms.md](../design/comprehension_forms.md)
   §7.4, O1).
+- **Every strategy accepts an order's output.** An order's output is
+  addressable: position i is the input tuple its selection lists at i.
+  So `order(order(c, halton, 50), shuffle)` shuffles the 50 halton
+  points, where 0.5.0 refused `shuffle` and `reverse_lex` over an order
+  ([comprehension_forms.md](../design/comprehension_forms.md) §3.6).
+- **Opening a traversal captures names its predicates read from the
+  enclosing scope.** A predicate-only outer name was not captured
+  before; it now reads the value the scope held when the traversal
+  opened, as a clause source does
+  ([for_traversal.md](../design/for_traversal.md) §3.1).
 - **Acceptance is decided on the comprehension as written.** Validity
   rules run before any optimizer rewrite, so a stream and a traversal of
   the same text accept and refuse the same programs, and a filter moves
@@ -439,6 +450,12 @@ a rule the specifications now state and every engine follows.
   An argument error now names the argument as `generator.parameter`,
   as `fib.n` in `fib.n: expected non-negative integer, got '-1'`, and a
   wrong argument count says `arguments` for every generator.
+- **Name checking for comprehensions:** `validate::check_names` with a
+  `Surface` reports every name a comprehension reads that its surface
+  cannot supply (`NameRead`, `ReadSite`, `outer_reads`), and
+  `from_ast_in` and `StreamerValue::outer` give a stream the enclosing
+  scope's names ([comprehension_forms.md](../design/comprehension_forms.md)
+  §5, V3).
 - **`TileProgram::from_json_for(json, &dyn Kernel)`** loads a tile
   skeleton into a kernel's tree: its bodies see the resources installed
   on that tree and record their compile events on its ledger
