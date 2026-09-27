@@ -1,0 +1,5 @@
+error: `ctx` names the build context in a `from` list; rename this argument.
+ --> tests/ui/fail/argument_named_ctx.rs:5:5
+  |
+5 |     ctx: polydat::derive_support::Const<u64>,
+  |     ^^^

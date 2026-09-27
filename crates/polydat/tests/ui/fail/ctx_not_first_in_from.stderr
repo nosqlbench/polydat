@@ -1,0 +1,5 @@
+error: `ctx`, the build context, is the setup fn's first argument: write `from = (ctx, ...)` and `fn setup(ctx: &BuildContext, ...)`.
+ --> tests/ui/fail/ctx_not_first_in_from.rs:6:40
+  |
+6 |     #[poly_const(capture, from = (key, ctx))] origin: &String,
+  |                                        ^^^

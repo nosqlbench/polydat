@@ -65,9 +65,9 @@
 
 pub use polydat_core::{
     Const, Engine, EnginePlan, JitMode, Kernel, KernelError, KernelProgram, ProgramId, Provenance,
-    ResourceAccessor, ResourceScope, SlotKernel, ast, audit, binder, compile, convert,
-    derive_support, dsl, half, inventory, iteration, kernel, numeric, polydat_node, resource,
-    set_panic_reporting_downstream, tile, viz,
+    ResourceAccessor, ResourceScope, ScopeJoinError, SlotKernel, ast, audit, binder, compile,
+    convert, derive_support, dsl, half, inventory, iteration, kernel, numeric, polydat_node,
+    resource, set_panic_reporting_downstream, tile, viz,
 };
 
 /// The node library: the nodes the compiler keeps

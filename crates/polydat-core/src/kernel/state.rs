@@ -1145,8 +1145,9 @@ impl PolydatKernel {
         }
     }
 
-    /// Wire `child` from `outer`: the cell cascade, the outputs the
-    /// child imports, its scope-init consts, and its coordinate path.
+    /// Wire `child` from `outer`: the child program's resource scope
+    /// joined to the parent's, the cell cascade, the outputs the child
+    /// imports, its scope-init consts, and its coordinate path.
     ///
     /// Both sides are `dyn Kernel`, so a child of any engine binds
     /// under a parent of any engine. It stays an associated function
@@ -1158,6 +1159,13 @@ impl PolydatKernel {
         outer: &dyn crate::kernel::Kernel,
     ) -> Result<(), crate::KernelError> {
         use crate::kernel::interp::Lookup as _;
+        // Step 0 — the resource scope. A child compiled on its own
+        // resolves lookups through the parent's scope, and the join
+        // precedes the scope-init consts, which may read a resource.
+        child
+            .resources()
+            .join(outer.resources())
+            .map_err(crate::KernelError::Resources)?;
         // Step 1 — typed shared-cell cascade. Compute every
         // cell visible at the outer scope: cells on outer's
         // own input slots (its `shared X := …` declarations

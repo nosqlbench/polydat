@@ -121,6 +121,13 @@ impl ConstArg {
 ///
 /// A node that looks up a host resource when it evaluates keeps a clone
 /// of [`Self::resources`] (resource.rs).
+///
+/// A `#[polydat_node]` node reads the context through a setup that
+/// names `ctx` first, `#[poly_const(setup, from = (ctx, key))]`, whose
+/// function takes `&BuildContext` and returns what the node keeps;
+/// the macro's `new()` then takes the context as its first argument.
+/// A caller building such a node directly passes
+/// [`BuildContext::with_binding`] or [`BuildContext::new`].
 #[derive(Clone, Debug, Default)]
 pub struct BuildContext {
     bindings: Vec<String>,
@@ -135,6 +142,13 @@ impl BuildContext {
             bindings,
             resources,
         }
+    }
+
+    /// A context for a node built by the binding `name` alone, in a
+    /// tree of its own with no accessor installed: what a host's test
+    /// passes to build a node that records its binding.
+    pub fn with_binding(name: impl Into<String>) -> Self {
+        Self::new(vec![name.into()], crate::resource::ResourceScope::new())
     }
 
     /// The binding whose construction built the node: the innermost of

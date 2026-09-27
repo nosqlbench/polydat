@@ -41,7 +41,12 @@
 //!   `#[poly_const(setup_fn, from = source)]`: derived state
 //!   computed once in `new()` from the named const arguments
 //!   (`from = ()` for none, `from = (a, b)` for several). `T`
-//!   implements `PolydatSetup`.
+//!   implements `PolydatSetup`. `ctx` first in the list,
+//!   `from = (ctx, a)`, passes the node's `&BuildContext` as the
+//!   setup's first argument, so the node captures its binding or
+//!   its tree's resource scope at construction; `new()` then takes
+//!   the context first, and the kit clones the captured `T`.
+//!   A `BuildContext` argument anywhere else is refused.
 //!
 //! ## Returns
 //!
@@ -671,7 +676,23 @@ struct SetupSpec {
     /// single-source case (`from = ident`); length N for
     /// multi-source `from = (a, b, c)`.
     source_args: Vec<syn::Ident>,
+    /// The `ctx` that `from` names first, when it does: the setup fn
+    /// takes the node's `&BuildContext` before the consts, and `new()`
+    /// takes it as its first parameter. The call passes this ident, so
+    /// a setup fn of the wrong type is reported at the `from` list.
+    /// `ctx` is not in `source_args`.
+    ctx: Option<syn::Ident>,
 }
+
+impl SetupSpec {
+    /// Whether the setup reads the build context.
+    fn takes_ctx(&self) -> bool {
+        self.ctx.is_some()
+    }
+}
+
+/// The name a `from` list gives the node's build context.
+const CTX_SOURCE: &str = "ctx";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ConstShape {
@@ -1315,6 +1336,22 @@ fn classify_borrowed(ty: &Type) -> Option<Type> {
     Some((*r.elem).clone())
 }
 
+/// Whether `ty` is the build context, by value or borrowed, however
+/// its path is qualified: its last path segment is `BuildContext`.
+fn names_build_context(ty: &Type) -> bool {
+    let ty = match ty {
+        syn::Type::Reference(r) => &*r.elem,
+        other => other,
+    };
+    let syn::Type::Path(p) = ty else {
+        return false;
+    };
+    p.path
+        .segments
+        .last()
+        .is_some_and(|s| s.ident == "BuildContext")
+}
+
 /// Detect `Value` in arg-type position, for
 /// polymorphic wire dispatch. Matches the last path segment
 /// being `Value`, so both `Value` and `polydat::ast::Value`
@@ -1825,6 +1862,19 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
                 let is_polywire = classify_polywire(&declared_ty);
                 let variadic_elem = classify_variadic(&declared_ty);
 
+                // The build context reaches a node at construction,
+                // through a setup; the body runs per evaluation and
+                // takes no context.
+                if setup_attr.is_none() && names_build_context(&declared_ty) {
+                    return Err(syn::Error::new_spanned(
+                        pat_ty,
+                        "a node reads its build context at construction, through a setup: \
+                         `#[poly_const(setup, from = ctx)] name: &T` with \
+                         `fn setup(ctx: &BuildContext) -> T`. The body runs on every \
+                         evaluation and takes no build context.",
+                    ));
+                }
+
                 let kind = if let Some(elem) = variadic_elem {
                     if default_value.is_some() || setup_attr.is_some() || is_polywire {
                         return Err(syn::Error::new_spanned(
@@ -1864,10 +1914,26 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
                              Const arg, not on the derived setup arg.",
                         ));
                     }
+                    // `ctx` names the build context, and only as the
+                    // setup fn's first argument.
+                    let mut source_args = source_args;
+                    let ctx = if source_args.first().is_some_and(|s| s == CTX_SOURCE) {
+                        Some(source_args.remove(0))
+                    } else {
+                        None
+                    };
+                    if let Some(late) = source_args.iter().find(|s| *s == CTX_SOURCE) {
+                        return Err(syn::Error::new(
+                            late.span(),
+                            "`ctx`, the build context, is the setup fn's first argument: \
+                             write `from = (ctx, ...)` and `fn setup(ctx: &BuildContext, ...)`.",
+                        ));
+                    }
                     ArgKind::Setup(Box::new(SetupSpec {
                         inner_ty,
                         setup_fn,
                         source_args,
+                        ctx,
                     }))
                 } else if let Some(list) = classify_const_vec(&declared_ty) {
                     // `Const<Vec<C>>` variadic
@@ -1983,6 +2049,19 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
                 ));
             }
         }
+    }
+
+    // A setup that reads the build context makes `ctx` the first
+    // parameter of `new()`, and `from` lists read `ctx` as the
+    // context, so no argument of the node takes the name.
+    let takes_ctx = args
+        .iter()
+        .any(|a| matches!(&a.kind, ArgKind::Setup(spec) if spec.takes_ctx()));
+    if takes_ctx && let Some(clash) = args.iter().find(|a| a.name == CTX_SOURCE) {
+        return Err(syn::Error::new(
+            clash.name.span(),
+            "`ctx` names the build context in a `from` list; rename this argument.",
+        ));
     }
 
     // Map a bare wire-arg type to a PortType expression.
@@ -2590,6 +2669,15 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
     } else {
         new_params
     };
+    // A setup that reads the build context takes it from `new()`'s
+    // first parameter.
+    let new_params: Vec<TokenStream2> = if takes_ctx {
+        std::iter::once(quote!(ctx: &polydat::dsl::factory::BuildContext))
+            .chain(new_params)
+            .collect()
+    } else {
+        new_params
+    };
 
     // Build a lookup from arg name → const-shape category so the
     // Setup pre-compute step can dispatch on the source's shape
@@ -2668,6 +2756,9 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
                 }
                 if let Some(e) = err {
                     return Some(e);
+                }
+                if let Some(ctx) = &spec.ctx {
+                    src_exprs.insert(0, quote!(#ctx));
                 }
                 let call = quote!(#setup_fn( #( #src_exprs ),* ));
                 Some(quote! {
@@ -2901,6 +2992,9 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
             new_call_args.push(quote!(__variadic_out_type));
         }
     }
+    if takes_ctx {
+        new_call_args.insert(0, quote!(_ctx));
+    }
 
     // When the function has a variadic arg, extract `n_wires`
     // from the `_wires: &[WireRef]` slice in the build closure.
@@ -3126,7 +3220,8 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
     // encodes by the node's resolved output type. A const or const
     // list is captured by clone; a setup derived from consts is
     // recomputed from the captured consts, and a session-static setup
-    // is captured from the node by clone; an `Option<T>` or `Config<T>`
+    // or one over the build context is captured from the node by
+    // clone; an `Option<T>` or `Config<T>`
     // over a carrier is the carrier's slot, wrapped.
     enum SlotArg {
         Jit(JitType),
@@ -3166,8 +3261,9 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
         /// borrow the kit's own copy or to take one of its own.
         ConstVec(ListForm),
         Setup,
-        /// A session-static setup (`from = ()`), captured from the
-        /// node by clone: the closure sees what the node captured at
+        /// A session-static setup (`from = ()`) or one over the build
+        /// context (`from = (ctx, ...)`), captured from the node by
+        /// clone: the closure sees what the node captured at
         /// construction, as the native form does through
         /// `jit_constants`.
         SetupStatic,
@@ -3379,7 +3475,9 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
                 ArgKind::Const(shape) => SlotArg::Const(*shape),
                 ArgKind::ConstVec(_, form) => SlotArg::ConstVec(*form),
                 ArgKind::Setup(spec) => {
-                    if spec.source_args.is_empty() {
+                    // A setup over the build context is not a function
+                    // of the consts alone, so the kit takes the node's.
+                    if spec.source_args.is_empty() || spec.takes_ctx() {
                         SlotArg::SetupStatic
                     } else {
                         SlotArg::Setup
@@ -4398,19 +4496,24 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
     let has_polywire = args.iter().any(|a| matches!(a.kind, ArgKind::PolyWire));
     // A node whose output type is resolved from its wires cannot be
     // built from an arity alone, so it has no arity-only thunk; the
-    // build closure, which has the wire types, is its one path.
-    let variadic_ctor_field: TokenStream2 =
-        if has_variadic && !has_const_arg && !has_polywire && !needs_variadic_out_type {
-            // Split-halves: assembler passes TOTAL wire count; the
-            // struct's `new()` takes per-half count, so divide by 2.
-            if is_split_halves {
-                quote!(Some(|n| Box::new(#struct_name::new(n / 2))))
-            } else {
-                quote!(Some(|n| Box::new(#struct_name::new(n))))
-            }
+    // build closure, which has the wire types, is its one path. Nor
+    // can a node whose setup reads the build context.
+    let variadic_ctor_field: TokenStream2 = if has_variadic
+        && !has_const_arg
+        && !has_polywire
+        && !needs_variadic_out_type
+        && !takes_ctx
+    {
+        // Split-halves: assembler passes TOTAL wire count; the
+        // struct's `new()` takes per-half count, so divide by 2.
+        if is_split_halves {
+            quote!(Some(|n| Box::new(#struct_name::new(n / 2))))
         } else {
-            quote!(None)
-        };
+            quote!(Some(|n| Box::new(#struct_name::new(n))))
+        }
+    } else {
+        quote!(None)
+    };
 
     // An `Option<T>` arg auto-emits
     // `accepts_none_inputs() -> true`. The runtime kernel's

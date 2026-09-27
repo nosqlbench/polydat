@@ -279,7 +279,7 @@ pub use half;
 /// `polydat::ResourceAccessor` and installs it into a program tree's
 /// `polydat::ResourceScope`, which nodes reach through their build
 /// context.
-pub use resource::{ResourceAccessor, ResourceScope};
+pub use resource::{ResourceAccessor, ResourceScope, ScopeJoinError};
 
 /// Host-log sink bridge — the sanctioned public path for installing
 /// a leveled log sink into the kernel (`set_log_fn`) and for emitting

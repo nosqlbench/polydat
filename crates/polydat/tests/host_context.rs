@@ -6,20 +6,27 @@
 //! construction when it was built, and the program tree's resource
 //! scope.
 //!
-//! The nodes here are registered by hand, as a host registers one that
+//! The nodes here are registered by hand and through `#[polydat_node]`
+//! with a setup over the build context, as a host registers one that
 //! needs its build context, so this file is a test binary of its own.
+//! It also covers a separately compiled image bound under a tree, whose
+//! resource scope joins the tree's at bind (scope_model.md §4).
 
 use std::any::Any;
 use std::sync::Arc;
 
 use polydat::ast::{NodeMeta, PolydatNode, Port, PortType, Purity, Slot, SlotType, Value};
 use polydat::compile::assembly::WireRef;
-use polydat::dsl::compile::{CompileOptions, compile_polydat_interpreter_with_options};
+use polydat::dsl::compile::{
+    CompileOptions, compile_polydat_interpreter_with_options, compile_polydat_with_engine,
+};
 use polydat::dsl::factory::{BuildContext, ConstArg};
 use polydat::dsl::registry::{
     Arity, FuncCategory, FuncSig, NodeRegistration, OutputType, ParamSpec,
 };
 use polydat::dsl::stub::{ExprStub, GraphMatter, ScopedExpr};
+use polydat::kernel::bind_under;
+use polydat::kernel::subcontext::{BodyFragment, SourceContext, SubcontextBuilder};
 use polydat::{Engine, Kernel, Provenance, ResourceAccessor, ResourceScope};
 
 // ── The host's nodes ───────────────────────────────────────────────
@@ -425,5 +432,318 @@ fn every_engine_carries_the_trees_scope_to_its_children() {
         );
         let created = k.into_program().create_kernel();
         assert!(created.resources().same_scope(&scope), "{engine}: created");
+    }
+}
+
+// ── Macro nodes that read their build context ──────────────────────
+
+/// What a control-setting node keeps from its build context: the
+/// binding chain it was built under, outermost first, joined with `/`.
+#[derive(Clone)]
+pub struct ControlOrigin {
+    chain: String,
+}
+
+impl ControlOrigin {
+    fn capture(ctx: &BuildContext) -> Self {
+        Self {
+            chain: ctx.bindings().join("/"),
+        }
+    }
+}
+
+/// `macro_control_set(name, value)`, modeled on the host's
+/// `control_set`: the binding chain that set the control, then
+/// `name=value`, as `chain:name=value`.
+#[polydat::polydat_node(category = Context)]
+fn macro_control_set(
+    name: Const<&str>,
+    value: u64,
+    #[poly_const(ControlOrigin::capture, from = ctx)] origin: &ControlOrigin,
+) -> String {
+    format!("{}:{}={value}", origin.chain, name.0)
+}
+
+/// `macro_control_tag(s)`: its own binding chain around its input, so
+/// a nested call shows both constructions.
+#[polydat::polydat_node(category = Context)]
+fn macro_control_tag(
+    s: &str,
+    #[poly_const(ControlOrigin::capture, from = ctx)] origin: &ControlOrigin,
+) -> String {
+    format!("{}<{s}>", origin.chain)
+}
+
+/// The host's live session, as its accessor hands it out.
+pub struct SessionHandle {
+    id: u64,
+}
+
+/// What a session-reading node keeps: the key it was configured with
+/// and the resource scope of the tree it was built in.
+#[derive(Clone)]
+pub struct SessionRef {
+    key: String,
+    resources: ResourceScope,
+}
+
+impl SessionRef {
+    fn capture(ctx: &BuildContext, key: &str) -> Self {
+        Self {
+            key: key.to_string(),
+            resources: ctx.resources().clone(),
+        }
+    }
+}
+
+/// `macro_cql_session(key)`, modeled on the host's `cql_session`: the
+/// id of the session the tree's accessor holds under `key`, or 0 when
+/// it holds none.
+#[polydat::polydat_node(
+    category = Context,
+    purity = Nondeterministic("reads a live host resource"),
+)]
+fn macro_cql_session(
+    key: Const<&str>,
+    #[poly_const(SessionRef::capture, from = (ctx, key))] session: &SessionRef,
+) -> u64 {
+    session
+        .resources
+        .lookup(&session.key)
+        .and_then(|v| v.downcast::<SessionHandle>().ok())
+        .map(|h| h.id)
+        .unwrap_or(0)
+}
+
+/// One session under one key.
+struct Sessions(&'static str, u64);
+
+impl ResourceAccessor for Sessions {
+    fn lookup(&self, key: &str) -> Option<Arc<dyn Any + Send + Sync>> {
+        (key == self.0)
+            .then(|| Arc::new(SessionHandle { id: self.1 }) as Arc<dyn Any + Send + Sync>)
+    }
+}
+
+fn sessions(key: &'static str, id: u64) -> ResourceScope {
+    ResourceScope::with_accessor(Arc::new(Sessions(key, id)))
+}
+
+/// The four engines: the interpreter, the closure tier, native, and
+/// pure native (the last two with the `jit` feature).
+fn four_engines() -> Vec<Engine> {
+    let mut all = vec![
+        Engine::Interpreter(polydat::JitMode::Off),
+        Engine::Closures(Provenance::Auto),
+    ];
+    if cfg!(feature = "jit") {
+        all.push(Engine::Native(Provenance::Auto));
+        all.push(Engine::PureNative(Provenance::Auto));
+    }
+    all
+}
+
+fn compile_on(src: &str, engine: Engine, resources: Option<ResourceScope>) -> Box<dyn Kernel> {
+    let options = CompileOptions {
+        resources,
+        ..CompileOptions::default()
+    };
+    compile_polydat_with_engine(src, engine, &options, None)
+        .unwrap_or_else(|e| panic!("{engine}: {e}\n{src}"))
+}
+
+#[test]
+fn a_macro_node_captures_its_binding_on_every_engine() {
+    let src = "input cycle: u64\nrate_adj := macro_control_set(\"rate\", cycle)\n";
+    for engine in four_engines() {
+        let mut k = compile_on(src, engine, None);
+        k.set_inputs(&[3]);
+        assert_eq!(text(k.as_mut(), "rate_adj"), "rate_adj:rate=3", "{engine}");
+        let mut forked = k.fork();
+        forked.set_inputs(&[4]);
+        assert_eq!(
+            text(forked.as_mut(), "rate_adj"),
+            "rate_adj:rate=4",
+            "{engine}: fork"
+        );
+    }
+}
+
+#[test]
+fn a_nested_macro_node_captures_the_whole_chain_on_every_engine() {
+    let src = "input cycle: u64\nouter := macro_control_tag(macro_control_set(\"rate\", cycle))\n";
+    for engine in four_engines() {
+        let mut k = compile_on(src, engine, None);
+        k.set_inputs(&[5]);
+        let got = text(k.as_mut(), "outer");
+        let inner = got
+            .strip_prefix("outer<")
+            .and_then(|s| s.strip_suffix(":rate=5>"))
+            .unwrap_or_else(|| panic!("{engine}: the outer node's chain is `outer`: {got}"));
+        let chain: Vec<&str> = inner.split('/').collect();
+        assert_eq!(chain.len(), 2, "{engine}: {got}");
+        assert_eq!(chain[0], "outer", "{engine}: {got}");
+        assert!(chain[1].starts_with("outer__anon_"), "{engine}: {got}");
+    }
+}
+
+#[test]
+fn a_macro_node_looks_its_resource_up_when_it_evaluates_on_every_engine() {
+    let src = "input cycle: u64\nsession := macro_cql_session(\"cluster-a\")\n";
+    for engine in four_engines() {
+        let mut k = compile_on(src, engine, Some(sessions("cluster-a", 17)));
+        assert_eq!(k.pull("session"), Value::U64(17), "{engine}");
+        assert_eq!(k.fork().pull("session"), Value::U64(17), "{engine}: fork");
+
+        // Installed after the compile: the node reads it on the next
+        // evaluation, so nothing was folded at build.
+        let mut late = compile_on(src, engine, None);
+        assert_eq!(late.pull("session"), Value::U64(0), "{engine}: none yet");
+        late.resources()
+            .install(Arc::new(Sessions("cluster-a", 23)))
+            .unwrap_or_else(|_| panic!("{engine}: the tree had no accessor"));
+        late.set_inputs(&[1]);
+        assert_eq!(late.pull("session"), Value::U64(23), "{engine}: installed");
+    }
+}
+
+#[test]
+fn a_macro_node_is_built_directly_with_a_context() {
+    let node = MacroControlSet::new(&BuildContext::with_binding("rate_adj"), "rate".into());
+    let mut out = [Value::None];
+    node.eval(&[Value::U64(2)], &mut out);
+    assert_eq!(out[0], Value::Str("rate_adj:rate=2".into()));
+
+    let ctx = BuildContext::new(Vec::new(), sessions("k", 5));
+    let node = MacroCqlSession::new(&ctx, "k".into());
+    node.eval(&[], &mut out);
+    assert_eq!(out[0], Value::U64(5));
+
+    // Both have a compiled form: the kit clones what the node captured.
+    let engine = Engine::Closures(Provenance::Auto);
+    assert!(node.compiled_slot(&[], engine).is_some());
+    let node = MacroControlSet::new(&BuildContext::with_binding("r"), "rate".into());
+    assert!(node.compiled_slot(&[PortType::U64], engine).is_some());
+}
+
+// ── Images bound under a tree ──────────────────────────────────────
+
+const SESSION_READ: &str = "input cycle: u64\nsession := macro_cql_session(\"cluster-a\")\n";
+
+#[test]
+fn an_image_bound_under_a_root_reads_the_roots_resource_on_every_engine() {
+    for engine in four_engines() {
+        let root = compile_on(
+            "input cycle: u64\n",
+            engine,
+            Some(sessions("cluster-a", 31)),
+        );
+        // Compiled on its own, as a host compiles a fiber image.
+        let image = compile_on(SESSION_READ, engine, None).into_program();
+        assert!(!image.resources().is_installed(), "{engine}");
+
+        let mut child = bind_under(root.as_ref(), image.clone(), &[])
+            .unwrap_or_else(|e| panic!("{engine}: {e}"));
+        assert!(
+            image
+                .resources()
+                .parent()
+                .is_some_and(|p| p.same_scope(root.resources())),
+            "{engine}: the image's scope joined the root's"
+        );
+        assert_eq!(child.pull("session"), Value::U64(31), "{engine}: bound");
+        assert_eq!(
+            child.fork().pull("session"),
+            Value::U64(31),
+            "{engine}: a fork of the bound child"
+        );
+        assert_eq!(
+            image.clone().create_kernel().pull("session"),
+            Value::U64(31),
+            "{engine}: a kernel created from the image's program"
+        );
+
+        // A second bind under the same tree, through a fork of the root.
+        let again = bind_under(root.fork().as_ref(), image.clone(), &[]);
+        assert!(again.is_ok(), "{engine}: rebinding under the same tree");
+    }
+}
+
+#[test]
+fn an_image_with_its_own_accessor_keeps_it() {
+    for engine in four_engines() {
+        let root = compile_on(
+            "input cycle: u64\n",
+            engine,
+            Some(sessions("cluster-a", 31)),
+        );
+        let image =
+            compile_on(SESSION_READ, engine, Some(sessions("cluster-a", 47))).into_program();
+        let mut child = bind_under(root.as_ref(), image.clone(), &[])
+            .unwrap_or_else(|e| panic!("{engine}: {e}"));
+        assert!(image.resources().parent().is_none(), "{engine}");
+        assert_eq!(child.pull("session"), Value::U64(47), "{engine}");
+    }
+}
+
+#[test]
+fn an_image_resolves_through_the_first_tree_it_is_bound_under() {
+    let engine = Engine::Closures(Provenance::Auto);
+    let a = compile_on("input cycle: u64\n", engine, Some(sessions("cluster-a", 1)));
+    let b = compile_on("input cycle: u64\n", engine, Some(sessions("cluster-a", 2)));
+    let image = compile_on(SESSION_READ, engine, None).into_program();
+    bind_under(a.as_ref(), image.clone(), &[]).expect("the first tree");
+    let mut under_b = bind_under(b.as_ref(), image.clone(), &[]).expect("a second tree binds");
+    assert_eq!(
+        under_b.pull("session"),
+        Value::U64(1),
+        "the first bind wins"
+    );
+    assert!(
+        image
+            .resources()
+            .parent()
+            .is_some_and(|p| p.same_scope(a.resources()))
+    );
+}
+
+#[test]
+fn a_root_bound_under_its_own_descendant_stays_a_root() {
+    let engine = Engine::Closures(Provenance::Auto);
+    let root = compile_on(SESSION_READ, engine, None);
+    let image = compile_on("input cycle: u64\n", engine, None).into_program();
+    let child = bind_under(root.as_ref(), image.clone(), &[]).expect("child");
+    // The root's own program, bound under a kernel of its child.
+    let root_program = root.fork().into_program();
+    let mut again =
+        bind_under(child.as_ref(), root_program.clone(), &[]).expect("no cycle is made");
+    assert!(root_program.resources().parent().is_none());
+    root.resources()
+        .install(Arc::new(Sessions("cluster-a", 9)))
+        .unwrap_or_else(|_| panic!("the root had no accessor"));
+    assert_eq!(again.pull("session"), Value::U64(9));
+}
+
+#[test]
+fn a_module_instantiated_under_a_root_reads_the_roots_resource_on_every_engine() {
+    // The module is built against an analysis tree of its own, as a
+    // host that analyses on the interpreter builds it, and instantiated
+    // under the tree the host runs.
+    let analysis = interpreter("input cycle: u64\n", None);
+    let mut b = SubcontextBuilder::under(analysis.as_ref());
+    b.context(SourceContext::new("sessions"));
+    b.body(BodyFragment::PolydatSource(SESSION_READ.to_string()));
+    let module = b.finalize().unwrap_or_else(|e| panic!("{e:?}"));
+    let root = interpreter("input cycle: u64\n", Some(sessions("cluster-a", 55)));
+    for engine in four_engines() {
+        let mut child = module
+            .instantiate_under(root.as_ref(), engine, &[])
+            .unwrap_or_else(|e| panic!("{engine}: {e}"));
+        assert_eq!(child.pull("session"), Value::U64(55), "{engine}");
+        assert_eq!(
+            child.fork().pull("session"),
+            Value::U64(55),
+            "{engine}: fork"
+        );
     }
 }

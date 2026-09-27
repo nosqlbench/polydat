@@ -1,0 +1,5 @@
+error: a node reads its build context at construction, through a setup: `#[poly_const(setup, from = ctx)] name: &T` with `fn setup(ctx: &BuildContext) -> T`. The body runs on every evaluation and takes no build context.
+ --> tests/ui/fail/build_context_as_argument.rs:2:14
+  |
+2 | fn f(a: u64, ctx: &polydat::dsl::factory::BuildContext) -> u64 {
+  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

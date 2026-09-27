@@ -321,6 +321,10 @@ pub enum KernelError {
         /// Why its expression failed, as the node reported it.
         reason: String,
     },
+    /// Binding a child under a parent could not join the child
+    /// program's resource scope to the parent's
+    /// ([`ResourceScope::join`](crate::ResourceScope::join)).
+    Resources(crate::resource::ScopeJoinError),
 }
 
 impl std::fmt::Display for KernelError {
@@ -342,6 +346,7 @@ impl std::fmt::Display for KernelError {
                 f,
                 "the const '{name}' could not be computed when the kernel was initialized: {reason}"
             ),
+            KernelError::Resources(e) => write!(f, "binding under the parent was refused: {e}"),
         }
     }
 }
