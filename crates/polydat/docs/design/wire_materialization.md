@@ -277,11 +277,11 @@ and the chain stays self-consistent.
 
 The forms above describe the interpreter kernel's materializer.
 The same forms exist on the compiled engines through the `Kernel`
-trait, and the gradient holds there, except that pure native
-makes no broadcast cells (form 3;
-[cross_fiber_invalidation.md](cross_fiber_invalidation.md) §3.1).
-`shared` bindings are bound to cells on the interpreter, the
-closure tier, and the native engine alike
+trait, and the gradient holds on all four engines. Pure native,
+like the closure tier and native, makes an output's broadcast
+cell (form 3) on the first ask and publishes through it on every
+pull ([cross_fiber_invalidation.md](cross_fiber_invalidation.md)
+§3.1). `shared` bindings are bound to cells on all four engines
 (`Kernel::attach_shared_cell`, `Kernel::shared_cells`), so a write
 through any kernel holding the cell is what the others read next.
 A value copy is `Kernel::set_input`, and the inlined-constant form
