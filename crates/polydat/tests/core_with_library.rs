@@ -1103,8 +1103,8 @@ mod compile_cone_tests {
 
     /// Every output of `src` agrees between the interpreter with its
     /// cones off and `kernel`, over a few coordinate vectors of `n`
-    /// inputs, and between the interpreter and the closure and native
-    /// tiers.
+    /// inputs, and between the interpreter and the closure, native, and
+    /// pure native engines.
     fn agrees_everywhere(src: &str, n: usize, outputs: &[&str]) {
         use polydat::{Engine, Kernel, Provenance};
         let mut off = compile(src, JitMode::Off);
@@ -1112,6 +1112,7 @@ mod compile_cone_tests {
         let mut tiers: Vec<Box<dyn Kernel>> = [
             Engine::Closures(Provenance::Auto),
             Engine::Native(Provenance::Auto),
+            Engine::PureNative(Provenance::Auto),
         ]
         .into_iter()
         .map(|e| compile_polydat_with(src, e).unwrap_or_else(|err| panic!("{e}: {err}")))
@@ -1172,6 +1173,34 @@ mod compile_cone_tests {
         assert_eq!(k.program().ledger().cone_fallbacks(), []);
         let last = format!("s{}", n - 1);
         agrees_everywhere(&src, n, &["s1", "s63", "s64", &last]);
+    }
+
+    /// A component a path leaves through an interpreted node and
+    /// re-enters is split into the convex pieces every fusing engine
+    /// forms (engines.md §2, §8). `default_or` has no native form, and
+    /// the path `c → s → b` leaves the component and comes back, so `a`
+    /// and `c` are one piece and the add and hash reading `s` are
+    /// another. Both run native under `Auto`, nothing is recorded on the
+    /// ledger, and the results match every other engine's.
+    #[test]
+    fn a_component_that_is_not_convex_runs_native_in_convex_pieces() {
+        let src = "input (x: u64)\n\
+                   a := hash(x)\n\
+                   c := add(a, 1)\n\
+                   s := default_or(c, 9)\n\
+                   b := hash(c + s)\n";
+        let k = compile(src, JitMode::Auto);
+        let report = polydat::compile::lattice::lattice_report(k.program());
+        let cones: Vec<&[String]> = report.cones.iter().map(|c| &c.members[..]).collect();
+        let residue: Vec<&str> = report.residue.iter().map(|r| &r.name[..]).collect();
+        assert_eq!(
+            cones,
+            [&["hash", "add"][..], &["u64_add", "hash"][..]],
+            "residue {residue:?}"
+        );
+        assert!(residue.contains(&"default_or"), "{residue:?}");
+        assert_eq!(k.program().ledger().cone_fallbacks(), []);
+        agrees_everywhere(src, 1, &["a", "c", "s", "b"]);
     }
 
     /// A single node reading more than 64 distinct boundary inputs fits

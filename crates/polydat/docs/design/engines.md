@@ -235,6 +235,17 @@ built with as its engine.
 - `Force` permits a one-node eligible cone, and a cone it plans is built as
   native code or the compile fails (§2.1).
 
+The planner forms cones from the fusion units of §8, by the rule native code
+and pure native code use: connected groups of eligible nodes of one lifecycle,
+one volatility, and one set of extern dependencies. A group that is not convex
+is split by §8's convexity rule into the same pieces native code forms from
+it, and each piece is then planned as a cone of its own, subject to the input
+bound (§2.2), the mode's minimum size, and the code generation fallback
+(§2.1). For example, in `a := hash(x)`, `c := add(a, 1)`,
+`s := default_or(c, 9)`, `b := hash(c + s)`, the path from `c` through
+`default_or`, which has no native form, re-enters the group at the addition,
+so `a` and `c` form one cone and the addition and `b` form another.
+
 An extracted cone is replaced by a synthetic fusion node whose `eval` invokes
 the compiled native segment. Unsupported nodes, boundary types, lifecycle
 classes, and purity shapes remain in P1. The graph's canonical identity walks
@@ -278,14 +289,16 @@ bound is an implementation limit of each piece the planner builds, not of the
 component the fusion rule forms (§8), and it never leaves a component on the
 interpreter merely because the component is large.
 
-A component that reads more than 64 boundary inputs is cut into pieces. The
-planner walks the component's members in topological order and adds each one
-to the open piece until the next member would take the piece's boundary past
-64; that member opens the next piece. Each piece is then split into its
-connected parts, so a pull runs only the part its output needs. The pieces
-keep every property of the component they are cut from:
+The bound applies after the convexity split (§2): a component that is not
+convex is first split into its convex pieces, and each convex piece that reads
+more than 64 boundary inputs is cut again. The planner walks the convex
+piece's members in topological order and adds each one to the open piece until
+the next member would take the piece's boundary past 64; that member opens the
+next piece. Each piece is then split into its connected parts, so a pull runs
+only the part its output needs. The pieces keep every property of the
+component they are cut from:
 
-- A run of a convex component's topological order is convex, and every wire
+- A run of a convex piece's topological order is convex, and every wire
   between two pieces runs forward, so the pieces form no cycle.
 - Every piece keeps the component's lifecycle, volatility, extern set, and
   purity, because the planner cuts only within one component.

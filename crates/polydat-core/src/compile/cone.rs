@@ -21,9 +21,12 @@
 //! goes on; under `JitMode::Force` it fails the compile (engines.md
 //! §2.1).
 //!
-//! A cone reads at most [`MAX_CONE_INPUTS`] distinct boundary inputs.
-//! A component that reads more is cut into convex pieces within the
-//! bound, each compiled on its own (engines.md §2.2).
+//! A component that is not convex is first split into the convex pieces
+//! native code and pure native code form from it
+//! (`fusion_units::convex_pieces`, engines.md §8). A cone reads at most
+//! [`MAX_CONE_INPUTS`] distinct boundary inputs, and a convex piece that
+//! reads more is cut into pieces within the bound, each compiled on its
+//! own (engines.md §2.2).
 
 /// The most distinct boundary inputs one cone piece reads: an
 /// implementation bound on each piece, not on the component it is cut
@@ -435,29 +438,30 @@ mod jit_impl {
             .collect();
         let mut cones: Vec<(ConePlan, JitConeNode)> = Vec::new();
 
-        for members in &components {
+        // A connected component is not necessarily convex: an
+        // eligible→ineligible→eligible sandwich whose ends connect
+        // through another eligible path lands both ends in one component
+        // while the middle stays out, and fusing it would make the
+        // middle both a consumer and a producer of the cone, a cycle in
+        // the spliced graph. Such a component is split into the convex
+        // pieces every fusing engine forms from it (engines.md §8), and
+        // each piece is then cut to the input bound. The nodes are in
+        // topological order, the order `convex_pieces` walks.
+        let topo: Vec<usize> = (0..n).collect();
+        let convex: Vec<Vec<usize>> = components
+            .into_iter()
+            .filter(|members| members.len() >= min_members)
+            .flat_map(|members| {
+                if crate::compile::fusion_units::is_convex(&members, &consumers) {
+                    vec![members]
+                } else {
+                    crate::compile::fusion_units::convex_pieces(&members, &preds, &topo, false)
+                }
+            })
+            .collect();
+
+        for members in &convex {
             if members.len() < min_members {
-                continue;
-            }
-            // Connected components are not necessarily CONVEX: an
-            // eligible→ineligible→eligible sandwich whose ends
-            // connect through some other eligible path lands both
-            // ends in one component while the middle stays kept.
-            // Fusing that component makes the kept middle both a
-            // consumer of the cone and one of its producers — a
-            // cycle in the spliced graph (the rebuild topo-sort
-            // assert). Detection: walk the consumer graph from the
-            // members' external consumers, only through
-            // non-members (other cones' members are ordinary route
-            // nodes here, which also covers cross-cone quotient
-            // cycles); reaching a member proves an external path
-            // re-enters this cone. Per the module's fallback rule,
-            // such a component stays on the interpreter.
-            if !crate::compile::fusion_units::is_convex(members, &consumers) {
-                audit_skip(
-                    members.len(),
-                    "non-convex component (an external path re-enters the cone)",
-                );
                 continue;
             }
             let split = split_by_inputs(dag, members, &preds);

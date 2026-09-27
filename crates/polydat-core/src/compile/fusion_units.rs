@@ -167,8 +167,9 @@ pub(crate) fn is_convex(members: &[usize], consumers: &[Vec<usize>]) -> bool {
 /// a wire, so a path that leaves a stage's members arrives, if it
 /// returns, at a later stage; the members of one stage, split by the
 /// wires between them, are convex, and no two pieces form a cycle.
-/// `topo` is every node in a topological order.
-fn convex_pieces(
+/// `topo` is every node in a topological order. Each piece lists its
+/// members in index order.
+pub(crate) fn convex_pieces(
     members: &[usize],
     preds: &[Vec<usize>],
     topo: &[usize],

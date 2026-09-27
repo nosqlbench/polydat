@@ -241,6 +241,11 @@ a rule the specifications now state and every engine follows.
   most 64 inputs, each compiled natively. A single node reading more
   than 64 inputs stays interpreted and is recorded on the ledger
   ([engines.md](../design/engines.md) §2.2).
+- **A cone group that is not convex runs natively in pieces.** A group of
+  eligible nodes that a path leaves through an interpreted node and
+  re-enters was left interpreted; it is now split into the same convex
+  pieces native code forms from it, each built as a cone of its own
+  ([engines.md](../design/engines.md) §2).
 
 ### Comprehensions and traversals
 

@@ -17,10 +17,10 @@
 /// component. Spliced as one cone, the kept middle would be both a
 /// consumer of the cone and one of its producers, a cycle in the
 /// spliced graph that trips the rebuild topo-sort assert. A
-/// non-convex component stays on the interpreter and never panics
+/// non-convex component is split into convex pieces and never panics
 /// the compile.
 #[test]
-fn non_convex_components_stay_on_the_interpreter() {
+fn non_convex_components_split_into_convex_pieces() {
     let src = "input cycle: u64\n\
                b0 := u64_not(cycle)\n\
                b1 := str_eq(b0, b0)\n\
