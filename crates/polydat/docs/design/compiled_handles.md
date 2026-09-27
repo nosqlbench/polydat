@@ -243,12 +243,20 @@ their pairs. The kit's rules are these:
   `Arc<serde_json::Value>`), an `Ext<T>` port, a polymorphic `Value`
   port, a variadic (a split variadic included), an `Option<T>` over an
   immediate, a `Config<T>` over an immediate or an owned string or byte
-  string, a const, a const list, or a setup; and
+  string, a handle, a const, a const list, or a setup; and
   the return is an immediate, a vector, a string, a byte string, a JSON
-  value, an `Ext<T>`, a polymorphic value, or a tuple of these. A
+  value, an `Ext<T>`, a polymorphic value, a handle, a `SliceArc<T>`,
+  or a tuple of these. A handle is an `Arc<T>` on a `Handle` port, or
+  any other wire type whose port is `Handle`: the kit reads it from its
+  `Ref2` pair as a one-element slice of the `Value` and downcasts it as
+  the interpreter does, or converts it with `Wire::extract` and
+  `Wire::inject`, and the kit is not built for a wire type whose port
+  is not `Handle`. A returned handle is written into a `Value` scratch
+  entry, and a `None` handle is written as the empty pair. A
+  `SliceArc<T>` return is copied into the step's scratch vector. A
   fallible body (`-> Result<T, E>`, const arguments only) runs once at
   construction, and its cached value is written by whichever kit its
-  shape names. Dynamic returns and `Handle` downcasts stay on P1.
+  shape names.
 - **Scratch from the kit.** The kit declares one scratch entry per
   `Ref2` output, in port order (`ScratchElem::Str`, `Bytes`, `Value`,
   or a vector element), beside any entry the node keeps for itself
