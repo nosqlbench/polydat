@@ -9,7 +9,9 @@
 //! and gets the same answers everywhere. Each test here is written in
 //! the host's terms and runs every parent engine against every child
 //! engine, so a tree mid-migration, part interpreter and part compiled,
-//! is covered too.
+//! is covered too. Where a shape leaves an extern with no value, pure
+//! native refuses the run rather than answer `None`, and the test
+//! asserts that refusal.
 
 use polydat::ast::Value;
 use polydat::dsl::compile::compile_polydat_with;
@@ -29,6 +31,8 @@ fn engines() -> Vec<Engine> {
     if cfg!(feature = "jit") {
         all.push(Engine::Native(Provenance::PushPull));
         all.push(Engine::Native(Provenance::Raw));
+        all.push(Engine::PureNative(Provenance::PushPull));
+        all.push(Engine::PureNative(Provenance::Raw));
     }
     all
 }
@@ -47,6 +51,22 @@ fn module(parent: &dyn Kernel, label: &str, source: &str) -> ScopeModule<Child<R
 
 fn str_value(s: &str) -> Value {
     Value::Str(s.into())
+}
+
+/// Pulling `output` on a pure native kernel whose extern `unset` has no
+/// value is refused with a panic naming the extern.
+fn assert_refuses_unset(kernel: &mut dyn Kernel, output: &str, unset: &str, pair: &str) {
+    let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| kernel.pull(output)))
+        .expect_err("pure native refuses an unset extern");
+    let message = err
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| err.downcast_ref::<&str>().map(|s| s.to_string()))
+        .unwrap_or_default();
+    assert!(
+        message.contains(&format!("extern '{unset}'")) && message.contains("pure native"),
+        "{pair}: {message}"
+    );
 }
 
 const ROOT: &str = "const mode := \"default\"\nconst size := \"small\"\nextern shard: u64 = 3\n";
@@ -109,11 +129,33 @@ fn a_scope_tree_answers_alike_on_every_engine_pair() {
             );
             fiber.reset_inputs();
             assert_eq!(fiber.input_value_at(retries), Some(Value::U64(2)), "{pair}");
-            assert_eq!(
-                fiber.pull("tries"),
-                Value::U64(3),
-                "{pair}: after the reset"
-            );
+            if matches!(child_engine, Engine::PureNative(_)) {
+                // The reset clears `mode`, `size`, and `shard`, which
+                // the parents filled and which have no default: pure
+                // native code cannot carry the `None`, so the run is
+                // refused until every one is set again.
+                for (name, value) in [
+                    ("mode", str_value("set")),
+                    ("size", str_value("set")),
+                    ("shard", Value::U64(0)),
+                ] {
+                    assert_refuses_unset(fiber.as_mut(), "tries", name, &pair);
+                    fiber
+                        .set_input(name, value)
+                        .unwrap_or_else(|e| panic!("{pair}: {e}"));
+                }
+                assert_eq!(
+                    fiber.pull("tries"),
+                    Value::U64(3),
+                    "{pair}: once the extern is set again"
+                );
+            } else {
+                assert_eq!(
+                    fiber.pull("tries"),
+                    Value::U64(3),
+                    "{pair}: after the reset"
+                );
+            }
             assert_eq!(
                 fiber.input_value_at(0),
                 Some(Value::U64(1)),
@@ -229,16 +271,21 @@ fn a_write_through_commits_into_the_parent_s_cell() {
 
 /// A child bound to a parent's output reads `None` until the parent
 /// computes it, then what the parent computed, whether the parent was
-/// pulled by name or by index, on every engine pair.
+/// pulled by name or by index, on every engine pair. The link is live:
+/// each pull of the parent reaches what the child computes from it,
+/// and an output of the child that does not read it keeps its value.
 #[test]
 fn a_parent_s_output_reaches_its_child_by_either_pull() {
     let parent_src = "input cycle: u64\ntotal := u64_add(cycle, 20)\n";
+    let child_src = "input cycle: u64\nextern total: u64\nnext := u64_add(total, 1)\n\
+                     own := u64_add(cycle, 5)\n";
     for parent_engine in engines() {
         for child_engine in engines() {
             let pair = format!("{parent_engine} → {child_engine}");
             for by_index in [false, true] {
+                let how = if by_index { "by index" } else { "by name" };
                 let mut root = compile(parent_src, parent_engine);
-                let child = module(root.as_ref(), "op", "extern total: u64\n")
+                let mut child = module(root.as_ref(), "op", child_src)
                     .instantiate_under(root.as_ref(), child_engine, &[])
                     .unwrap_or_else(|e| panic!("{pair}: {e}"));
                 let total = child.input_index("total").expect("declared");
@@ -247,21 +294,53 @@ fn a_parent_s_output_reaches_its_child_by_either_pull() {
                     Some(Value::None),
                     "{pair}: before the parent computes it"
                 );
-                root.set_inputs(&[1]);
-                let value = if by_index {
-                    let at = root.output_index("total").expect("an output");
-                    root.pull_at(at)
-                } else {
-                    root.pull("total")
-                };
-                assert_eq!(value, Value::U64(21), "{pair}");
-                assert_eq!(
-                    child.input_value_at(total),
-                    Some(Value::U64(21)),
-                    "{pair}: after a pull {}",
-                    if by_index { "by index" } else { "by name" }
-                );
+                child.set_inputs(&[0]);
+                for (cycle, expected) in [(1u64, 21u64), (2, 22)] {
+                    root.set_inputs(&[cycle]);
+                    let value = if by_index {
+                        let at = root.output_index("total").expect("an output");
+                        root.pull_at(at)
+                    } else {
+                        root.pull("total")
+                    };
+                    assert_eq!(value, Value::U64(expected), "{pair}");
+                    assert_eq!(
+                        child.input_value_at(total),
+                        Some(Value::U64(expected)),
+                        "{pair}: after a pull {how}"
+                    );
+                    assert_eq!(
+                        child.pull("next"),
+                        Value::U64(expected + 1),
+                        "{pair}: the child reads cycle {cycle} {how}"
+                    );
+                    assert_eq!(child.pull("own"), Value::U64(5), "{pair}: {how}");
+                }
             }
+        }
+    }
+}
+
+/// A child bound after its parent computed an output reads that value
+/// from the start, on every engine pair.
+#[test]
+fn a_child_bound_after_the_parent_computes_reads_the_value() {
+    let parent_src = "input cycle: u64\ntotal := u64_add(cycle, 20)\n";
+    for parent_engine in engines() {
+        for child_engine in engines() {
+            let pair = format!("{parent_engine} → {child_engine}");
+            let mut root = compile(parent_src, parent_engine);
+            root.set_inputs(&[4]);
+            assert_eq!(root.pull("total"), Value::U64(24), "{pair}");
+            let mut child = module(
+                root.as_ref(),
+                "op",
+                "input cycle: u64\nextern total: u64\nnext := u64_add(total, 1)\n",
+            )
+            .instantiate_under(root.as_ref(), child_engine, &[])
+            .unwrap_or_else(|e| panic!("{pair}: {e}"));
+            child.set_inputs(&[0]);
+            assert_eq!(child.pull("next"), Value::U64(25), "{pair}");
         }
     }
 }
