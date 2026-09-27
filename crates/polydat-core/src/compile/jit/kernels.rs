@@ -161,6 +161,12 @@ pub(super) struct ConePlan {
     /// order. Every output's is found at build; another slot's, one a
     /// raw read by slot asks for, when first asked.
     by_slot: Vec<Option<std::sync::Arc<[u32]>>>,
+    /// Beside each cone in `by_slot`, the slots no step writes that its
+    /// units read, sorted: the inputs and externs a pull of the slot
+    /// reads, through every member of every unit it runs, and the slot
+    /// itself when no step writes it. Only the refusal of an unset
+    /// extern consults it.
+    reads_by_slot: Vec<Option<std::sync::Arc<[usize]>>>,
 }
 
 impl ConePlan {
@@ -192,6 +198,7 @@ impl ConePlan {
                 .collect(),
             all: (0..units.units.len() as u32).collect(),
             by_slot: vec![None; slots + 1],
+            reads_by_slot: vec![None; slots + 1],
         };
         for slot in outputs {
             plan.of(slot);
@@ -238,16 +245,30 @@ impl ConePlan {
         self.by_slot[slot].as_deref().unwrap_or(&[])
     }
 
+    /// The slots no step writes that a pull of `slot` reads, sorted;
+    /// see `reads_by_slot`.
+    fn reads_of(&mut self, slot: usize) -> &[usize] {
+        if self.reads_by_slot.get(slot).is_none_or(|r| r.is_none()) {
+            self.find(slot);
+        }
+        self.reads_by_slot[slot].as_deref().unwrap_or(&[])
+    }
+
     #[cold]
     fn find(&mut self, slot: usize) {
         if slot >= self.by_slot.len() {
             self.by_slot.resize(slot + 1, None);
+            self.reads_by_slot.resize(slot + 1, None);
         }
         {
             let mut unit_seen = vec![false; self.members.len()];
             let producer_of = |s: usize| self.producer.get(s).copied().filter(|&p| p != usize::MAX);
             let mut stack: Vec<usize> = producer_of(slot).into_iter().collect();
             let mut units: Vec<u32> = Vec::new();
+            let mut reads: Vec<usize> = Vec::new();
+            if stack.is_empty() {
+                reads.push(slot);
+            }
             while let Some(step) = stack.pop() {
                 let unit = self.unit_of[step];
                 if unit_seen[unit as usize] {
@@ -256,14 +277,22 @@ impl ConePlan {
                 unit_seen[unit as usize] = true;
                 units.push(unit);
                 for &m in self.members[unit as usize].iter() {
-                    stack.extend(self.inputs[m].iter().filter_map(|&s| producer_of(s)));
+                    for &s in self.inputs[m].iter() {
+                        match producer_of(s) {
+                            Some(p) => stack.push(p),
+                            None => reads.push(s),
+                        }
+                    }
                 }
             }
             // Unit numbers are in dependency order, so sorted is a valid
             // order to run them in.
             units.sort_unstable();
             units.dedup();
+            reads.sort_unstable();
+            reads.dedup();
             self.by_slot[slot] = Some(units.into());
+            self.reads_by_slot[slot] = Some(reads.into());
         }
     }
 }
@@ -453,8 +482,16 @@ impl JitCore {
     /// whole program for `None`. The function is handed the cone's
     /// precomputed order and the clean flags: it tests each unit's flag
     /// itself, runs the stale ones, and marks each current as it ends.
+    ///
+    /// An unset extern that native code reads is refused here, before
+    /// the run, when the units about to run read it (engines.md §3.3):
+    /// native code cannot carry a `None`. While every extern native code
+    /// reads has a value this is one integer check.
     #[inline]
     pub(super) fn run_units(&mut self, slot: Option<usize>) {
+        if self.externs.any_unset_read() {
+            self.refuse_unset_read(slot);
+        }
         let units: &[u32] = match slot {
             Some(s) => self.cones.of(s),
             None => self.cones.all(),
@@ -580,14 +617,11 @@ impl JitCore {
         self.externs.take_changed()
     }
 
-    /// Run one native evaluation: refuse an unset extern (native code
-    /// cannot carry a `None`; engines.md §3.3), run inside the longjmp
-    /// catch. The caller has taken what cells other holders published.
+    /// Run one native evaluation inside the longjmp catch. The caller
+    /// has taken what cells other holders published and refused an
+    /// unset extern the run reads.
     #[inline]
-    pub(super) fn run(&mut self, native: impl FnOnce()) {
-        if self.externs.any_unset_read() {
-            self.refuse_unset();
-        }
+    fn run(&mut self, native: impl FnOnce()) {
         // Code that calls no helper cannot fail: it runs bare. Otherwise
         // native code names the step it is in before each helper call;
         // a failure before any names none. The capture guard is armed
@@ -612,22 +646,32 @@ impl JitCore {
         self.validate_refs();
     }
 
-    /// The refusal of a run over an unset extern, naming it.
+    /// Refuse the run of `slot`'s cone, or of every unit for `None`,
+    /// when one of its units reads an unset extern, naming the first.
+    /// A cone that reads none of the unset externs runs, as the other
+    /// engines answer an output that does not depend on one.
     #[cold]
     #[inline(never)]
-    fn refuse_unset(&self) -> ! {
-        let (name, ty) = self
-            .externs
-            .first_unset()
-            .expect("the unset count names an unset extern");
+    fn refuse_unset_read(&mut self, slot: Option<usize>) {
+        let unset = match slot {
+            None => self.externs.first_unset(|_| true),
+            Some(s) => {
+                let reads = self.cones.reads_of(s);
+                self.externs
+                    .first_unset(|x| reads.binary_search(&x).is_ok())
+            }
+        };
+        let Some((name, ty)) = unset else {
+            return;
+        };
         panic!(
-            "extern '{name}' ({ty}) has no value on the pure native tier, which \
-             cannot carry a `None`: every step is native code and there is no \
-             closure to propagate one through. Either it was declared without a \
-             default and never set, or a host cleared it after the build. Set it \
-             with set_input before pulling, or run this program on `native`, which \
-             answers a cleared extern with `None` as the interpreter does \
-             (docs/design/engines.md §3.3)"
+            "extern '{name}' ({ty}) has no value and this evaluation reads it, on \
+             the pure native tier, which cannot carry a `None`: every step is native \
+             code and there is no closure to propagate one through. Either it was \
+             declared without a default and never set, or a host cleared it after \
+             the build. Set it with set_input before pulling, or run this program on \
+             `native`, which answers a cleared extern with `None` as the interpreter \
+             does (docs/design/engines.md §3.3)"
         );
     }
 

@@ -10,8 +10,8 @@
 //! the host's terms and runs every parent engine against every child
 //! engine, so a tree mid-migration, part interpreter and part compiled,
 //! is covered too. Where a shape leaves an extern with no value, pure
-//! native refuses the run rather than answer `None`, and the test
-//! asserts that refusal.
+//! native refuses a pull that reads it rather than answer `None`, and
+//! the test asserts that refusal.
 
 use polydat::ast::Value;
 use polydat::dsl::compile::compile_polydat_with;
@@ -129,31 +129,32 @@ fn a_scope_tree_answers_alike_on_every_engine_pair() {
             );
             fiber.reset_inputs();
             assert_eq!(fiber.input_value_at(retries), Some(Value::U64(2)), "{pair}");
+            // The reset clears `mode`, `size`, and `shard`, which the
+            // parents filled and which have no default. `tries` reads
+            // none of them, so every engine serves it.
+            assert_eq!(
+                fiber.pull("tries"),
+                Value::U64(3),
+                "{pair}: after the reset"
+            );
             if matches!(child_engine, Engine::PureNative(_)) {
-                // The reset clears `mode`, `size`, and `shard`, which
-                // the parents filled and which have no default: pure
-                // native code cannot carry the `None`, so the run is
-                // refused until every one is set again.
+                // `label` reads all three: pure native code cannot carry
+                // the `None`, so a pull of `label` is refused, naming
+                // the first unset one, until every one is set again.
                 for (name, value) in [
                     ("mode", str_value("set")),
                     ("size", str_value("set")),
                     ("shard", Value::U64(0)),
                 ] {
-                    assert_refuses_unset(fiber.as_mut(), "tries", name, &pair);
+                    assert_refuses_unset(fiber.as_mut(), "label", name, &pair);
                     fiber
                         .set_input(name, value)
                         .unwrap_or_else(|e| panic!("{pair}: {e}"));
                 }
                 assert_eq!(
-                    fiber.pull("tries"),
-                    Value::U64(3),
-                    "{pair}: once the extern is set again"
-                );
-            } else {
-                assert_eq!(
-                    fiber.pull("tries"),
-                    Value::U64(3),
-                    "{pair}: after the reset"
+                    fiber.pull("label"),
+                    str_value("set/set/0"),
+                    "{pair}: once every extern is set again"
                 );
             }
             assert_eq!(

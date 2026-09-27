@@ -231,6 +231,74 @@ fn an_extern_cleared_after_the_build_reads_none() {
     }
 }
 
+/// An unset extern answers for the outputs that read it and no others,
+/// on all four engines and in both of pure native's provenance modes.
+/// An output that does not read it is served, by name and by index; one
+/// that reads it answers `None`, and pure native, which cannot carry a
+/// `None`, refuses that pull alone, naming the extern.
+#[test]
+fn only_a_pull_that_reads_an_unset_extern_is_refused() {
+    const SRC: &str = "input cycle: u64\nextern mode: str\nextern retries: u64 = 2\n\
+                       label := str_concat(mode, \"-x\")\ntries := u64_add(retries, cycle)\n";
+    let mut all = vec![
+        Engine::Interpreter(JitMode::Auto),
+        Engine::Closures(Provenance::PushPull),
+        Engine::Closures(Provenance::Raw),
+    ];
+    if cfg!(feature = "jit") {
+        all.push(Engine::Native(Provenance::PushPull));
+        all.push(Engine::Native(Provenance::Raw));
+        all.push(Engine::PureNative(Provenance::PushPull));
+        all.push(Engine::PureNative(Provenance::Raw));
+    }
+    for engine in all {
+        let mut k = compile_polydat_with(SRC, engine).unwrap_or_else(|e| panic!("{engine}: {e}"));
+        let tries = k.output_index("tries").expect("declared");
+        let label = k.output_index("label").expect("declared");
+        k.set_inputs(&[1]);
+        for round in ["declared without a default", "cleared by a host"] {
+            assert_eq!(k.pull("tries"), Value::U64(3), "{engine}: {round}");
+            assert_eq!(k.pull_at(tries), Value::U64(3), "{engine}: {round}");
+            for by_index in [false, true] {
+                let pulled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    if by_index {
+                        k.pull_at(label)
+                    } else {
+                        k.pull("label")
+                    }
+                }));
+                if matches!(engine, Engine::PureNative(_)) {
+                    let payload = pulled.expect_err("pure native refuses a pull reading `mode`");
+                    let text = payload
+                        .downcast_ref::<String>()
+                        .cloned()
+                        .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
+                        .unwrap_or_default();
+                    assert!(
+                        text.contains("extern 'mode'") && text.contains("pure native"),
+                        "{engine}: {round}: {text}"
+                    );
+                } else {
+                    assert_eq!(
+                        pulled.unwrap_or_else(|_| panic!("{engine}: {round}: a None, not a panic")),
+                        Value::None,
+                        "{engine}: {round}"
+                    );
+                }
+            }
+            k.set_input("mode", Value::Str("m".into()))
+                .unwrap_or_else(|e| panic!("{engine}: {e}"));
+            assert_eq!(
+                k.pull("label"),
+                Value::Str("m-x".into()),
+                "{engine}: {round}"
+            );
+            k.set_input("mode", Value::None)
+                .unwrap_or_else(|e| panic!("{engine}: {e}"));
+        }
+    }
+}
+
 /// One write rule, on every engine and by either road.
 ///
 /// A write into a declared slot either matches the slot's type or is

@@ -155,6 +155,56 @@ fn a_shared_register_takes_a_computed_start_at_init() {
     }
 }
 
+/// A register with a computed start is read like any extern once
+/// initialization seeds it. A host clearing it to `None` makes a pull
+/// that reads it answer `None`, and pure native, which cannot carry a
+/// `None`, refuses that pull naming the register; a pull that does not
+/// read it is served on every engine.
+#[test]
+fn a_seeded_register_cleared_to_none_is_unset_for_its_readers() {
+    let src = "input cycle: u64\nextern base: u64 = 20\nshared rolling := base * 2\n\
+               out := rolling + 1\nother := base + cycle\n";
+    let mut engines = vec![
+        Engine::Interpreter(JitMode::Auto),
+        Engine::Closures(Provenance::Auto),
+    ];
+    if cfg!(feature = "jit") {
+        engines.push(Engine::Native(Provenance::Auto));
+        engines.push(Engine::PureNative(Provenance::PushPull));
+        engines.push(Engine::PureNative(Provenance::Raw));
+    }
+    for engine in engines {
+        let mut k = compile_polydat_with(src, engine).unwrap_or_else(|e| panic!("{engine}: {e}"));
+        k.set_inputs(&[1]);
+        assert_eq!(k.pull("out"), Value::U64(41), "{engine}: seeded at init");
+        k.set_input("rolling", Value::None)
+            .unwrap_or_else(|e| panic!("{engine}: {e}"));
+        assert_eq!(k.pull("other"), Value::U64(21), "{engine}: a non-reader");
+        let pulled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| k.pull("out")));
+        if matches!(engine, Engine::PureNative(_)) {
+            let payload = pulled.expect_err("pure native refuses a pull reading `rolling`");
+            let text = payload
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
+                .unwrap_or_default();
+            assert!(
+                text.contains("extern 'rolling'") && text.contains("pure native"),
+                "{engine}: {text}"
+            );
+        } else {
+            assert_eq!(
+                pulled.unwrap_or_else(|_| panic!("{engine}: a None, not a panic")),
+                Value::None,
+                "{engine}"
+            );
+        }
+        k.set_input("rolling", Value::U64(5))
+            .unwrap_or_else(|e| panic!("{engine}: {e}"));
+        assert_eq!(k.pull("out"), Value::U64(6), "{engine}: set again");
+    }
+}
+
 /// A child that declares the same `shared` binding and is attached to
 /// its parent's register never seeds it: it reads the parent's start,
 /// and a write on either side is what both read.
