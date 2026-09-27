@@ -876,33 +876,8 @@ fn parse_expr_bp(p: &mut Parser, min_bp: u8) -> Result<Expr, String> {
     // parenthesise to cast a whole sub-expression.
     lhs = parse_postfix_as(p, lhs)?;
 
-    loop {
-        let op = match p.peek() {
-            TokenKind::PipePipe => Some((BinOpKind::Or, 1, 2)),
-            TokenKind::AmpAmp => Some((BinOpKind::And, 3, 4)),
-            TokenKind::EqEq => Some((BinOpKind::Eq, 5, 6)),
-            TokenKind::BangEq => Some((BinOpKind::Ne, 5, 6)),
-            TokenKind::Lt => Some((BinOpKind::Lt, 7, 8)),
-            TokenKind::Gt => Some((BinOpKind::Gt, 7, 8)),
-            TokenKind::LtEq => Some((BinOpKind::Le, 7, 8)),
-            TokenKind::GtEq => Some((BinOpKind::Ge, 7, 8)),
-            TokenKind::Pipe => Some((BinOpKind::BitOr, 9, 10)),
-            TokenKind::Caret => Some((BinOpKind::BitXor, 11, 12)),
-            TokenKind::Ampersand => Some((BinOpKind::BitAnd, 13, 14)),
-            TokenKind::ShiftLeft => Some((BinOpKind::Shl, 15, 16)),
-            TokenKind::ShiftRight => Some((BinOpKind::Shr, 15, 16)),
-            TokenKind::Plus => Some((BinOpKind::Add, 17, 18)),
-            TokenKind::Minus => Some((BinOpKind::Sub, 17, 18)),
-            TokenKind::Star => Some((BinOpKind::Mul, 19, 20)),
-            TokenKind::Slash => Some((BinOpKind::Div, 19, 20)),
-            TokenKind::Percent => Some((BinOpKind::Mod, 19, 20)),
-            TokenKind::StarStar => Some((BinOpKind::Pow, 22, 21)), // right-associative
-            _ => None,
-        };
-
-        let Some((op_kind, l_bp, r_bp)) = op else {
-            break;
-        };
+    while let Some(op_kind) = binary_operator(p.peek()) {
+        let (l_bp, r_bp) = binding_power(op_kind);
         if l_bp < min_bp {
             break;
         }
@@ -913,6 +888,56 @@ fn parse_expr_bp(p: &mut Parser, min_bp: u8) -> Result<Expr, String> {
     }
 
     Ok(lhs)
+}
+
+/// The binary operator a token spells, if it spells one.
+pub fn binary_operator(kind: &TokenKind) -> Option<BinOpKind> {
+    Some(match kind {
+        TokenKind::PipePipe => BinOpKind::Or,
+        TokenKind::AmpAmp => BinOpKind::And,
+        TokenKind::EqEq => BinOpKind::Eq,
+        TokenKind::BangEq => BinOpKind::Ne,
+        TokenKind::Lt => BinOpKind::Lt,
+        TokenKind::Gt => BinOpKind::Gt,
+        TokenKind::LtEq => BinOpKind::Le,
+        TokenKind::GtEq => BinOpKind::Ge,
+        TokenKind::Pipe => BinOpKind::BitOr,
+        TokenKind::Caret => BinOpKind::BitXor,
+        TokenKind::Ampersand => BinOpKind::BitAnd,
+        TokenKind::ShiftLeft => BinOpKind::Shl,
+        TokenKind::ShiftRight => BinOpKind::Shr,
+        TokenKind::Plus => BinOpKind::Add,
+        TokenKind::Minus => BinOpKind::Sub,
+        TokenKind::Star => BinOpKind::Mul,
+        TokenKind::Slash => BinOpKind::Div,
+        TokenKind::Percent => BinOpKind::Mod,
+        TokenKind::StarStar => BinOpKind::Pow,
+        _ => return None,
+    })
+}
+
+/// The binding powers `(left, right)` of a binary operator: the one
+/// precedence table of the language, whose levels [`parse_expr_bp`]
+/// lists. Expressions and comprehension `where` predicates
+/// ([`crate::comprehension::predicate`]) both parse with it. A higher
+/// power binds tighter; `left < right` associates to the left and
+/// `left > right` to the right. The unary operators `-` and `!` bind
+/// tighter than every binary operator: each applies to the atom after
+/// it.
+pub fn binding_power(op: BinOpKind) -> (u8, u8) {
+    match op {
+        BinOpKind::Or => (1, 2),
+        BinOpKind::And => (3, 4),
+        BinOpKind::Eq | BinOpKind::Ne => (5, 6),
+        BinOpKind::Lt | BinOpKind::Gt | BinOpKind::Le | BinOpKind::Ge => (7, 8),
+        BinOpKind::BitOr => (9, 10),
+        BinOpKind::BitXor => (11, 12),
+        BinOpKind::BitAnd => (13, 14),
+        BinOpKind::Shl | BinOpKind::Shr => (15, 16),
+        BinOpKind::Add | BinOpKind::Sub => (17, 18),
+        BinOpKind::Mul | BinOpKind::Div | BinOpKind::Mod => (19, 20),
+        BinOpKind::Pow => (22, 21),
+    }
 }
 
 /// SRD-84 Part 1b — parse trailing `as <type>` casts on an expression.

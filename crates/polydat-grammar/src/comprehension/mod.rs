@@ -13,6 +13,7 @@ pub mod cardinality;
 pub(crate) mod clause_ast;
 pub mod metadata;
 pub(crate) mod parse;
+pub mod predicate;
 pub mod source;
 pub mod spec;
 pub mod strategy;

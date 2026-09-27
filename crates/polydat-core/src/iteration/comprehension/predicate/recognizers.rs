@@ -28,6 +28,7 @@ use super::info::{
     ConstValue, Determinism, Factorization, Monotonicity, OpaqueReason, PerAxisMap, PredicateInfo,
     RangeConstraint,
 };
+use super::{Predicate, PredicateKind, parse_predicate};
 
 /// Extract `{name}` interpolation references from a predicate
 /// string. Mirrors the helper in `validate.rs`'s V3 check.
@@ -107,21 +108,28 @@ pub fn recognize(predicate: &str, coords: &CoordSet) -> PredicateInfo {
         };
     }
 
-    // 4. Conjunction — split on top-level `&&`.
-    if let Some(parts) = split_top_level(trimmed, "&&") {
-        return recognize_conjunction(&parts, coords, coord_refs);
+    // 3–5. Disjunction, conjunction, and negation, as the predicate
+    // grammar groups them: `!` binds tighter than `&&`, and `&&`
+    // tighter than `||`. Each operand is recognized from its text.
+    if let Ok(tree) = parse_predicate(trimmed) {
+        let texts = |parts: &[Predicate]| -> Vec<String> {
+            parts.iter().map(|p| p.text(trimmed).to_string()).collect()
+        };
+        match &tree.kind {
+            PredicateKind::Or(parts) => {
+                return recognize_disjunction(&texts(parts), coords, coord_refs);
+            }
+            PredicateKind::And(parts) => {
+                return recognize_conjunction(&texts(parts), coords, coord_refs);
+            }
+            PredicateKind::Not(inner) => {
+                let inner_info = recognize(inner.text(trimmed), coords);
+                return invert_predicate(&inner_info, coord_refs);
+            }
+            _ => {}
+        }
     }
-
-    // 5. Disjunction — split on top-level `||`.
-    if let Some(parts) = split_top_level(trimmed, "||") {
-        return recognize_disjunction(&parts, coords, coord_refs);
-    }
-
-    // 3. Negation — leading `!`.
-    if let Some(inner) = trimmed.strip_prefix('!') {
-        let inner_info = recognize(inner.trim(), coords);
-        return invert_predicate(&inner_info, coord_refs);
-    }
+    let trimmed = unparenthesized(trimmed);
 
     // 2. Discrete-set — `{a} in [K1, K2, …]`.
     if let Some(info) = recognize_discrete_set(trimmed, coords, &coord_refs) {
@@ -737,38 +745,26 @@ fn parse_literal(s: &str) -> Option<ConstValue> {
     None
 }
 
-/// Split a string on top-level occurrences of a separator,
-/// respecting parens / brackets / braces. Returns `Some(parts)`
-/// if the separator was found at the top level (≥2 parts).
-fn split_top_level(s: &str, sep: &str) -> Option<Vec<String>> {
-    let mut parts = Vec::new();
-    let mut depth = 0i64;
-    let mut last = 0usize;
-    let bytes = s.as_bytes();
-    let sep_bytes = sep.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'(' | b'[' | b'{' => depth += 1,
-            b')' | b']' | b'}' => depth -= 1,
-            _ => {}
+/// `s` without the parentheses that enclose all of it, however many
+/// pairs.
+fn unparenthesized(s: &str) -> &str {
+    let mut s = s.trim();
+    while s.starts_with('(') && s.ends_with(')') {
+        let mut depth = 0i64;
+        let closes_at_end = s.char_indices().all(|(i, c)| {
+            match c {
+                '(' => depth += 1,
+                ')' => depth -= 1,
+                _ => {}
+            }
+            depth > 0 || i == s.len() - 1
+        });
+        if !closes_at_end {
+            break;
         }
-        if depth == 0
-            && i + sep_bytes.len() <= bytes.len()
-            && &bytes[i..i + sep_bytes.len()] == sep_bytes
-        {
-            parts.push(s[last..i].trim().to_string());
-            last = i + sep_bytes.len();
-            i = last;
-            continue;
-        }
-        i += 1;
+        s = s[1..s.len() - 1].trim();
     }
-    if parts.is_empty() {
-        return None;
-    }
-    parts.push(s[last..].trim().to_string());
-    Some(parts)
+    s
 }
 
 /// Split exactly once on the first top-level occurrence of a
@@ -911,22 +907,23 @@ mod tests {
         assert!(matches!(info.factorization, Factorization::Disjunctive(_)));
     }
 
+    /// `!(p)` over a per-axis comparison inverts it; `!{k} > 0` is
+    /// `(!{k}) > 0`, which no recognizer claims.
     #[test]
     fn recognize_negation_per_axis() {
-        let info = recognize("!{k} > 0", &coords(&["k"]));
-        // The simple recognizer may not parse this depending
-        // on whitespace; check what it produces.
-        // !pattern where pattern is `{k} > 0` (per-axis) →
-        // inverted per-axis with flipped monotonicity.
+        let info = recognize("!({k} > 0)", &coords(&["k"]));
         match info.factorization {
-            Factorization::PerAxis(_) => {
+            Factorization::PerAxis(m) => {
+                assert_eq!(m.get("k").map(String::as_str), Some("!({k} > 0)"));
                 assert_eq!(info.monotonicity.get("k"), Some(&Monotonicity::Decreasing));
-            }
-            Factorization::Opaque(_) => {
-                // Acceptable conservative fallback.
             }
             other => panic!("unexpected factorization {other:?}"),
         }
+        let info = recognize("!{k} > 0", &coords(&["k"]));
+        assert!(matches!(
+            info.factorization,
+            Factorization::Opaque(OpaqueReason::UnknownPattern)
+        ));
     }
 
     #[test]
@@ -988,9 +985,45 @@ mod tests {
     }
 
     #[test]
-    fn split_top_level_respects_parens() {
-        let s = "f(a && b) && c";
-        let parts = split_top_level(s, "&&").unwrap();
-        assert_eq!(parts, vec!["f(a && b)", "c"]);
+    fn a_call_argument_is_not_an_operand() {
+        let info = recognize(
+            "f({k} && {j}) && {limit} > 1",
+            &coords(&["k", "j", "limit"]),
+        );
+        match &info.factorization {
+            Factorization::Conjunctive(parts) => {
+                assert_eq!(parts, &["f({k} && {j})", "{limit} > 1"]);
+            }
+            other => panic!("expected Conjunctive, got {other:?}"),
+        }
+    }
+
+    /// `&&` binds tighter than `||`: a disjunction whose second operand
+    /// is a conjunction is a disjunction of the two, not a conjunction.
+    #[test]
+    fn and_binds_tighter_than_or() {
+        let info = recognize("{k} > 1 || {j} > 2 && {k} < 9", &coords(&["k", "j"]));
+        match &info.factorization {
+            Factorization::Disjunctive(parts) => {
+                assert_eq!(parts, &["{k} > 1", "{j} > 2 && {k} < 9"]);
+            }
+            other => panic!("expected Disjunctive, got {other:?}"),
+        }
+        let info = recognize("({k} > 1 || {j} > 2) && {k} < 9", &coords(&["k", "j"]));
+        match &info.factorization {
+            Factorization::Conjunctive(parts) => {
+                assert_eq!(parts, &["({k} > 1 || {j} > 2)", "{k} < 9"]);
+            }
+            other => panic!("expected Conjunctive, got {other:?}"),
+        }
+    }
+
+    /// A parenthesized comparison is the comparison.
+    #[test]
+    fn parentheses_around_a_comparison_are_transparent() {
+        let info = recognize("(({k} > 10))", &coords(&["k"]));
+        assert!(matches!(info.factorization, Factorization::PerAxis(_)));
+        assert_eq!(unparenthesized("(a) && (b)"), "(a) && (b)");
+        assert_eq!(unparenthesized("((a) && (b))"), "(a) && (b)");
     }
 }

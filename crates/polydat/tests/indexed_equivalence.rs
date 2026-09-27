@@ -918,6 +918,86 @@ fn generated_shapes_index_as_they_materialize() {
     );
 }
 
+/// A predicate groups by the language's one precedence table on every
+/// path: unary `!` binds tighter than `&&`, `&&` tighter than `||`,
+/// comparison tighter than `&&`, and arithmetic tighter than
+/// comparison. Each predicate keeps exactly the tuples its grouping
+/// written out keeps.
+#[test]
+fn predicates_group_by_the_one_precedence_table() {
+    let scope = scope();
+    let flags = |name: &str| {
+        Comprehension::clause(
+            name,
+            Source::Literal {
+                values: vec![LiteralValue::Bool(true), LiteralValue::Bool(false)],
+            },
+        )
+    };
+    let space = || {
+        Comprehension::cartesian(vec![
+            flags("a"),
+            flags("b"),
+            flags("c"),
+            range("x", 0, 3, 1),
+            range("y", 0, 3, 1),
+        ])
+    };
+    let traversal = |predicate: &str| {
+        evaluate_indexed(&Comprehension::filter(space(), predicate), &scope)
+            .unwrap()
+            .to_vec()
+    };
+    let stream = |predicate: &str| {
+        let s = streamed(&Comprehension::filter(space(), predicate)).unwrap();
+        assert!(s.error.is_none(), "{predicate}: {:?}", s.error);
+        s.tuples
+    };
+    // Pairs of every precedence level the streaming surface evaluates.
+    let shared = [
+        ("!true || {x} == 1", "(!true) || {x} == 1"),
+        ("!false && {x} == 1", "(!false) && {x} == 1"),
+        ("{x} == 1 || !true", "{x} == 1 || (!true)"),
+        (
+            "{x} == 1 || {y} == 2 && {x} > 0",
+            "{x} == 1 || ({y} == 2 && {x} > 0)",
+        ),
+        (
+            "{x} == 1 && {y} == 2 || {x} == 0",
+            "({x} == 1 && {y} == 2) || {x} == 0",
+        ),
+        ("{x} < 2 && {y} >= 1", "({x} < 2) && ({y} >= 1)"),
+    ];
+    for (bare, grouped) in shared {
+        assert_eq!(traversal(bare), traversal(grouped), "{bare}");
+        assert_eq!(stream(bare), stream(grouped), "{bare}");
+    }
+    let traversal_only = [
+        ("!{a} || {b}", "(!{a}) || {b}"),
+        ("!{a} && {b}", "(!{a}) && {b}"),
+        ("{a} || {b} && {c}", "{a} || ({b} && {c})"),
+        ("{a} && {b} || {c}", "({a} && {b}) || {c}"),
+        (
+            "{x} == 1 || {y} == 2 && {a}",
+            "({x} == 1) || (({y} == 2) && {a})",
+        ),
+        ("{x} < {y} == {a}", "({x} < {y}) == {a}"),
+        ("!{a} == {b}", "(!{a}) == {b}"),
+        ("{x} + 1 > {y} * 2", "({x} + 1) > ({y} * 2)"),
+        (
+            "{x} * 2 == {y} + 1 || {c}",
+            "(({x} * 2) == ({y} + 1)) || {c}",
+        ),
+        ("{x} in [0, 2] || {a}", "({x} in [0, 2]) || {a}"),
+    ];
+    for (bare, grouped) in traversal_only {
+        assert_eq!(traversal(bare), traversal(grouped), "{bare}");
+    }
+    // The grouping `!` over the whole disjunction keeps other tuples.
+    assert_ne!(traversal("!{a} || {b}"), traversal("!({a} || {b})"));
+    assert_ne!(stream("!true || {x} == 1"), stream("!(true || {x} == 1)"));
+}
+
 /// The open cost of a large product: the reference evaluator builds
 /// every tuple before its order selects, the index-addressed one
 /// holds the axes and the selection.

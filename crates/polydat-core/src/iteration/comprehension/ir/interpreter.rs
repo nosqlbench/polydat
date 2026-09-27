@@ -25,6 +25,7 @@
 //! computes only the selected tuples (spec §6.2, §10.2 R2).
 
 use crate::iteration::comprehension::metadata::{CycleOperand, IndexFn, cycle_length};
+use crate::iteration::comprehension::predicate::{PredicateKind, parse_predicate};
 use crate::iteration::comprehension::runtime::RuntimeError;
 use crate::iteration::comprehension::source::{LiteralValue, Source};
 use crate::iteration::comprehension::strategies::{Selection, Tuple, TupleValue};
@@ -993,8 +994,27 @@ impl TupleStream for OrderMaterializeStream {
 /// walker evaluates richer predicates through the scope.
 fn evaluate_predicate(predicate: &str, tuple: &Tuple) -> bool {
     let trimmed = predicate.trim();
-    // A predicate wrapped in one pair of parentheses, as a folded
-    // filter's conjuncts are.
+    // Disjunction, conjunction, and negation, as the predicate grammar
+    // groups them: `!` binds tighter than `&&`, and `&&` tighter than
+    // `||`.
+    if let Ok(tree) = parse_predicate(trimmed) {
+        match &tree.kind {
+            PredicateKind::Or(parts) => {
+                return parts
+                    .iter()
+                    .any(|p| evaluate_predicate(p.text(trimmed), tuple));
+            }
+            PredicateKind::And(parts) => {
+                return parts
+                    .iter()
+                    .all(|p| evaluate_predicate(p.text(trimmed), tuple));
+            }
+            PredicateKind::Not(inner) => return !evaluate_predicate(inner.text(trimmed), tuple),
+            _ => {}
+        }
+    }
+    // A predicate wrapped in parentheses, as a folded filter's
+    // conjuncts are.
     if let Some(inner) = enclosed(trimmed) {
         return evaluate_predicate(inner, tuple);
     }
@@ -1003,18 +1023,6 @@ fn evaluate_predicate(predicate: &str, tuple: &Tuple) -> bool {
     }
     if trimmed.eq_ignore_ascii_case("false") {
         return false;
-    }
-    // Negation.
-    if let Some(inner) = trimmed.strip_prefix('!') {
-        return !evaluate_predicate(inner.trim(), tuple);
-    }
-    // Disjunction, which binds looser than conjunction.
-    if let Some(parts) = split_top_level(trimmed, "||") {
-        return parts.iter().any(|p| evaluate_predicate(p, tuple));
-    }
-    // Conjunction.
-    if let Some(parts) = split_top_level(trimmed, "&&") {
-        return parts.iter().all(|p| evaluate_predicate(p, tuple));
     }
     // `{name} in [v1, v2, ...]`
     if let Some(in_pos) = trimmed.find(" in ") {
@@ -1192,37 +1200,6 @@ fn enclosed(s: &str) -> Option<&str> {
         }
     }
     (depth == 0).then_some(inner)
-}
-
-fn split_top_level(s: &str, sep: &str) -> Option<Vec<String>> {
-    let mut parts = Vec::new();
-    let mut depth = 0i64;
-    let mut last = 0usize;
-    let bytes = s.as_bytes();
-    let sep_bytes = sep.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'(' | b'[' | b'{' => depth += 1,
-            b')' | b']' | b'}' => depth -= 1,
-            _ => {}
-        }
-        if depth == 0
-            && i + sep_bytes.len() <= bytes.len()
-            && &bytes[i..i + sep_bytes.len()] == sep_bytes
-        {
-            parts.push(s[last..i].trim().to_string());
-            last = i + sep_bytes.len();
-            i = last;
-            continue;
-        }
-        i += 1;
-    }
-    if parts.is_empty() {
-        return None;
-    }
-    parts.push(s[last..].trim().to_string());
-    Some(parts)
 }
 
 fn split_top_level_op<'a>(s: &'a str, op: &str) -> Option<(&'a str, &'a str)> {

@@ -19,7 +19,7 @@
 //!   `Source::Generator { expr: "pre_{outer}" }` and
 //!   `Source::WorkloadParamList { name }` resolve against the
 //!   parent kernel's chain — `{outer}` substitution via
-//!   [`interpolate_via_kernel`], `kernel.lookup(name)` for
+//!   [`interpolate_via_kernel`](crate::kernel::interp::interpolate_via_kernel), `kernel.lookup(name)` for
 //!   workload params.
 //! - **Cartesian is dependent-tuple, not independent.** Clause
 //!   N's spec text may reference iter-vars from clauses
@@ -28,11 +28,11 @@
 //!   correct context. This is SRD-18b §"Dependent Tuple
 //!   Iteration".
 //! - **Filter predicates evaluate against per-tuple scopes.**
-//!   Predicates in the comprehension grammar are evaluated
-//!   directly against the tuple with no kernel and no compile;
-//!   anything richer is interpolated against a `Layered` view
-//!   of the scope and evaluated with `eval_const_expr_for`,
-//!   charged to the scope's ledger.
+//!   A [`CompiledPredicate`] parses the predicate once and tests
+//!   each tuple: its boolean structure over the tuple's values
+//!   directly, and any richer sub-expression interpolated against
+//!   a `Layered` view of the scope and evaluated as a Polydat
+//!   expression, charged to the scope's ledger.
 //!
 //! All three depend on polydat-side primitives that exist
 //! today; this evaluator is the algebra-typed entry point for
@@ -65,18 +65,18 @@
 use std::sync::Arc;
 
 use crate::ast::Value;
-use crate::dsl::compile::eval_const_expr_for;
 use crate::iteration::comprehension::ast::Comprehension;
 use crate::iteration::comprehension::cardinality::{Interval, ProductMeasure};
 use crate::iteration::comprehension::eval_source::{EvalContext, SourceEval};
 use crate::iteration::comprehension::measure::AxisMeasure;
 use crate::iteration::comprehension::metadata::{IndexFn, cycle_length};
+use crate::iteration::comprehension::predicate::CompiledPredicate;
 use crate::iteration::comprehension::source::Source;
 use crate::iteration::comprehension::strategies::Selection;
 use crate::iteration::comprehension::strategy::StrategyName;
 #[cfg(test)]
 use crate::kernel::PolydatKernel;
-use crate::kernel::interp::{Layered, Lookup, interpolate_via_kernel};
+use crate::kernel::interp::Lookup;
 
 /// Runtime tuple type — polydat-Value-based to preserve Ext
 /// typing (Partition / Json / etc.) through the iteration
@@ -424,230 +424,6 @@ impl Indexed {
             }
         }
     }
-}
-
-/// Evaluate a predicate in the comprehension grammar against a tuple
-/// without a kernel. Returns `None` when the predicate uses anything
-/// outside that grammar, or references a name the tuple does not bind,
-/// so the caller can fall back to kernel interpolation.
-fn fast_predicate(predicate: &str, tuple: &RuntimeTuple) -> Option<bool> {
-    let p = predicate.trim();
-    if p.eq_ignore_ascii_case("true") {
-        return Some(true);
-    }
-    if p.eq_ignore_ascii_case("false") {
-        return Some(false);
-    }
-    if let Some(inner) = p.strip_prefix('!') {
-        return fast_predicate(inner, tuple).map(|b| !b);
-    }
-    if let Some(parts) = split_top(p, "||") {
-        let mut any = false;
-        for part in parts {
-            any |= fast_predicate(&part, tuple)?;
-        }
-        return Some(any);
-    }
-    if let Some(parts) = split_top(p, "&&") {
-        let mut all = true;
-        for part in parts {
-            all &= fast_predicate(&part, tuple)?;
-        }
-        return Some(all);
-    }
-    if let Some(pos) = p.find(" in ") {
-        let name = curly(p[..pos].trim())?;
-        let list = p[pos + 4..].trim().strip_prefix('[')?.strip_suffix(']')?;
-        let needle = tuple_scalar(tuple, &name)?;
-        let mut hit = false;
-        for item in list.split(',') {
-            let lit = literal(item.trim())?;
-            hit |= scalar_eq(&needle, &lit);
-        }
-        return Some(hit);
-    }
-    for op in ["==", "!=", "<=", ">=", "<", ">"] {
-        if let Some((lhs, rhs)) = split_op(p, op) {
-            let lhs = lhs.trim();
-            let rhs = rhs.trim();
-            let a = operand(tuple, lhs)?;
-            let b = operand(tuple, rhs)?;
-            return Some(match op {
-                "==" => scalar_eq(&a, &b),
-                "!=" => !scalar_eq(&a, &b),
-                "<" => scalar_cmp(&a, &b)? == std::cmp::Ordering::Less,
-                ">" => scalar_cmp(&a, &b)? == std::cmp::Ordering::Greater,
-                "<=" => scalar_cmp(&a, &b)? != std::cmp::Ordering::Greater,
-                _ => scalar_cmp(&a, &b)? != std::cmp::Ordering::Less,
-            });
-        }
-    }
-    None
-}
-
-#[derive(Debug, Clone, PartialEq)]
-enum Scalar {
-    Int(i128),
-    Float(f64),
-    Str(String),
-    Bool(bool),
-}
-
-fn operand(tuple: &RuntimeTuple, text: &str) -> Option<Scalar> {
-    match curly(text) {
-        Some(name) => tuple_scalar(tuple, &name),
-        None => literal(text),
-    }
-}
-
-fn tuple_scalar(tuple: &RuntimeTuple, name: &str) -> Option<Scalar> {
-    let (_, v) = tuple.iter().find(|(n, _)| n == name)?;
-    match v {
-        Value::U64(n) => Some(Scalar::Int(*n as i128)),
-        Value::F64(f) => Some(Scalar::Float(*f)),
-        Value::Str(s) => Some(Scalar::Str(s.to_string())),
-        Value::Bool(b) => Some(Scalar::Bool(*b)),
-        // A JSON list's item compares as the scalar it carries.
-        Value::Json(j) => match j.as_ref() {
-            serde_json::Value::Number(n) if n.is_i64() => Some(Scalar::Int(n.as_i64()? as i128)),
-            serde_json::Value::Number(n) if n.is_u64() => Some(Scalar::Int(n.as_u64()? as i128)),
-            serde_json::Value::Number(n) => Some(Scalar::Float(n.as_f64()?)),
-            serde_json::Value::String(s) => Some(Scalar::Str(s.clone())),
-            serde_json::Value::Bool(b) => Some(Scalar::Bool(*b)),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
-fn literal(text: &str) -> Option<Scalar> {
-    if let Some(s) = text.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
-        return Some(Scalar::Str(s.to_string()));
-    }
-    if let Some(s) = text.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')) {
-        return Some(Scalar::Str(s.to_string()));
-    }
-    match text {
-        "true" => return Some(Scalar::Bool(true)),
-        "false" => return Some(Scalar::Bool(false)),
-        _ => {}
-    }
-    if let Ok(i) = text.parse::<i128>() {
-        return Some(Scalar::Int(i));
-    }
-    if let Ok(f) = text.parse::<f64>() {
-        return Some(Scalar::Float(f));
-    }
-    // A bare word compares as text, matching the interpolated form
-    // `load == load` a kernel evaluation would see for string elements.
-    if !text.is_empty()
-        && text
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-    {
-        return Some(Scalar::Str(text.to_string()));
-    }
-    None
-}
-
-fn scalar_eq(a: &Scalar, b: &Scalar) -> bool {
-    match (a, b) {
-        (Scalar::Int(x), Scalar::Float(y)) | (Scalar::Float(y), Scalar::Int(x)) => {
-            (*x as f64) == *y
-        }
-        _ => a == b,
-    }
-}
-
-fn scalar_cmp(a: &Scalar, b: &Scalar) -> Option<std::cmp::Ordering> {
-    match (a, b) {
-        (Scalar::Int(x), Scalar::Int(y)) => Some(x.cmp(y)),
-        (Scalar::Float(x), Scalar::Float(y)) => x.partial_cmp(y),
-        (Scalar::Int(x), Scalar::Float(y)) => (*x as f64).partial_cmp(y),
-        (Scalar::Float(x), Scalar::Int(y)) => x.partial_cmp(&(*y as f64)),
-        (Scalar::Str(x), Scalar::Str(y)) => Some(x.cmp(y)),
-        _ => None,
-    }
-}
-
-fn curly(text: &str) -> Option<String> {
-    let inner = text.strip_prefix('{')?.strip_suffix('}')?;
-    (!inner.is_empty() && inner.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
-        .then(|| inner.to_string())
-}
-
-/// Split at a top-level binary token, respecting brackets and quotes.
-fn split_top(s: &str, sep: &str) -> Option<Vec<String>> {
-    let mut parts = Vec::new();
-    let mut depth = 0i32;
-    let mut quote: Option<char> = None;
-    let mut start = 0;
-    let bytes: Vec<char> = s.chars().collect();
-    let sepc: Vec<char> = sep.chars().collect();
-    let mut i = 0;
-    while i < bytes.len() {
-        let c = bytes[i];
-        if let Some(q) = quote {
-            if c == q {
-                quote = None;
-            }
-        } else {
-            match c {
-                '"' | '\'' => quote = Some(c),
-                '(' | '[' | '{' => depth += 1,
-                ')' | ']' | '}' => depth -= 1,
-                _ => {}
-            }
-            if depth == 0 && bytes[i..].starts_with(&sepc) {
-                parts.push(bytes[start..i].iter().collect::<String>());
-                i += sepc.len();
-                start = i;
-                continue;
-            }
-        }
-        i += 1;
-    }
-    if parts.is_empty() {
-        return None;
-    }
-    parts.push(bytes[start..].iter().collect::<String>());
-    Some(parts)
-}
-
-fn split_op<'a>(s: &'a str, op: &str) -> Option<(&'a str, &'a str)> {
-    let mut depth = 0i32;
-    let mut quote: Option<char> = None;
-    let chars: Vec<(usize, char)> = s.char_indices().collect();
-    for (k, &(idx, c)) in chars.iter().enumerate() {
-        if let Some(q) = quote {
-            if c == q {
-                quote = None;
-            }
-            continue;
-        }
-        match c {
-            '"' | '\'' => {
-                quote = Some(c);
-                continue;
-            }
-            '(' | '[' | '{' => depth += 1,
-            ')' | ']' | '}' => depth -= 1,
-            _ => {}
-        }
-        if depth == 0 && s[idx..].starts_with(op) {
-            // Longest-match: do not split `<=` at `<`, or `!=`/`==` at `=`.
-            let next = chars.get(k + op.len()).map(|(_, c)| *c);
-            if (op == "<" || op == ">") && next == Some('=') {
-                continue;
-            }
-            let prev = if k > 0 { Some(chars[k - 1].1) } else { None };
-            if (op == "<" || op == ">") && matches!(prev, Some('<') | Some('>')) {
-                continue;
-            }
-            return Some((&s[..idx], &s[idx + op.len()..]));
-        }
-    }
-    None
 }
 
 /// Internal walker state — the scope the recursive walker resolves
@@ -1030,9 +806,10 @@ impl EvalState<'_> {
         input: EvaluatedNode,
         predicate: &str,
     ) -> Result<EvaluatedNode, RuntimeError> {
+        let predicate = CompiledPredicate::new(predicate);
         let mut out = Vec::with_capacity(input.tuples.len());
         for tuple in input.tuples {
-            if self.keeps(predicate, &tuple)? {
+            if predicate.keeps(&tuple, self.scope)? {
                 out.push(tuple);
             }
         }
@@ -1041,36 +818,6 @@ impl EvalState<'_> {
             tuples: out,
             index_fn: None,
         })
-    }
-
-    /// Whether `tuple` passes `predicate`.
-    fn keeps(&self, predicate: &str, tuple: &RuntimeTuple) -> Result<bool, RuntimeError> {
-        // Fast path: the comprehension predicate grammar (`{name}`
-        // compared to a literal or another `{name}`, joined by `&&`,
-        // `||`, `!`, or `in [...]`) evaluates directly against the
-        // tuple, without a kernel and without compiling (SRD 113
-        // §5.2). Anything richer takes the kernel path below.
-        if let Some(keep) = fast_predicate(predicate, tuple) {
-            return Ok(keep);
-        }
-        let scope = Layered {
-            prefix: tuple,
-            inner: self.scope,
-        };
-        let failed = |message: String| RuntimeError::FilterEval {
-            predicate: predicate.to_string(),
-            message,
-        };
-        let interpolated =
-            interpolate_via_kernel(predicate, &scope).map_err(|e| failed(e.to_string()))?;
-        let result = eval_const_expr_for(&interpolated, self.scope.ledger())
-            .map_err(|e| failed(e.to_string()))?;
-        match result {
-            Value::Bool(b) => Ok(b),
-            Value::U64(n) => Ok(n != 0),
-            Value::F64(n) => Ok(n != 0.0),
-            other => Err(failed(format!("expected bool/u64/f64, got {other:?}"))),
-        }
     }
 
     /// Sample an order over a space with a continuous axis (spec
@@ -1320,12 +1067,13 @@ impl EvalState<'_> {
                 // A filter keeps the tuples that pass; which ones is
                 // known only by testing each, so its output holds them.
                 let (inner, _) = self.index_node(child, prefix)?;
+                let predicate = CompiledPredicate::new(predicate);
                 let mut kept = Vec::new();
                 let mut tuple = RuntimeTuple::new();
                 for i in 0..inner.len() {
                     tuple.clear();
                     inner.append_at(i, &mut tuple);
-                    if self.keeps(predicate, &tuple)? {
+                    if predicate.keeps(&tuple, self.scope)? {
                         kept.push(tuple.clone());
                     }
                 }
