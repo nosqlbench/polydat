@@ -27,9 +27,9 @@
 //! or none. A combination fixes each of those choices everywhere the
 //! generator makes it, and the tile nests to exactly the planned
 //! depth; the remaining choices (extra static words, piece order,
-//! literals) come from the combination's seed. The random generator's
-//! escape is stripped with the open delimiter before it reaches the
-//! output, so only the planned generator emits it. Each combination's
+//! literals) come from the combination's seed. Both generators keep
+//! the escape out of a block body whose open delimiter holds a
+//! bracket, since a block body must balance. Each combination's
 //! program goes through the well-formed invariants, the engine sweep,
 //! and one mutation.
 //!
@@ -144,6 +144,9 @@ struct Gen {
     rng: Rng,
     opts: TileOptions,
     encoding: Option<&'static str>,
+    /// Index into [`BODY_FORMS`], chosen before any piece so that a
+    /// static knows whether it sits in a block body.
+    body_form: usize,
     /// The superfuzz's fixed choices, or `None` for the random
     /// generator.
     plan: Option<TilePlan>,
@@ -194,6 +197,7 @@ impl Gen {
         let strict = rng.coin(20);
         let encoding = ENCODINGS[rng.range(ENCODINGS.len())];
         let in_string = rng.coin(10);
+        let body_form = rng.range(BODY_FORMS.len());
         Gen {
             rng,
             opts: TileOptions {
@@ -204,6 +208,7 @@ impl Gen {
                 in_string,
             },
             encoding,
+            body_form,
             plan: None,
         }
     }
@@ -220,6 +225,7 @@ impl Gen {
                 in_string: plan.in_string,
             },
             encoding: ENCODINGS[plan.encoding],
+            body_form: plan.body_form,
             plan: Some(plan),
         }
     }
@@ -228,10 +234,13 @@ impl Gen {
     /// followed by a directive word, or a bare brace that would break a
     /// block body; braces are allowed only balanced.
     ///
-    /// The random generator appends its doubled-open escape before the
-    /// open delimiter is stripped, so the escape never reaches its
-    /// output. A planned static strips first and appends the escape
-    /// after, so the escape is present whenever the plan asks for it.
+    /// The doubled-open escape goes on after the open delimiter is
+    /// stripped, so it reaches the output: always when a plan asks for
+    /// it, and on a 15% coin in the random generator. A block body is
+    /// captured by balancing its brackets (polytile.md §2.2), so a
+    /// doubled open delimiter that holds a bracket would unbalance it;
+    /// the escape of such a delimiter goes only in heredoc and string
+    /// bodies.
     fn static_text(&mut self) -> String {
         let mut s = String::new();
         let n = 1 + self.rng.range(3);
@@ -248,24 +257,16 @@ impl Gen {
                 .replace(&format!("{}for", opts.sigil), "")
                 .replace(&format!("{}if", opts.sigil), "")
         };
-        if let Some(p) = self.plan {
-            let mut out = strip(&s, &self.opts);
-            // A block body is captured by balancing its brackets
-            // (polytile.md §2.2), so a doubled open delimiter that
-            // holds a bracket would unbalance it; the escape of such a
-            // delimiter goes only in heredoc and string bodies.
-            let bracketed = self.opts.open.contains(['{', '[', '}', ']']);
-            if p.escape && !(BODY_FORMS[p.body_form] == "block" && bracketed) {
-                out.push_str(&format!("{}{}lit ", self.opts.open, self.opts.open));
-            }
-            return out;
+        let mut out = strip(&s, &self.opts);
+        let escape = match self.plan {
+            Some(p) => p.escape,
+            None => self.rng.coin(15),
+        };
+        let bracketed = self.opts.open.contains(['{', '[', '}', ']']);
+        if escape && !(BODY_FORMS[self.body_form] == "block" && bracketed) {
+            out.push_str(&format!("{}{}lit ", self.opts.open, self.opts.open));
         }
-        // Add a literal open delimiter via the doubled escape sometimes.
-        if self.rng.coin(15) {
-            s.push_str(&format!("{}{}", self.opts.open, self.opts.open));
-            s.push_str("lit ");
-        }
-        strip(&s, &self.opts) + if s.is_empty() { "z" } else { "" }
+        out
     }
 
     fn hole(&mut self) -> (String, Shape) {
@@ -451,11 +452,7 @@ impl Gen {
         if !opts.is_empty() {
             header.push_str(&format!(" ({})", opts.join(", ")));
         }
-        let form = match self.plan {
-            Some(p) => p.body_form,
-            None => self.rng.range(BODY_FORMS.len()),
-        };
-        let body_form = match form {
+        let body_form = match self.body_form {
             // A block body must be brace-balanced as a whole; wrap it.
             0 if !body.contains('\n') => format!("{{ {body} }}"),
             1 => format!("<<<\n{body}\n>>>"),
@@ -992,7 +989,7 @@ fn generator_smoke() {
         if src.contains(":= {") {
             block += 1;
         }
-        if src.contains("lit ") {
+        if src.contains(&format!("{}{}lit ", g.opts.open, g.opts.open)) {
             escapes += 1;
         }
     }
