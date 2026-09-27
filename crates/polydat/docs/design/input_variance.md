@@ -1,7 +1,7 @@
 ---
 type: specification
 title: Input Variance
-timestamp: 2026-09-25
+timestamp: 2026-09-27
 description: Inputs whose written type varies are served by converter nodes compiled into the graph, not by conversions at the write.
 tags: [types, host, compiler]
 ---
@@ -23,8 +23,9 @@ typed writes (write-time "healing") in
 paragraph and the second site of Axiom T2) and in
 [type_system.md](type_system.md) §6.2. The only runtime conversions of
 an input value are a converter node (§5) and a host's own call of
-`convert::to_port` (§6). The exceptions that remain in the code are
-listed in §8 and §11.
+`convert::to_port` (§6). Two paths outside those convert a value on
+its way into an input: the binder's copy into an input whose type was
+inferred (§7), and the write-through commit's widenings (§8).
 
 **Related specifications.** [Engines](engines.md) §3.4 (node failure
 attribution) and §3.5 (write refusal); [Type System](type_system.md)
@@ -283,48 +284,55 @@ its input's type:
    to `Warn` or `Info` and write what arrives; the compile log lists
    every input that was opened.
 
-A host must not rely on a write that converts. The only writes that
-still convert are the deprecated `Dataflow::set_wire` and
-`set_wire_idx` (§8).
+A host must not rely on a write that converts: every host write
+(`set_input`, `set_input_at`, `set_cursor`) is checked against the
+slot's type and never converted, on all four engines.
 
 ## 7. Scope trees
 
-A scope binder copies a parent's values into a child's inputs (the
-subcontext wiring; subcontext_construction.md).
+A scope binder copies a parent's values into a child's inputs by name
+(the subcontext wiring; subcontext_construction.md). Each copy is
+written under the host-write rule, so the child's input decides what
+it accepts:
 
 - A child input that is open and converted (the child was compiled with
-  `Warn` or `Info`) takes the parent's value as written, and the
-  child's converter converts it.
-- A binder copy into a child input the child's program declared is
-  converted through the boundary adapter catalog
-  (`adapt_boundary_value`). A copy the catalog cannot convert is
-  discarded without an error.
-- The subcontext builder synthesizes externs for parent values with
-  the type `port_type_keyword` derives from the parent's type, and
-  names them as inferred (§3).
+  `Warn` or `Info`) is a `Dyn` slot. It takes the parent's value as
+  written, and the child's converter converts it.
+- A child input whose type the compiler or a synthesizer inferred, and
+  which is not converted, takes the parent's value converted through
+  the boundary adapter catalog into its type.
+- A child input the child's program declared takes the parent's value
+  as it is. A value of another type is refused.
+- A coordinate is never copied; a host positions a child's
+  coordinates with `set_inputs`.
 
-The following rules take effect in the release that removes
-`Dataflow::set_wire`:
+A refused copy fails binding with
+`KernelError::Write(WriteError::FromParent { slot, expected, got })`,
+which names the child input (the parent output of the same name), the
+type the child declares, and the type of the parent's value. A value
+the catalog cannot convert into an inferred input is refused the same
+way. For example, a parent that binds `const limit := "10"` and a
+child that declares `extern limit: u64` fail to bind with
+`FromParent { slot: "limit", expected: U64, got: Str }`. The child
+binds when it declares `extern limit: str`, or when the parent binds
+`limit` to a `u64`.
 
-- A child input the child's program declared refuses a parent value of
-  another type, and the binder reports the refusal as a construction
-  error naming the parent output, the child input, and both types.
-- A child built from source under a parent (`ParentView`) gives an
-  input it synthesizes for a parent value the parent's exact type, so
-  that input needs no converter; `port_type_keyword` does not derive
-  its type.
+A child built from source under a parent (`ParentView`) synthesizes an
+extern for a parent value when a result binding writes through a
+parent `shared` cell. That write-through extern has the cell's exact
+type, so the cell attaches with no conversion. The builder names it,
+and its result externs (`body`, `count`, `ok`), as inferred (§3).
 
 ## 8. Relation to existing paths and specifications
 
-- `Dataflow::set_wire` and `set_wire_idx` are deprecated (since 0.5.0)
-  and will be removed. They still convert through the boundary adapter
-  catalog. Their callers write through `set_input_at` (or
-  `set_input`), converting first with `convert::to_port` where needed.
-  `ScopedExpr::set` converts through `convert::to_port`.
-- `adapt_boundary_value` remains the write-time conversion for the
-  binder's copies (§7) and the deprecated writes. The converter node
-  and `convert::to_port` apply the boundary adapter catalog through
-  `convert::to_port`, not through `adapt_boundary_value`.
+- The host writes (`set_input`, `set_input_at`, `set_cursor`) never
+  convert. A host that holds a value of another type converts it first
+  with `convert::to_port`. `ScopedExpr::set` converts through
+  `convert::to_port`.
+- `adapt_boundary_value` is the binder's conversion for a copy into an
+  inferred input (§7). The converter node and `convert::to_port` apply
+  the boundary adapter catalog through `convert::to_port`, not through
+  `adapt_boundary_value`.
 - The write-through commit converts a fixed list of widenings. The
   rule that replaces the list is: a shared cell's type is its
   declaration's, and a write-through of a narrower numeric type is
@@ -347,7 +355,7 @@ scope tree:
 - convert values whose target is known, such as a CLI argument bound to
   a declared parameter, through `convert::to_port` before writing;
 - let scope-tree children built from source take their parents' exact
-  types (§7, once in effect), so most copies need no converter.
+  types (§7), so most copies need no converter.
 
 The embedding guide's §3 describes the pattern for hosts.
 
@@ -370,13 +378,13 @@ provenance modes of the compiled engines:
   `Info`, and leaves other externs declared.
 - A scope's synthesized result extern is `Inferred` and converts under
   `Warn`.
+- A binder copy into a declared child input of another type fails
+  binding with `WriteError::FromParent`, naming the input and both
+  types (`a_binder_copy_into_a_declared_input_of_another_type_is_refused`).
 
-Two further tests are specified. A property test over the catalog
+One further test is specified: a property test over the catalog that
 checks that `convert::to_port` agrees with a converter node on every
-catalog entry; the suite above checks agreement on sample values only.
-A test that a binder copy into a declared child input of another type
-is a construction error naming both sides belongs to the refusal rule
-of §7 and takes effect with it.
+catalog entry. The suite above checks agreement on sample values only.
 
 ## 11. Implementation notes
 
@@ -387,13 +395,14 @@ of §7 and takes effect with it.
   input, `converts_to` holds the readers' type, and `input_port_type`
   reports that type, not `Dyn`, so a host that re-declares a parent's
   inputs as source text declares the readers' type.
-- The binder's copies into declared inputs are converted through the
-  catalog, and a failed copy is discarded (§7). Making them refuse
-  would change what existing scope trees build, so the refusal takes effect in the release that
-  removes `Dataflow::set_wire`. For the same reason
-  `port_type_keyword` derives the types of synthesized write-through
-  externs until then, and the write-through widening list (§8) is
-  unchanged.
+- The binder writes each copy through `set_input_at`, after converting
+  it through `adapt_boundary_value` only when the child input's
+  `type_origin` is `Inferred` and the value does not satisfy the slot.
+  A `WriteError::TypeMismatch` from that write is reported as
+  `WriteError::FromParent` (§7).
+- The subcontext builder types each synthesized write-through extern
+  with the keyword of the parent cell's `PortType`, so the cell
+  attaches with no conversion.
 - `set_inputs` writes only the coordinates. Values beyond the
   program's coordinate count are not written into its externs. On the
   interpreter such values would land in the first extern's value, and

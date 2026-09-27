@@ -1,7 +1,7 @@
 ---
 type: specification
 title: The Runtime Model
-timestamp: 2026-09-25
+timestamp: 2026-09-27
 description: The R-axioms of data flow, currency, invalidation, and output ownership, and the D-axioms of determinism, on all four engines.
 tags: [runtime]
 ---
@@ -198,8 +198,8 @@ The **effectively-const** steps (per the Graph Compiler's
 hoisting analysis) are the special case of the rule with no
 dynamic input in their provenance: computed once after
 initialization and current for the kernel's lifetime. A
-`const` binding whose right-hand side is not a literal is
-evaluated at initialization (Terms) and its value is held in an
+`const` binding whose cone reads an input or a nondeterministic
+node is evaluated at initialization (Terms) and its value is held in an
 input slot of kind `InputKind::Const`, so a step that reads it
 is current until `Kernel::init` writes that slot again. Provenance modes on the
 compiled engines (`Raw`, `Push`, `Pull`, `PushPull`, with
@@ -462,9 +462,13 @@ A second kind of cell, the broadcast cell of a computed output
 each of this kernel's pulls publishes, rather than a copy taken
 when the descendant was built
 ([cross_fiber_invalidation.md](cross_fiber_invalidation.md)
-§3.1). Broadcast cells exist on the interpreter, the closure
-tier, and native; pure native has none, and its `output_cell`
-returns `None`.
+§3.1). Broadcast cells exist on all four engines. A kernel
+makes an output's cell on the first ask, holding the output's
+current value, or `None` when the step computing it has not run
+since the last change; every later pull of that output, by name
+or by index, publishes through the cell. A child bound under a
+parent of any engine therefore reads the parent's computed
+output as a live link.
 
 The reading side follows R1: a step is current until an input
 in its provenance changes, and a publication by another kernel
@@ -514,16 +518,24 @@ trait, and each call below has the same meaning on all four.
   or `KernelError::ConstInit { name, reason }` naming the first
   const whose expression failed. On pure native a const whose
   value is `None` is refused with `KernelError::Refused`, since
-  pure native code cannot hold `None`. The kernel is initialized
+  pure native code cannot hold `None`. In the same order, `init`
+  seeds each `shared` register that has a computed starting value,
+  only while the register's cell is unwritten, so a second `init`
+  leaves the register as it is. The kernel is initialized
   already when a host receives it (below), so a host that sets
   no const-read extern never calls `init`.
-- **`const_inits()`** lists the program's non-literal consts as
-  `ConstInit { name, slot, source, fallback }` records, in the
+- **`const_inits()`** lists the program's captured consts, the
+  consts not folded at build, as `ConstInit` records, in the
   order `init` evaluates them: `name` is the const and the output
   that reads it, `slot` the input holding its value, `source` the
   output `__init_<name>` computing its expression, and `fallback`
   the input holding the enclosing scope's value, when there is
-  one. **`init_input_at(index, value)`** is `set_input_at` that
+  one. A record with `register` set is a `shared` register's
+  computed starting value: `slot` is the register's input, and
+  `init` writes it only while the register's cell is unwritten
+  ([evaluation_model.md](evaluation_model.md), "Shared registers
+  and their starting value"). A host reads records but cannot
+  construct one. **`init_input_at(index, value)`** is `set_input_at` that
   also accepts a const slot; `init` stores each const through it,
   and a host that implements `Kernel` itself uses it the same
   way.

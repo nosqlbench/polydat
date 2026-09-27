@@ -7,13 +7,13 @@
         <mxCell id="parent" value="Parent kernel" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=14;" vertex="1" parent="1">
           <mxGeometry x="40" y="180" width="200" height="80" as="geometry"/>
         </mxCell>
-        <mxCell id="spawn" value="Spawn binder&lt;br&gt;(materialize_wiring_from_outer)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=14;" vertex="1" parent="1">
+        <mxCell id="spawn" value="Spawn binder&lt;br&gt;(kernel::bind_under)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=14;" vertex="1" parent="1">
           <mxGeometry x="420" y="40" width="240" height="80" as="geometry"/>
         </mxCell>
         <mxCell id="trav" value="Traversal cascade" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=14;" vertex="1" parent="1">
           <mxGeometry x="420" y="320" width="240" height="80" as="geometry"/>
         </mxCell>
-        <mxCell id="child1" value="Interpreter child" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=14;" vertex="1" parent="1">
+        <mxCell id="child1" value="Child on the parent's engine&lt;br&gt;(a compiled program:&lt;br&gt;on its own engine)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=14;" vertex="1" parent="1">
           <mxGeometry x="1000" y="40" width="220" height="80" as="geometry"/>
         </mxCell>
         <mxCell id="child2" value="Child on the engine&lt;br&gt;the host asks for" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=14;" vertex="1" parent="1">
@@ -33,7 +33,7 @@
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="l1" value="spawn or build_subscope" style="text;html=1;align=center;verticalAlign=bottom;fontSize=12;" vertex="1" parent="1">
+        <mxCell id="l1" value="spawn, build_under, or bind_under" style="text;html=1;align=center;verticalAlign=bottom;fontSize=12;" vertex="1" parent="1">
           <mxGeometry x="160" y="56" width="240" height="20" as="geometry"/>
         </mxCell>
         <mxCell id="l2" value="traverse, then activation_on" style="text;html=1;align=center;verticalAlign=bottom;fontSize=12;" vertex="1" parent="1">

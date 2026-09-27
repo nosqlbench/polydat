@@ -1,7 +1,7 @@
 ---
 type: specification
 title: Scope Model
-timestamp: 2026-09-25
+timestamp: 2026-09-27
 description: Scope identity, parent-gated construction, visibility, lifecycle ownership, shared mutation, and scope-coordinate paths.
 tags: [scopes, runtime]
 ---
@@ -64,11 +64,17 @@ A scope is constructed in one of these forms:
   names none). `KernelProgram::create_kernel` yields another root kernel
   over a program already compiled, for another thread.
 - **Child by parent spawn.** A parent `ScopeKernel` spawns a child from a
-  finalized module (`subcontext_builder` → `finalize` → `spawn`), or a
-  parent `PolydatKernel` builds one from matter (`build_subscope`). The
-  parent performs the cell cascade, output/input matching, iteration-binding
-  injection, initialization, write-through construction, and
-  scope-coordinate threading. This form binds an interpreter child.
+  finalized module (`subcontext_builder` → `finalize` → `spawn`), a host
+  builds one from matter under a parent of any engine
+  (`PolydatMatter::build_under(&dyn Kernel)`, which `build_subscope` and
+  `Construction::subscope` call), or a host binds a compiled program under
+  a parent (`kernel::bind_under`). The parent performs the cell cascade,
+  output/input matching, iteration-binding injection, initialization,
+  write-through construction, and scope-coordinate threading, and the
+  call returns the child as a `Box<dyn Kernel>`. A child from source or
+  statements is compiled for, and runs on, the parent's engine; a child
+  from a compiled program runs on the engine that program was compiled
+  for ([subcontext_construction.md](subcontext_construction.md) §6).
 - **Child by traversal activation.** `Kernel::traverse(index)` opens the
   program's `index`-th `for` traversal on a kernel of any of the four
   engines and returns a `TraversalStream`, and
@@ -79,15 +85,14 @@ Every child is a separate kernel over the body's program: it owns
 its inputs, its outputs, and the storage behind them, and follows the
 provenance rules as if it were the only kernel
 ([runtime_model.md](runtime_model.md) R4). Both paths create the child
-uninitialized (`KernelProgram::create_uninitialized` on the traversal path),
-bind it, and then initialize it (`Kernel::init`), so its `const` bindings
+uninitialized (`KernelProgram::create_uninitialized`), bind it, and then initialize it (`Kernel::init`), so its `const` bindings
 are evaluated once, from the bound values
 ([runtime_model.md](runtime_model.md) §6). A const whose expression fails
 makes the child's construction fail with `KernelError::ConstInit`.
 
-`PolydatKernel::materialize_subscope` is crate-private and
-`materialize_wiring_from_outer` is private to `PolydatKernel`'s impl; both
-are implementation chokepoints. Callers cannot construct two
+The wiring pass that every child-construction path reaches is
+crate-private, and `kernel::bind_under` creates the child it binds from a
+program, so the pass is the implementation chokepoint. Callers cannot construct two
 independent kernels and bind them as parent and child afterward, so a child
 cannot bypass the parent's live shared-cell view or lifecycle
 checks. The only public binding a host may make after construction is
@@ -109,10 +114,11 @@ Every graph input has one `InputKind`:
 | `Const` | The value of one `const` binding (`__const_<name>`), written only by the kernel's initialization; a host write is refused with `WriteError::ConstSlot` |
 
 The author-facing `const` modifier classifies an output as effectively constant
-for the life of its kernel. A literal right-hand side is compile-folded; any
-other is evaluated once at the kernel's initialization, after parent wiring,
-and held in a `Const` slot. The implementation choice does not change its
-visibility or lifetime.
+for the life of its kernel. A const whose cone reads no input and no
+nondeterministic node is compile-folded; any other is evaluated once at the
+kernel's initialization, after parent wiring, and held in a `Const` slot
+([evaluation_model.md](evaluation_model.md), "Const Binding Contract"). The
+implementation choice does not change its visibility or lifetime.
 
 The `volatile` modifier prevents const folding and makes every read that
 reaches the wire evaluate it again. Intrinsically nondeterministic nodes
@@ -123,13 +129,12 @@ declare the equivalent runtime requirement through `Purity::Nondeterministic`.
 The two child-construction paths of §2 use different binders. The diagram
 shows what each one transfers from the parent to the child.
 
-![A parent kernel binds a child along two paths: spawn or build_subscope goes through the spawn binder, which gives an interpreter child shared and transit cells, output cells, value copies, scope-init pulls, and the coordinate path; traverse and activation_on go through the traversal cascade, which gives a child on the requested engine the tuple elements and cascaded wires by value and narrows its cursors](../diagrams/scope_model-binding-paths.png)
+![A parent kernel binds a child along two paths: spawn, build_under, or bind_under goes through the spawn binder, kernel::bind_under, which gives a child on the parent's engine, or a compiled program's child on that program's engine, shared and transit cells, output cells, value copies, then init(), and the coordinate path; traverse and activation_on go through the traversal cascade, which gives a child on the requested engine the tuple elements and cascaded wires by value and narrows its cursors](../diagrams/scope_model-binding-paths.png)
 
 Parent binding is name-based and typed: a child input is bound to the parent
-wire of the same name, and a value is checked against, or adapted to, the
-child slot's declared type. The spawn binder
-(`materialize_wiring_from_outer`, reached through `materialize_subscope`)
-performs these operations in order:
+wire of the same name, and a value is checked against the child slot's
+type. The spawn binder (`kernel::bind_under`, whose wiring pass takes
+`dyn Kernel` on both sides) performs these operations in order:
 
 1. Collect every shared cell visible at the parent, including transit cells
    inherited from ancestors.
@@ -139,14 +144,18 @@ performs these operations in order:
 3. Suppress an ancestor transit cell when the child has a local authoritative
    `const` output of the same name.
 4. For a parent output that is backed by a parent input slot or is a `const`,
-   copy the parent's current cell-aware lookup result through the child's
-   typed input boundary, healing the type through the boundary adapter
-   catalog where a lossless adapter exists.
+   copy the parent's current cell-aware lookup result into the child's
+   input under the host-write rule. A declared input takes the value as it
+   is; an input whose type was inferred takes it converted through the
+   boundary adapter catalog. A value the input refuses fails binding with
+   `KernelError::Write(WriteError::FromParent { slot, expected, got })`
+   ([input_variance.md](input_variance.md) §7). A coordinate is never
+   copied.
 5. For a computed parent output consumed by the child, attach the parent's
    output cell to the child's slot; every pull of that output on the parent
-   publishes the fresh value through the cell. Output cells exist on the
-   interpreter only; compiled kernels have none, and a computed value
-   crosses into a compiled child by value.
+   publishes the fresh value through the cell. Output cells exist on all
+   four engines, so the link is live whatever engines the parent and
+   child run on.
 6. Initialize the child (`Kernel::init`), after its extern inputs have been
    filled, so each `const` is evaluated once and fixed for the child's life.
 7. Refresh the child's own coordinate stratum and append the parent's frozen
@@ -166,8 +175,8 @@ lowers every cascaded wire as a plain extern, so a body that reads an outer
 `shared` wire sees the value the wire held at open, not the cell. The two
 binders differ in what they transfer to the child (cells, transit cells,
 output cells, and coordinates on the spawn path; values on the traversal
-path) and in which engines they support. The design direction is that both
-paths call one binder over the `Kernel` trait.
+path). Both run over the `Kernel` trait and bind a child on any of the four
+engines.
 
 ## 5. Visibility and shadowing
 
@@ -215,6 +224,23 @@ binds a `shared` binding to a cell another kernel holds (§2). A register is
 therefore shared between kernels, on the same or different engines, only by
 an explicit act. A kernel created from a shared program starts
 with a cell of its own per `shared` binding.
+
+A register's starting value is written in its declaration. `shared x := 0`
+makes the literal the slot's default. `shared x := <expr>` with any other
+expression is evaluated once, by the declaring scope's initialization, and
+written through the register only while its cell is unwritten, so an
+attached child, a cell a host attaches, or a second `Kernel::init` never
+seeds it again ([evaluation_model.md](evaluation_model.md), "Shared
+registers and their starting value"). A starting value that reads a
+coordinate is refused at build, and `shared const` is a parse error, since
+a value fixed for the kernel's life cannot also be a register other scopes
+write.
+
+Pure native refuses a pull that reads an unset input. A register with a
+computed starting value is exempt from that check only until initialization
+seeds it. Once seeded, a host that clears the register to `None` makes a
+pull that reads it refused, on all four engines
+([engines.md](engines.md)).
 
 There is no scope-exit copy and no `propagate_shared_to` API. Ordinary inner
 writes become visible to parent and sibling scopes through the shared cell.

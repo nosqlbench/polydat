@@ -1,7 +1,7 @@
 ---
 type: specification
 title: Programmatic Construction of the Grammar
-timestamp: 2026-09-25
+timestamp: 2026-09-27
 description: Building the grammar specification's example kernels through the public AST types, each verified to project to the same canonical syntax.
 tags: [language, host]
 ---
@@ -420,9 +420,10 @@ compiles a source string and returns a kernel, or a compile error.
 `set_inputs(&[u64])` writes the coordinate inputs, and `pull(name)`
 evaluates the named output and returns its `Value`; as the first
 example's comment notes, this path panics on an unknown name or type.
-The `Dataflow` trait is the typed path that does not panic:
-`set_wire(name, value)` writes an input and returns an error on a type
-mismatch, and `get_wire(name)` returns `None` for an unknown wire.
+The `Kernel` trait's write and read of one named input do not panic:
+`set_input(name, value)` writes an extern and returns a `WriteError`
+for an unknown name or a value of another type, and `input_value(name)`
+returns `None` for a name that is not an input.
 `compile_polydat` and `compile_polydat_kernel` are the same entry point:
 both build the program on the default engine, P3 in a build with `jit`.
 
@@ -438,11 +439,11 @@ assert!(user_id < 1_000_000);
 
 ```rust
 use polydat::dsl::compile_polydat;
-use polydat::kernel::Dataflow;
 use polydat::ast::Value;
 let mut k = compile_polydat("input cycle: u64\nextern n: u64\nout := n\n").unwrap();
-k.set_wire("n", Value::U64(5)).expect("typed write");   // deprecated since 0.5.0; see input_variance.md
-assert_eq!(k.get_wire("n"), Some(Value::U64(5)));        // None on unknown wire, never panics
+k.set_input("n", Value::U64(5)).expect("typed write");
+assert!(k.set_input("n", Value::Str("5".into())).is_err()); // another type is refused
+assert_eq!(k.input_value("n"), Some(Value::U64(5)));        // None for a name that is not an input
 ```
 
 A grammar snippet's source and its hand-built AST compile to kernels that

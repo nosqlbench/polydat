@@ -1,7 +1,7 @@
 ---
 type: specification
 title: Parent-Gated Subcontext Construction
-timestamp: 2026-09-25
+timestamp: 2026-09-27
 description: The typed construction boundary for a child scope, enforcing lifecycle isolation and cross-tier write-through.
 tags: [scopes, host]
 ---
@@ -43,8 +43,9 @@ flowchart LR
 
 The construction types are:
 
-- `ScopeKernel<M>` — a typed wrapper around a live `PolydatKernel`, with a
-  structured name, source context, named-child registry, pull consumers, and
+- `ScopeKernel<M>` — a typed wrapper around a live `Box<dyn Kernel>` on any
+  of the four engines (the interpreter, the closure tier, native, and pure
+  native), with a structured name, source context, named-child registry, pull consumers, and
   write-through bindings;
 - `SubcontextBuilder<P>` — an accumulator that owns an `Arc` to the parent and
   records imports, exports, body fragments, consumers, diagnostics, and compile
@@ -221,11 +222,14 @@ the call consumes the module and returns the new `ScopeKernel<Child<P>>`, or a
 1. It locks the parent registry and rejects an existing `ChildName`, reporting
    the prior and current `SourceContext` values.
 2. It records the child name.
-3. It creates a kernel for the closed child program and binds it under the
-   parent. The child is a separate kernel that owns its outputs and their
-   storage ([Runtime Model](runtime_model.md) R4). Shared cells visible at the
-   parent attach to matching child slots and remain available for transitive
-   descendant wiring.
+3. It creates a kernel for the closed child program on the parent's engine
+   and binds it under the parent (`ScopeModule::instantiate_under`, through
+   `kernel::bind_under`). The child is a separate kernel that owns its
+   outputs and their storage ([Runtime Model](runtime_model.md) R4). Shared
+   cells visible at the parent attach to matching child slots and remain
+   available for transitive descendant wiring. A binding failure releases
+   the child's name and returns `ContractViolation::Bind`, which holds the
+   `KernelError`.
 4. It transfers context, consumer registrations, and write-through bindings to
    the new `ScopeKernel<Child<P>>`.
 
@@ -301,12 +305,27 @@ parent live
 Direct compilation (`compile_polydat_with`) creates a root kernel on any of
 the four engines (the interpreter, the closure tier, native, and pure
 native), but it does not create a typed child relationship. The second
-sanctioned construction path is `PolydatKernel::build_subscope(PolydatMatter)`.
-Its argument is matter built by `PolydatMatter::builder()` from exactly one
-of source, pre-parsed statements, or a compiled program. Source and statement
-matter go through a transient typed parent (`wrap_root_kernel`) and this
-protocol's `finalize`; program matter is bound directly with its iteration
-bindings. There is no free-function construction path.
+sanctioned construction path is `PolydatMatter::build_under(&dyn Kernel)`,
+which `PolydatKernel::build_subscope` and `Construction::subscope` call; it
+returns the child as a `Box<dyn Kernel>`. Its matter is built by
+`PolydatMatter::builder()` from exactly one of source, pre-parsed
+statements, or a compiled program, and the kind of matter decides the
+child's engine:
+
+- **Source and statement matter build on the parent's engine.** The matter
+  goes through a builder over a view of the parent (`ParentView`) and this
+  protocol's `finalize`, and the module is instantiated on the engine the
+  parent runs on. A child written as source under a pure native parent is a
+  pure native kernel.
+- **Program matter keeps the engine it was compiled for.** A program given
+  through `PolydatMatterBuilder::program(Arc<dyn KernelProgram>)` is already
+  compiled for one engine, and the child runs on that engine. The binder
+  wires it under a parent of any engine (`kernel::bind_under`), with its
+  iteration bindings written first.
+
+A binding failure on this path returns `ContractViolation::Bind`. There is
+no free-function construction path besides `kernel::bind_under`, which
+takes a program and creates the child itself.
 
 ---
 
@@ -321,12 +340,15 @@ The active construction errors are:
 | `DuplicateChild` | The parent registry already contains the child name. |
 | `Compile` | Parsing, rewriting, type checking, or write-through structural validation fails. |
 | `StrictNonePropagation` | Strict intermediate-scope materialization would silently fall through after a `const` binding produced `None`. |
+| `Bind` | Binding the child under its parent failed; it holds the `KernelError`. |
 
-A `const` binding whose expression fails when the child is initialized fails
-the construction. `kernel::bind_under` returns it as
-`KernelError::ConstInit`, naming the const; the interpreter's own spawn path
-(`materialize_wiring_from_outer`) has no error return, so it panics with the
-same message.
+Binding fails when a value copied from the parent is refused by the child's
+input (`KernelError::Write(WriteError::FromParent { .. })`,
+[input_variance.md](input_variance.md) §7) or when a `const` binding's
+expression fails as the child is initialized (`KernelError::ConstInit`,
+naming the const). `kernel::bind_under` returns the `KernelError`, and
+`spawn`, `build_under`, `build_subscope`, and `Construction::subscope`
+return it as `ContractViolation::Bind`.
 
 `SourceContext` accompanies construction diagnostics so failures identify their
 logical scope and, when supplied, source file and line range.
@@ -383,7 +405,7 @@ is transferred to it:
   ([Scope Model](scope_model.md) §4) — shared cells and transit cells
   attached, computed parent outputs attached as broadcast cells, the child
   initialized so its `const` bindings are evaluated from the bound values,
-  scope coordinates threaded. The child is an interpreter kernel.
+  scope coordinates threaded. The child runs on the parent's engine.
 - **Traversal activation** is for the language's own `for`: the body is
   compiled with the parent, and `TraversalStream::activation_on` creates one
   kernel per tuple on the engine the host asks for, binding the
@@ -399,13 +421,10 @@ contract between them. Polydat compiles the module matter and binds the named
 child. The host releases a replaceable iteration child, through
 `release_child`.
 
-The subcontext path through `spawn` produces an interpreter child and
-transfers cells, while the traversal path runs on all four engines (the
-interpreter, the closure tier, native, and pure native) and transfers values.
-The design direction is that both call one binder expressed over the `Kernel`
-trait (`shared_cells`, `attach_shared_cell`, `input_value`, `pull`,
-`set_input`), so that a host-composed child can run on any of the four
-engines and a traversal body can share a cell rather than a snapshot. The
-surface a host needs around that binder to run a whole scope tree on a
-compiled engine, the per-cycle operations in particular, is specified in
-[native_scope_trees.md](native_scope_trees.md).
+Both paths run on all four engines (the interpreter, the closure tier,
+native, and pure native) and are expressed over the `Kernel` trait. The
+subcontext path through `spawn` transfers cells, and the traversal path
+transfers values: a traversal body sees a snapshot of the cascaded wires
+taken when the traversal opens. The surface a host needs around the binder
+to run a whole scope tree on a compiled engine, the per-cycle operations in
+particular, is specified in [native_scope_trees.md](native_scope_trees.md).

@@ -1,7 +1,7 @@
 ---
 type: specification
 title: Evaluation Model
-timestamp: 2026-09-25
+timestamp: 2026-09-27
 description: The program/state split, provenance-based invalidation, the two evaluation lifecycles, the const binding contract, input spaces, and external-write inputs.
 tags: [runtime, compiler]
 ---
@@ -167,7 +167,7 @@ two:
 
 | Lifecycle | When evaluated | Re-evaluated when… |
 |-----------|----------------|---------------------|
-| **effectively-const** | Once for the life of a kernel. Two implementation paths: (a) **compile-fold**, for a node with no input in its provenance and for a `const` whose right-hand side is a literal, which is evaluated during the build and replaced with a leaf const node; (b) **initialization**, for every other `const`, which is evaluated when the kernel is initialized, after the binder has written the enclosing scope's values, and held in the kernel's const slot. The author writes `const NAME := <expr>` in both cases. | Never within a kernel's life, except by `Kernel::init`. A new activation (the enclosing comprehension advancing to its next iteration, [comprehension_forms.md](comprehension_forms.md) §9.5, or the next `for` tuple) is a new kernel, which is initialized; compile-folded leaves are the same in every kernel. |
+| **effectively-const** | Once for the life of a kernel. Two implementation paths: (a) **compile-fold**, for a node, or a `const`, whose cone reads no input and no nondeterministic node, which is evaluated during the build and replaced with a leaf const node; (b) **initialization**, for every other `const`, which is evaluated when the kernel is initialized, after the binder has written the enclosing scope's values, and held in the kernel's const slot. The author writes `const NAME := <expr>` in both cases. | Never within a kernel's life, except by `Kernel::init`. A new activation (the enclosing comprehension advancing to its next iteration, [comprehension_forms.md](comprehension_forms.md) §9.5, or the next `for` tuple) is a new kernel, which is initialized; compile-folded leaves are the same in every kernel. |
 | **dynamic** | Once per pull, on demand at execution time | Whenever a transitively dependent input changes (provenance-based invalidation). Includes per-cycle pulls *and* intra-stanza recomputation when external-write inputs or `do_while`/`do_until` counters tick. A volatile node is dynamic and runs again at every read (see Non-Deterministic Nodes). |
 
 The `const` modifier is the only author-facing way to declare an
@@ -261,13 +261,20 @@ the kernel is handed to its user.
 ```
 For each ConstInit c in the kernel's const_inits(), in order
 (a const after the consts it reads):
+  0. If c.register is set and the register's cell has been
+     written (its revision is not 0), skip c.
   1. Pull c.source (the output __init_<name>). The standard pull
      evaluates the const's expression against the bound inputs.
   2. If the value is None and c.fallback names an input, take
      that input's value instead (the conditional shadow).
-  3. Write the value to c.slot (__const_<name>) through
-     init_input_at, and pull c.name so its output is current.
+  3. Write the value to c.slot (__const_<name>, or the register's
+     own input) through init_input_at.
 ```
+
+Initialization pulls only each record's source. The const's own
+output is a passthrough of its slot, so it is current as soon as
+the slot is written, and `get_constant` and `folded_value` on a
+captured const read the slot.
 
 Every later read of the binding, from any cycle, returns that
 one value, and the binding's expression does not run again. A
@@ -291,10 +298,20 @@ native, and pure native).
 
 ### Compilation of a const
 
-A const whose right-hand side is a literal (a number, a string,
-`true` or `false`, a negated or cast literal, or a list of
-literals) folds at build and needs no initialization. Every
-other const is compiled as a program transform:
+The assembler decides how each const is compiled in its resolve
+step (`PolydatAssembler::resolve`), before any engine sees the
+graph, so the decision is the same on all four engines. It applies
+to every output marked `const`: one written `const` in source, and
+one a host or a lowering marks through
+`PolydatAssembler::mark_const_output`. The decision reads the
+const's cone, the nodes and inputs its value is computed from.
+
+A const whose cone reads no input and no nondeterministic node has
+a value known at build. It stays in the graph and folds at build
+with the other compile-constant nodes, and needs no
+initialization. This covers literals and also expressions over
+them, such as `const width := u64_mul(4, 8)`. Every other const is
+captured at initialization, through a program transform:
 
 - its expression becomes the output `__init_<name>`;
 - its value lives in the input slot `__const_<name>`, of kind
@@ -302,19 +319,43 @@ other const is compiled as a program transform:
 - `<name>` is a passthrough of that slot, so every reader of the
   const reads the captured value, and a step that reads it is
   scope-init in the lifecycle classification;
-- a `ConstInit { name, slot, source, fallback }` record lists the
-  const in the program's `const_inits()`, in dependency order: a
-  const comes after every const it reads, directly or through
-  plain bindings.
+- a const whose expression reads an input, and which has no input
+  of its own name, gets one: the fallback input of the conditional
+  shadow, which the binder fills with the enclosing scope's value;
+- a `ConstInit` record lists the const in the program's
+  `const_inits()`, in dependency order: a const comes after every
+  const it reads, directly or through plain bindings.
+
+A `ConstInit` record carries `name` (the const, and the output
+that reads it), `slot`, `source` (`__init_<name>`), `fallback` (the
+fallback input, when there is one), and `register` (set for a
+`shared` register's computed starting value, described below). It
+also carries the resolved indices of the slot, the source, and the
+fallback, which are crate-private, so a host reads records but
+cannot construct one.
+
+For example, in
+
+```text
+extern base: u64 = 20
+const width := u64_mul(4, 8)
+const limit := u64_add(base, width)
+```
+
+`width` folds to `32` at build. `limit` reads the extern `base`, so
+it is captured: `__init_limit` computes `u64_add(base, width)`, the
+slot `__const_limit` holds `52` after initialization, and a later
+write of `base` leaves `limit` at `52` until `Kernel::init` runs
+again.
 
 The compiler refuses two shapes, on all four engines:
 
 - A const that reads a coordinate, directly or through plain
   bindings, fails the build with `const '<name>' reads the
-  coordinate '<coord>': a const is evaluated once when the kernel
-  is initialized, and a coordinate advances every cycle.` A
-  coordinate changes every cycle, so no single value represents
-  it.
+  coordinate '<coord>': it is evaluated once when the kernel is
+  initialized, and a coordinate advances every cycle. Read an
+  extern or a const instead.` A coordinate changes every cycle, so
+  no single value represents it.
 - Consts that read each other in a cycle fail the build, since
   none can be evaluated first.
 
@@ -356,6 +397,33 @@ semantics for `const`"). Strict mode
 ([composition_substrate.md](composition_substrate.md) L2.f)
 detects such a silent fall-through by reading `__init_<name>`,
 the const's own value before the fallback.
+
+### Shared registers and their starting value
+
+A `shared` binding is a register that every scope attached to it
+reads and writes ([scope_model.md](scope_model.md) §6), so it
+cannot also be a const. `shared const x := …`, with the modifiers
+in either order, is a parse error:
+a value fixed for the kernel's life cannot also be a register
+that other scopes write.
+
+`shared x := <expr>` accepts any expression as the register's
+starting value. A literal is the slot's default. Any other
+expression compiles to the output `__init_x` and a `ConstInit`
+record with `register` set, whose `slot` is the register's own
+input `x`. The declaring kernel's initialization evaluates it once,
+in dependency order with the consts, and writes it through the
+register only while the register's cell is unwritten (its revision
+is 0). A child attached to the register, a register attached from
+a host with `attach_shared_cell`, and a second `Kernel::init`
+therefore never seed it again. A starting value that reads a
+coordinate is refused at build, for the reason a const that reads
+one is.
+
+```text
+extern base: u64 = 20
+shared total := u64_add(base, base)   // 40, written once at init
+```
 
 ---
 

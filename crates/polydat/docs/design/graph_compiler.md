@@ -1,7 +1,7 @@
 ---
 type: specification
 title: The Graph Compiler
-timestamp: 2026-09-25
+timestamp: 2026-09-27
 description: "The compiler pipeline and its ordering: wire resolution, adapter insertion, node fusion, hoisting, context fusion, and the H, CF, and NF axioms."
 tags: [compiler]
 ---
@@ -113,6 +113,7 @@ is run.
 | Parse | `polydat_grammar::lexer` / `parser` (re-exported as `dsl::lexer`, `dsl::parser`) | Source to AST. |
 | Prologue | `dsl::compile` (`Prepared`) | One prologue for every entry point: the compile options, the required outputs, the pragmas, the data-file base directory. |
 | Bind | `dsl::compile::assemble_parent` | One lowering for every entry point: bindings become assembler nodes; every referenced name not defined locally becomes an input slot (the conditional-shadow rule of [none_semantics.md](none_semantics.md)); tiles are typed. `for` statements are lifted out first and their bodies compiled as traversals. |
+| Const capture | `compile::assembly::resolve_with_log` (`capture_consts`), first | Every output marked `const`, whether written in source or marked through `PolydatAssembler::mark_const_output`, is classified by its cone. A const whose cone reads no input and no nondeterministic node stays in the graph and folds at build. Any other const is rewritten into a capture: its expression becomes the output `__init_<name>`, its value the `InputKind::Const` slot `__const_<name>`, and a `ConstInit` record orders it for `Kernel::init` ([evaluation_model.md](evaluation_model.md), "Const Binding Contract"). A `shared` register's computed starting value gets a `ConstInit` record here too. A capture that reads a coordinate, or consts that read each other in a cycle, fail the build. The pass runs once, before every other resolve step, so the result is the same on all four engines. |
 | Wire resolution + adapter insertion | `compile::assembly::resolve_with_log` | Arity is checked. Each wire's producer type is compared with the consumer's declared input type; a mismatch is either healed through `auto_adapter` (the adapter node is inserted and `TypeAdapterInserted` logged) or fails as `AssemblyError::TypeMismatch`. Strict mode refuses the implicit conversion instead. |
 | Strict-wire assertions | same pass | Under `strict_values`, an `AssertValue` node is inserted in front of every constrained sink port whose source is not already proven (`AssertionInserted` / `AssertionSkipped`). |
 | Node Fusion | same pass, `compile::fusion::apply_fusions` | `fusion::default_rules` (every rule the linked node crates register, in priority order) applied to a fixpoint; `FusionApplied` logged. |
@@ -122,7 +123,7 @@ is run.
 | → `ResolvedDag` | | The engine-neutral product: nodes in topological order, wiring, input definitions, output map. |
 | Hoisting | `PolydatProgram::classify_lifecycle` | Classifies every node as compile-constant, scope-init, or dynamic (§3); run by the engine build. |
 | Engine build | `PolydatAssembler::compile_with(Engine)` | Interpreter: native cone extraction, then the fold (`fold_init_constants_impl`). Closure tier: the closure plan (`build_p2_layout`). Native: the hybrid kernel's segments. Pure native (with the `jit` feature): one native kernel over the whole program (`JitKernelRaw` or `JitKernelPushPull`). The strict refusals (`refuse_strict`) and the compile-constant fold run on all four engines, and `ConstantFolded` is logged on all four. |
-| Context Fusion | `materialize_subscope` | Slot synthesis at scope-init (§4). |
+| Context Fusion | `kernel::bind_under` | Slot synthesis at scope-init, on the child's engine under a parent of any engine (§4). |
 
 ### 2.1 What the pipeline produces
 
@@ -395,11 +396,17 @@ applies.
 
 ### 4.2 The synthesis act
 
-Under S2, parent-gated construction is `materialize_subscope`.
-It creates the child kernel from the shared program, writes the
-iteration bindings into their slots, and runs the private
-`materialize_wiring_from_outer` pass against `outer`. That pass
-performs these steps in order:
+Under S2, parent-gated construction is the binder
+`kernel::bind_under(parent, program, iter_bindings)`. It creates
+the child kernel uninitialized from the shared program, on that
+program's engine, writes the iteration bindings into their
+slots, and runs the crate-private wiring pass against `outer`
+(the parent). Both sides of the pass are `dyn Kernel`, so a
+child of any of the four engines binds under a parent of any of
+them. Every public child-construction path reaches it:
+`PolydatMatter::build_under`, `Construction::subscope`,
+`ScopeKernel::spawn`, and `ScopeModule::instantiate_under`. The
+pass performs these steps in order:
 
 1. **Cell cascade.** Every cell visible at `outer` (the cells
    on its own input slots and its transit cells) is attached to
@@ -422,9 +429,10 @@ performs these steps in order:
    - *the registered extern resolver*
      (`dsl::factories::register_extern_resolver`) when the
      outer chain has no binding at all.
-   Every copied value passes through `adapt_boundary_value`,
-   the boundary adapter catalog of
-   [type_system.md](type_system.md) §6.2.
+   A coordinate is never copied. Every copied value is written
+   under the host-write rule, and a value the child's input
+   refuses fails binding (§4.4 and
+   [input_variance.md](input_variance.md) §7).
 3. **Initialization.** The child kernel is initialized
    (`Kernel::init`): every `const` is evaluated once, in
    dependency order, against the filled slots, and a const whose
@@ -456,9 +464,10 @@ four engines (interpreter, closure tier, native, and pure
 native): a value copy is `set_input`, a shared-binding input
 cell is attached with `attach_shared_cell`, and compile
 constants are folded at build. Broadcast output cells exist on
-three engines (interpreter, closure tier, and native); a
-pure-native kernel publishes none (`output_cell_for` returns
-no cell). A traversal's activation copies the parent's values
+all four engines: a kernel makes an output's cell on the first
+ask and publishes through it on every later pull of that
+output, so a computed output is cell-attached under a parent of
+any engine. A traversal's activation copies the parent's values
 into the body's kernel on whichever of the four engines runs it
 ([for_traversal.md](for_traversal.md)).
 
@@ -471,7 +480,7 @@ synthesis surface, and Context Fusion fills every slot before
 scope-init evaluation begins. No slot is filled lazily or on
 first read; every declared slot is filled at scope-init.**
 
-Enforcement: `materialize_wiring_from_outer` matches every cell
+Enforcement: the binder's wiring pass (§4.2) matches every cell
 and every outer output against `input_defs`. Parent-gated
 construction ([subcontext_construction.md](subcontext_construction.md))
 is the only path that materialises a child, so no other
@@ -550,13 +559,17 @@ A child that mentions all four gets them as follows:
 This is the value-copy, cell, and transit classification of
 CF3, applied to the parent's binding kinds. T1 and T2
 (type-checked slots) are enforced as each input is filled. A
-value copy whose type differs from the input's declared
-`PortType` is converted through the boundary adapter catalog
-(T2) and then written under the same rule as a host write
-([evaluation_model.md](evaluation_model.md)). A value the catalog
-cannot convert to the declared type is refused, and binding fails
-with `KernelError::Write`, naming the input, the value's type, the
-declared type, and that the value came from the parent.
+value copy into an input whose type was inferred is converted
+through the boundary adapter catalog (T2); a copy into a
+declared input is taken as it is. Either is then written under
+the same rule as a host write
+([evaluation_model.md](evaluation_model.md)). A value the input
+refuses fails binding with
+`KernelError::Write(WriteError::FromParent { slot, expected, got })`,
+which names the input, the type the child declares, and the
+type of the parent's value
+([input_variance.md](input_variance.md) §7). Coordinates are
+never copied.
 
 ---
 
@@ -718,7 +731,7 @@ substrate's T1 and T2 hold across the inserted adapter.
                                 │
                                 ▼
                   ┌──────────────────────────────┐
-                  │   Context Fusion (§4)        │   materialize_subscope:
+                  │   Context Fusion (§4)        │   kernel::bind_under:
                   │   - cell cascade             │   cells, value copies,
                   │   - value copy / cell attach │   resolver, const pull,
                   │   - const pull               │   scope coordinates
