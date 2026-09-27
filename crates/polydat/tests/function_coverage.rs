@@ -61,7 +61,7 @@ impl DiffKernel {
             let fv = forced.pull_ref(name).clone();
             assert!(
                 value_bits_eq(&v, &fv),
-                "SRD-105 differential: jit=force diverged from the \
+                "engine differential (engines.md §7): jit=force diverged from the \
                  interpreter for '{name}': off={v:?} force={fv:?}"
             );
         }

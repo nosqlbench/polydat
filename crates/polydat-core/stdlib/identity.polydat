@@ -55,8 +55,8 @@ shuffled_id(input: u64, size: u64) -> (value: u64) := {
 // Use for: multiple independent unique key spaces from the same
 // cycle counter. Each stream gives a different permutation.
 //
-// STATUS: Stub — falls back to hash+mod (not bijective) until the
-// native cycle_walk node is implemented per SRD 25.
+// STATUS: Stub — this module computes hash+mod, which is not
+// bijective. The native `cycle_walk` node is the bijective form.
 euler_circuit(position: u64, range: u64, seed: u64, stream: u64) -> (value: u64) := {
     value := mod(hash(interleave(position, seed)), range)
 }

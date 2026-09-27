@@ -536,7 +536,7 @@ impl Compiler {
                                 source.to_text(),
                                 source.span.line,
                                 source.span.col,
-                                "the `for` construct is parsed but not compiled yet (SRD 113 step 2); see docs/design/for_traversal.md"
+                                "a `for` producer compiles only as the whole value of a binding (for_traversal.md §4)"
                             ));
                         }
                         Expr::BinOp(..) | Expr::UnaryBitNot(..) | Expr::Cast(..) => {
@@ -1074,7 +1074,7 @@ impl Compiler {
                     source.to_text(),
                     source.span.line,
                     source.span.col,
-                    "the `for` construct is parsed but not compiled yet (SRD 113 step 2); see docs/design/for_traversal.md"
+                    "a `for` producer compiles only as the whole value of a binding (for_traversal.md §4)"
                 ));
             }
             Expr::Cast(inner, target, _) => {
@@ -1106,7 +1106,7 @@ impl Compiler {
                              ambiguous. Choose explicitly: `f64_to_u64(x)` \
                              (truncate), `round_to_u64(x)`, `floor_to_u64(x)`, \
                              or `ceil_to_u64(x)`. `as` performs only widening / \
-                             alignment fusion (SRD-84 Part 1b)."
+                             alignment fusion (polydat_grammar.md §10)."
                                 .to_string());
                         }
                         // Every other alignment-only fusion is the same
@@ -1117,7 +1117,7 @@ impl Compiler {
                             None => {
                                 return Err(format!(
                                     "`as {t:?}`: no type-fusion from {f:?} to {t:?} is \
-                                 defined (SRD-84 Part 1b)"
+                                 defined (polydat_grammar.md §10)"
                                 ));
                             }
                         },

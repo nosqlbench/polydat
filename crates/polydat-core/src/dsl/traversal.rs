@@ -390,8 +390,8 @@ fn parse_order(
     crate::iteration::comprehension::spec::parse_order(spec)
 }
 
-/// Type each element name of a comprehension from its source, per SRD
-/// 113 §3.3. `probe` types a generator call expression the way the
+/// Type each element name of a comprehension from its source, per
+/// for_traversal.md §3.3. `probe` types a generator call expression the way the
 /// enclosing compiler would.
 pub fn element_types(
     comprehension: &Comprehension,

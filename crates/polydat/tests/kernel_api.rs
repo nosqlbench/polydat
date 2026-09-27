@@ -184,14 +184,13 @@ fn a_program_is_shared_across_threads_on_every_engine() {
 
 /// An extern cleared after the build reads `None`, not a panic.
 ///
-/// The `None` rule has one predicate now, shared by the interpreter's
+/// The `None` rule has one predicate, shared by the interpreter's
 /// cone planner and the hybrid's segment batcher: fused code answers a
 /// `None` on a boundary input with `None` on all of its outputs, and a
 /// node that would have consumed the `None` and kept going may join
 /// only when every input comes from inside, where none can arrive. The
-/// hybrid used to panic here instead, because its batcher decided from
-/// a build-time snapshot of which externs were unset and a host can
-/// clear one afterwards (F-E7).
+/// batcher does not decide from a build-time snapshot of which externs
+/// are unset, because a host can clear one after the build.
 ///
 /// The pure tier is the exception and says so: it is native code with
 /// no closure to propagate a `None` through, so it refuses at the pull
@@ -525,11 +524,9 @@ fn interpreter_only_double(
 }
 
 /// The closure tier's builders report why they could not build, rather
-/// than handing back a kernel. The `try_compile_*` family used to
-/// answer an assembly failure with an empty `PolydatKernel` — no nodes,
-/// no inputs, no outputs — which every caller then treated as a
-/// fallback that had merely declined to compile. A kernel that computes
-/// nothing is worse than an error, so both failures are now a
+/// than handing back an empty `PolydatKernel` that a caller would treat
+/// as a fallback that merely declined to compile. A kernel that
+/// computes nothing is worse than an error, so both failures are a
 /// `KernelError` that says which one happened.
 #[test]
 fn the_closure_builders_report_failure_instead_of_an_empty_kernel() {
@@ -616,9 +613,9 @@ fn a_caller_that_names_no_engine_gets_the_most_compiled_form() {
 /// A kernel reports the configuration it runs, so a configuration the
 /// factory cannot realize is refused rather than quietly replaced by a
 /// neighbouring one. Native code has no push-only kernel: push-side
-/// invalidation without the cone guard has no native form. Asking for
-/// it used to build the push-pull kernel, which then reported
-/// `Native(PushPull)` to a caller that asked for `Native(Push)`.
+/// invalidation without the cone guard has no native form, so asking
+/// for `Native(Push)` is refused rather than answered with a push-pull
+/// kernel that reports `Native(PushPull)`.
 #[test]
 fn a_config_that_cannot_be_realized_is_refused() {
     let src = "input cycle: u64\ny := hash(cycle)\n";
@@ -961,7 +958,7 @@ fn every_engine_reports_its_plan() {
 
 #[test]
 fn the_index_keyed_calls_agree_with_the_named_ones_on_every_engine() {
-    // SRD 117 step 3: a host that binds the same inputs and reads the
+    // runtime_model.md §6: a host that binds the same inputs and reads the
     // same outputs every cycle resolves the names once.
     for engine in [
         Engine::Interpreter(JitMode::Auto),

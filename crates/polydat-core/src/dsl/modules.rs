@@ -407,7 +407,7 @@ impl Compiler {
                         "`for {}` inside module '{}': {}",
                         f.source.to_text(),
                         func_name,
-                        "the `for` construct is parsed but not compiled yet (SRD 113 step 2); see docs/design/for_traversal.md"
+                        "a `for` traversal statement does not compile inside a module body (for_traversal.md §4)"
                     ));
                 }
                 Statement::Tile(t) => {

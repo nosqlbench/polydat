@@ -363,7 +363,7 @@ impl<P> SubcontextBuilder<P> {
             if result_lhs.iter().any(|n| n == forbidden) {
                 return Err(ContractViolation::Compile(format!(
                     "result-bindings: '{forbidden}' is a runtime-injected wire and \
-                     cannot be reassigned in `result:`. SRD-66 Surface 1 §Schema."
+                     cannot be reassigned in `result:` (subcontext_construction.md §3.2)."
                 )));
             }
         }

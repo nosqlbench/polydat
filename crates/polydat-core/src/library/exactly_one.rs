@@ -231,7 +231,8 @@ fn unwrap_unary_json(j: &serde_json::Value) -> Value {
         }
         J::Null => panic!("exactly_one_value: leaf cell is null; expected a non-null value"),
         // Nested structural leaf — the body has more than two
-        // levels of nesting. Not a unary shape per the SRD; the
+        // levels of nesting. That is not a unary shape
+        // (library_catalog.md `exactly_one_value`); the
         // diagnostic names what was found.
         J::Array(_) | J::Object(_) => panic!(
             "exactly_one_value: leaf cell is itself structural ({}); \

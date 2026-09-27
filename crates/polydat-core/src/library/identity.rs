@@ -54,8 +54,7 @@ impl PolydatNode for PortPassthrough {
 
     /// A passthrough copies its slots, on every color but `Ref2`, whose
     /// pairs may not be forwarded by an identity-style step (axiom S3).
-    /// Byte-string handles copy like scalars: a handle is a name (SRD
-    /// 115 H1). A `Ref2` output returns `None` here; the builders copy
+    /// A `Ref2` output returns `None` here; the builders copy
     /// it into the step's own scratch through `assembly::ref_copy_kit`
     /// (axiom S3).
     fn compiled_u64(&self) -> Option<crate::ast::CompiledU64Op> {

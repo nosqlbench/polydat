@@ -227,7 +227,7 @@ impl I32Dataset {
 // Dataset handle — typed enum wrapping all per-facet dataset shapes
 // =================================================================
 //
-// Per SRD 53 §"Dataset Handles": `dataset_open(source, facet)` is
+// Per type_system.md §1.8: `dataset_open(source, facet)` is
 // the resolver node; per-cycle accessors take a handle wire and
 // downcast to the concrete variant they expect. A single Value
 // variant `Value::Handle(Arc<dyn Any>)` carries any of the
@@ -511,8 +511,7 @@ fn ivvec32_vec_typed(h: &DatasetHandle, index: usize) -> crate::ast::SliceArc<i3
 }
 
 /// Build a [`SliceArc<T>`] from any uniform-stride dataset at
-/// `index`. Single generic helper consolidating what used to be
-/// per-element-type slice-arc constructors — element type is
+/// `index`. One generic helper serves every element type — element type is
 /// erased by the upstream `VectorReader<T>` trait, and `SliceArc`
 /// is element-type-generic, so one body suffices for `f32`,
 /// `i32`, and any other element type the trait supports.
@@ -1033,8 +1032,8 @@ fn profile_facets(
 }
 
 /// Partition a dataset's vector space by its **profiles matching a
-/// pattern**, treated as cumulative size tiers (an SRD-71 partition
-/// source). One partition per masked profile, in canonical
+/// pattern**, treated as cumulative size tiers (a partition source,
+/// cursor_partitions.md §7.1). One partition per masked profile, in canonical
 /// (base-count-ascending) order: partition `k` spans
 /// `[prev_masked_base_count, this_masked_base_count)` — exactly the
 /// vectors added at that tier — so a sweep's "load only the increment
@@ -1195,9 +1194,9 @@ fn matching_profile_name_at(
 /// fails with that facet's own error.
 #[crate::polydat_node(category = RealData)]
 fn dataset_prebuffer(source: &str) -> Option<Arc<dyn std::any::Any + Send + Sync>> {
-    // The init-binding contract (SRD 11) means this runs exactly
-    // once per scope activation: Plan B pulls the binding on the
-    // activation kernel and the host propagates the result to every
+    // The const binding contract (evaluation_model.md §"Const
+    // Binding Contract") means this runs exactly once per scope
+    // activation: the activation kernel pulls the binding and the host propagates the result to every
     // fiber. PREBUFFER_CACHE is belt-and-suspenders: it serializes
     // anyone who reaches here by another path, so a per-source
     // thundering herd is structurally impossible whatever the caller
@@ -1504,7 +1503,7 @@ fn predicate_count_of(handle: Facet<MetadataPredicatesFacet>, value: i64) -> u64
 }
 
 // =========================================================================
-// Cursor-sugar handlers (SRD 18 §"Source-driven workloads")
+// Cursor-sugar handlers
 // =========================================================================
 //
 // Three sugar forms recognized by this module — none of them
@@ -1612,9 +1611,10 @@ fn vectordata_sugar(
         projection: None,
     };
 
-    // Cursor sugar emits the call with the new (handle, index) order.
-    // The combined source string auto-promotes to the right facet
-    // handle via the binding compiler's call-site sugar (SRD 53).
+    // Cursor sugar emits the call in (handle, index) order. The
+    // combined source string auto-promotes to the right facet handle
+    // through the wire's default resolver (library_catalog.md
+    // "Shapes", `Resolved<R, T>`).
     let vector_binding = AuxBinding {
         name: format!("{source_name}__vector"),
         value: Expr::Call(CallExpr {

@@ -3,10 +3,10 @@
 
 //! Extension values on every engine. A host type that implements
 //! `ReflectedValue` rides a wire as `Value::Ext`; nodes take and return
-//! it through `Ext<T>`. Such a node has a slot kit (SRD 115 §5) that
+//! it through `Ext<T>`. Such a node has a slot kit (compiled_handles.md §5) that
 //! reads the value through its pair and writes its own into the step's
 //! scratch, which the closure tier runs as a step and native code calls
-//! in place (SRD 115 §6).
+//! in place (compiled_handles.md §6).
 
 use polydat::ast::{ReflectedValue, Value};
 use polydat::derive_support::Ext;
@@ -686,11 +686,9 @@ fn a_vector_rides_a_polymorphic_node_on_every_engine() {
 /// Every port type has a consistent slot form — checked over the type
 /// list itself, not over the types whoever wrote the test remembered.
 ///
-/// The value↔slot writers were extended three times by finding a type
-/// they had missed at run time: the by-reference singles, then the
-/// numeric vectors, then the 128-bit words. Each was found by a program
-/// that happened to use one, which is the wrong way to learn it. Two
-/// things now make that structural rather than lucky:
+/// A value↔slot writer that misses a type fails only when a program
+/// happens to use that type. Two things make coverage structural
+/// instead:
 ///
 /// - `write_poly` dispatches on [`SlotColor`], of which there are three
 ///   and the match is exhaustive, so a new type cannot fall through to
@@ -702,9 +700,9 @@ fn a_vector_rides_a_polymorphic_node_on_every_engine() {
 ///
 /// What this asserts is the invariant those two rest on: a scratch
 /// entry exists for exactly the by-reference colour, and the slot width
-/// follows the colour. A new `Ref2` type with no scratch element would
-/// reach `write_poly`'s `Ref2` arm with no entry to fill — that is the
-/// next version of the same bug, and it fails here instead.
+/// follows the colour. A `Ref2` type with no scratch element would
+/// reach `write_poly`'s `Ref2` arm with no entry to fill, and this test
+/// fails for it first.
 #[test]
 fn every_port_type_has_a_consistent_slot_form() {
     use polydat::ast::{PortType, SlotColor, SlotShape};

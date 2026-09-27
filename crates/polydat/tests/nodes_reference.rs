@@ -2,16 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The node catalog in `docs/reference/nodes.md`, generated from the
-//! registry (F-N12).
+//! registry.
 //!
-//! The catalog used to be written by hand, and a hand-written listing
-//! of a library that grows by attribute is wrong the week after it is
-//! written. It was: it gave `hash.rs` one node where the file has
-//! seven and `convert.rs` eleven where it has thirty-one, omitted
-//! fourteen files outright, and documented names that are not nodes
-//! and nodes that are not polydat's.
-//!
-//! So the listing is generated the way the engine matrix beside it
+//! A hand-written listing of a library that grows by attribute is
+//! wrong the week after it is written, so the listing is generated the way the engine matrix beside it
 //! is: the test renders the section and fails when the file does not
 //! match, and `NODES_REFERENCE=overwrite` writes it.
 //!
@@ -238,8 +232,8 @@ fn every_registered_node_has_a_closure_form() {
 
 /// Every parameter's example is a value a program can pass: `cycle`
 /// for a wire, and for a constant either nothing or a literal of its
-/// slot's kind that its own declared constraint accepts. The examples
-/// used to be the parameters' names, which no program can pass.
+/// slot's kind that its own declared constraint accepts. A parameter's
+/// name is not an example, because no program can pass it.
 #[test]
 fn every_parameter_example_is_a_passable_value() {
     use polydat::ast::SlotType;
