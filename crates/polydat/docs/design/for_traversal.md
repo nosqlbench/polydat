@@ -1,7 +1,7 @@
 ---
 type: specification
 title: The for Construct
-timestamp: 2026-09-25
+timestamp: 2026-09-27
 description: "Comprehension producers and traversal scopes in the grammar: typing, compilation, one program per lexical position, affine activation, and cursor narrowing."
 tags: [iteration, language, scopes]
 ---
@@ -464,8 +464,41 @@ naming the const. The body's program is a template: it is compiled without
 initialization, and each activation bound from it is initialized. It does not read or
 write the kernel that opened it except through the cells it attaches.
 
-**Opening cost.** Opening a traversal evaluates its comprehension. Ranges
-and literal lists evaluate directly. A generator-call source such as
+**Opening cost.** Opening a traversal evaluates every source of its
+comprehension, so every source error surfaces at open, but it holds the
+tuples by position rather than as a list (`runtime::evaluate_indexed`).
+Each activation computes its own tuple from its position, so `len`,
+`seek`, and `activation(i)` cost the same at any index. A node with a
+closed form over its operands holds only those operands; a node without
+one holds its tuples. The table gives, for each shape, the work done at
+open, the memory held after open, and the work each activation does to
+compute its tuple. In it, `n` is the order's truncation, `dim` the
+number of lattice axes, and the index space the product of the input's
+axis sizes.
+
+| Shape | Open | Held | Per activation |
+|---|---|---|---|
+| clause over an integer range | O(1) | its bounds | O(1) |
+| clause over a literal list or generator | the source's evaluation | its values | O(1) |
+| independent cartesian | each axis evaluated once | its axes | O(axes) |
+| dependent cartesian (a source references an earlier axis) | the full product | its tuples | O(1) |
+| zip (any mode) and union | its operands | its operands | O(operands) |
+| filter | a scan of its input | the survivors | O(1) |
+| order `halton/n`, `sobol/n`, `shuffle/n` | O(n) | n positions | the input's per-activation cost |
+| order `lhs/n` | O(n · dim) | n positions | the same |
+| order `diagonal/n`, `antidiagonal/n` | O(n) walk of the diagonals | n positions | the same |
+| order `extrema/k` | ranking of the whole index space | the positions of the first k strata | the same |
+| order `shells/n` | ranking of the whole index space | the first n positions | the same |
+| order `lex/n`, `reverse_lex/n` | O(1) | its bounds | the same |
+| order over a continuous or hybrid space | n samples | the n sampled tuples | O(1) |
+
+Extrema and Shells hold the whole index space only while they rank it;
+the order then keeps the selected positions. A cycle zip with an empty
+operand has no tuples ([Comprehension Forms](comprehension_forms.md)
+§3.3), including an operand that is empty only once evaluated, such as
+a filter that keeps nothing.
+
+Ranges and literal lists evaluate directly. A generator-call source such as
 `partitions("*/4", {total})` evaluates through the constant-expression
 path, which compiles a one-binding program for the expression text. That
 path is cached by text, so the same source text compiles once per

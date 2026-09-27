@@ -1,7 +1,7 @@
 ---
 type: specification
 title: Comprehension Forms
-timestamp: 2026-09-25
+timestamp: 2026-09-27
 description: "The comprehension algebra: constructors, closure and validity axioms, boundedness, algebraic equivalences, the operator IR, and dispense semantics."
 tags: [iteration, language]
 ---
@@ -357,12 +357,41 @@ longest.
 - Children must have **disjoint name sets** (same as cartesian).
 - Children must be **bounded** under `Strict` and `Truncate`
   (cardinality must be known to compute the diagonal endpoint).
-  `Cycle` permits one unbounded child with the others bounded;
-  cardinality is the unbounded child's cardinality.
+  `Cycle` permits children whose count is unknown; its
+  cardinality is then `Unbounded`, and the operand plan below
+  says how each such child is held.
+
+**Empty operands.** Every tuple of a zip binds every name of every
+child, so an empty child leaves no value to bind. Under `Truncate`
+the shortest length is 0 and the zip is empty. Under `Strict` an
+empty child is a length mismatch unless every child is empty, in
+which case the zip is empty. Under `Cycle` an empty child empties
+the whole zip, because an empty child has no value to cycle: the
+zip `zip_cycle(1..10, [])` has no tuples, not nine tuples that
+omit the second name. The rule holds on every path, the traversal,
+the streaming surfaces, and the metadata cardinality (`Bounded(0)`),
+and it covers a child that is empty only once it is evaluated, such
+as a filter that keeps nothing.
+
+**Cycle operand plan.** A cycle zip re-emits a shorter child's
+earlier tuples once that child runs out, and how it does so depends
+on each child's metadata (§10.7). A child with an index function
+(an **indexed** operand) is read at `i mod |child|` and holds
+nothing. Of the remaining children, one **streams**: the first
+whose count is unknown, or, when every count is known, the one with
+the largest bound. The streamed child is pulled once per tuple and
+rewound when it runs out before the zip does. Every other child is
+**buffered**: drained once and replayed. The zip's working set is
+the sum of the buffered children's bounds; it is unbounded if a
+buffered child has no bound, and zero (the zip streams) if no child
+is buffered. In `zip_cycle(1.., 1..1000, [a, b, c])` the range and
+the list are indexed, the unknown-count `1..` streams, and nothing
+is buffered.
 
 **Tuple shape:** disjoint union of children's tuple shapes.
 **Cardinality:** `min`, `min`, or `max` of children's
-cardinalities respectively per mode.
+cardinalities respectively per mode, and 0 under every mode when a
+child is empty.
 
 ### 3.4 `union(c1, c2, ..., cN)` — concatenation combinator
 
@@ -452,22 +481,22 @@ behavior over discrete vs. Continuous inputs. The validator
 strategy's requirement; V8 additionally requires Continuous
 inputs to be wrapped in a strategy that supports them.
 
-**Strategy invocation surface.** A strategy is applied through a
-single entry point, `apply(&self, input: &EvaluatedInput,
-truncation: Option<u64>) -> Vec<Tuple>`. It takes the evaluated
-input and an optional cap on the number of tuples, and returns the
-input's tuples in the strategy's order, cut to the cap when one is
-given. The
-`EvaluatedInput { tuples: Vec<Tuple>, cardinality: u64,
-index_fn: IndexFn }` holds the input's tuples, cardinality,
-and `IndexFn` (each source's own `EvaluatedSource` is §10.7.6).
-There is no split between "metadata-bearing" and
-"metadata-naive" apply paths: the strategy reads the
-`IndexFn` from the evaluated input and routes accordingly.
-Because the shape is *always* known by the time `apply` runs, V4
-is enforceable at strategy-invocation time however the source was
-authored (literal, range, context-free generator, or
-workload-param).
+**Strategy invocation surface.** A strategy is invoked through
+`Strategy::select(index_fn, cardinality, truncation, seed) ->
+Selection`. It reads only the input's shape, its `IndexFn` and
+tuple count, and returns the positions it emits, in emission order,
+cut to the truncation. A `Selection` is a prefix `0..n`, a reversal
+held as its bounds, or a list of chosen positions, so a caller that
+can compute the tuple at a position computes only the selected
+ones. `apply(input, truncation)` is that selection looked up against
+an `EvaluatedInput { tuples, cardinality, index_fn }` that already
+holds its tuples (each source's own `EvaluatedSource` is §10.7.6).
+A zip and a union are one axis for every strategy: the strategy
+selects positions `0..|input|` of the zip's or union's own
+enumeration. Because the shape is *always* known by the time
+`select` runs, V4 is enforceable at strategy-invocation time
+however the source was authored (literal, range, context-free
+generator, or workload-param).
 
 | Strategy | Input requirement | Discrete behavior | Continuous behavior |
 |---|---|---|---|
@@ -862,7 +891,7 @@ Each constructor's cardinality is a function of its inputs:
 | `cartesian(c1, ..., cN)` | When **independent** (no cross-references between clause sources): discrete × discrete = product (Unbounded if any Unbounded); all-Continuous = `Continuous { intervals: [...K-D...], measure: Product([...]) }`; mixed discrete + Continuous = `Hybrid { discrete_axes, continuous_axes, measure }`. When **dependent** (any clause source references a prior clause's variable): cardinality is a dependent sum `Σ_{outer} |C_inner(outer)|` rather than a product. The independence pass (§3.2) determines which rule applies. |
 | `zip(c1, ..., cN, Strict)` | common cardinality (load-error if mismatch). All children must be discrete; continuous or mixed-class children rejected by V7. |
 | `zip(c1, ..., cN, Truncate)` | `min` of children's cardinalities. All children must be discrete (V7). |
-| `zip(c1, ..., cN, Cycle)` | `max` of children's cardinalities (Unbounded if any are). All children must be discrete (V7). |
+| `zip(c1, ..., cN, Cycle)` | `max` of children's cardinalities (Unbounded if any are); `Bounded(0)` when any child is empty (§3.3). All children must be discrete (V7). |
 | `union(c1, ..., cN)` | sum for discrete (Unbounded if any Unbounded). Continuous or mixed-class children rejected by V9. |
 | `filter(c, _)` | discrete in → `BoundedAtMost`/`Unbounded` (existing rules); `Continuous` in → `ContinuousAtMost` with measure ≤ input measure; `Hybrid` in → `Hybrid` with reduced measure on the continuous axes and the same discrete-axis shape (filter cannot grow the space, only shrink the realized subset) |
 | `order(c, _, None)` | `c.cardinality` (continuous stays continuous, unsampled) |
@@ -899,7 +928,7 @@ materialization barriers documented below.
 | `clause` | O(1) above source's per-tuple state | Source is a stream producer (§3.1); one Value in flight per active position |
 | `cartesian` | O(N) for an N-child node | One position cursor per child; one tuple in flight at the output |
 | `zip` (Strict/Truncate) | O(N) for an N-child node | Lockstep walk; one tuple per child in flight |
-| `zip` (Cycle) | O(N) + O(cycled-child's cardinality) per child that's not the longest | Cycling re-emits earlier values; the shorter children must replay, so they hold their own buffered values. The longest child still streams. |
+| `zip` (Cycle) | O(N) + the sum of the buffered children's bounds | Cycling re-emits earlier values. Per the operand plan (§3.3), an indexed child is read at position `i` modulo its length and holds nothing, one child streams and is rewound, and only the buffered children hold their tuples. |
 | `union` | O(active child's footprint) | One child active at a time; previous children released before next starts |
 | `filter` | O(child's footprint) + O(1) per-tuple | Stream the child; evaluate predicate per tuple; emit or drop |
 | `order` with `Lex` (un-truncated) | O(child's footprint) | Lex IS the enumeration order; identity I5 applies; no buffering |
@@ -930,9 +959,11 @@ the full upstream:
 
 1. **`order` with any non-`Lex` strategy** — the strategy reads
    a working set, applies its permutation, then emits.
-2. **`zip(Cycle)` for the shorter children** — cycling requires
-   replaying earlier values; the shorter children buffer their
-   own cardinality.
+2. **`zip(Cycle)` with buffered children** — cycling requires
+   replaying earlier values. Under the operand plan (§3.3) an
+   indexed child replays by position and the streamed child by
+   rewinding, so only a buffered child holds its tuples. A cycle
+   zip with no buffered child is not a barrier.
 
 The barrier's working-set size is **not necessarily the full
 input cardinality**. It is the smallest set the strategy needs
@@ -945,12 +976,15 @@ to produce correct output:
   compiles the halton sequence to direct index selection over the
   cartesian lattice. Naïve unfused compilation has barrier of size
   `|c|`.
-- `order(c, extrema/k)` — barrier of size `|c|`: `/k` selects
-  the first k strata of the lattice index space in closed form, but
-  the strategy still holds its materialized input (§15.1); a lazy
-  index lookup would reduce it to the selected strata.
-- `zip(Cycle)` shorter children — barrier of size = each
-  shorter child's cardinality.
+- `order(c, extrema/k)` and `order(c, shells/n)` — barrier of
+  size `|c|`: both rank every multi-index of the input's index
+  space before keeping the first k strata or the first n
+  positions, so the working set is the whole index space while
+  the selection is built. Afterwards the order holds only the
+  selected positions.
+- `zip(Cycle)` — barrier of size = the sum of the buffered
+  children's bounds; unbounded if a buffered child has no bound,
+  and no barrier if no child is buffered.
 
 Push-down (§10) is the mechanism that keeps these working
 sets small. Naïve compilation produces correct output but at
@@ -1281,10 +1315,13 @@ ZIP(N, mode)
     Replace the top-N stream operands with their lockstep
     diagonal. Under Strict and Truncate the operator pulls one
     tuple from each child per output pull; per-pull cost O(N),
-    steady-state memory O(N). Under Cycle the operator buffers
-    each non-longest child's full output once and replays from
-    the buffer thereafter; buffer size per child equals that
-    child's cardinality.
+    steady-state memory O(N). Under Cycle the op carries the
+    operand plan (§3.3): an indexed child is read at
+    `i mod |child|`, the streamed child is pulled once per tuple
+    and rewound when it runs out first, and each buffered child
+    is drained once and replayed. It is a barrier only when some
+    child is buffered, and its working set is the buffered
+    children's bounds summed. An empty child empties the zip.
 
 UNION(N)
     Replace the top-N stream operands with a stream that
@@ -1372,7 +1409,7 @@ the dispensed-tuple count for streaming nodes**:
 memory(C) ≤
     O(depth(C))                                 // operator stack
   + Σ (per-operator steady-state, see §6.2)     // O(1) for streaming ops
-  + Σ (zip(Cycle) shorter-child cardinality)    // barrier 1
+  + Σ (zip(Cycle) buffered-operand bounds)      // barrier 1
   + Σ (ORDER_MATERIALIZE working-set size)      // barrier 2
 ```
 
@@ -1385,14 +1422,15 @@ source size, and both are explicit in the AST.
 
 The barrier working-set sizes are:
 
-- `zip(Cycle)` shorter child: that child's full cardinality
-  (it must replay).
+- `zip(Cycle)`: each buffered child's bound (§3.3); indexed and
+  streamed children contribute nothing.
 - `ORDER_MATERIALIZE` without push-down: input cardinality
   (the strategy needs to inspect everything).
 - `ORDER_MATERIALIZE` with push-down (§10): the strategy-
   specific minimum — for halton/n over a cartesian, O(n); for
-  extrema/k, the selected strata; for shuffle/n with cartesian input,
-  O(n) index draws.
+  shuffle/n with cartesian input, O(n) index draws; for
+  extrema/k and shells/n, the input's index space, which they rank
+  while selecting (§6.3).
 
 There are NO hidden buffering, copy, or fan-out terms. Every
 opcode either streams (O(operator-local state) per pull) or
@@ -1514,9 +1552,10 @@ one produces.
 
 The `for` construct's traversal surface, `TraversalStream`
 ([The `for` Construct](for_traversal.md) §3.6), is a third form
-built on the same evaluation: opening a traversal evaluates the
-whole tuple set through `runtime::evaluate_for_iteration` in the
-body's scope, and each `Activation` is a kernel of its own over the
+built on the same evaluation: opening a traversal evaluates every
+source through `runtime::evaluate_indexed` in the body's scope and
+holds the tuples by position, and each `Activation` computes its
+tuple from its position and is a kernel of its own over the
 body's program with one tuple bound. An activation runs on any of the
 four engines (the interpreter, the closure tier, native, and pure
 native); pure native, as for any program, refuses a body containing a
@@ -1598,11 +1637,16 @@ Separating the surfaces lets:
 Eleven invariants the implementation keeps, each a consequence of the
 sections above:
 
-- **Stream-first execution.** Clause sources are stream producers. A
-  clause is not normalized to `Vec<Value>` as its semantic
-  representation. Materialization occurs only at an IR operation
-  whose metadata declares a barrier, such as a non-streaming order
-  strategy (§6.3, §9.1).
+- **Stream-first execution.** On the streaming surfaces (§9.5) clause
+  sources are stream producers, and materialization occurs only at
+  an IR operation whose metadata declares a barrier: a non-`Lex`
+  order or a cycle zip with a buffered child (§6.3, §9.1). A `for`
+  traversal holds its tuples by position (`runtime::evaluate_indexed`):
+  opening evaluates every source, and each activation computes its
+  own tuple from its position. On that path only a filter, a
+  dependent cartesian, and an order that samples a continuous space
+  hold their tuples, because none of them has a closed form over
+  its operands (for_traversal.md §5.2).
 - **Dependent Cartesian product.** Cartesian evaluation is a dependent
   product: each downstream source is evaluated in the environment
   formed by the tuple prefix already selected, and reduces to the
@@ -1869,9 +1913,9 @@ push-down rules:
   combine the two per axis. Working set: O(n · N).
 - **Extrema** (k strata): for discrete `Lattice`, enumerate the
   lattice index space stratified by interior count, corners first
-  (§3.6), and emit the first k complete strata in closed form.
-  Working set: the selected strata, independent of input
-  cardinality.
+  (§3.6), and emit the first k complete strata. Working set:
+  the lattice index space, which the strategy ranks by stratum;
+  the selection it keeps is the chosen strata.
   For Continuous, the corners are the 2^N tuples formed from
   each axis's interval endpoints (with appropriate open/closed
   treatment); same selection logic.
@@ -1884,11 +1928,22 @@ push-down rules:
   continuous space is ill-defined without a discretization
   parameter, so Continuous inputs are V4-rejected. Emit
   tuples whose index falls on each shell in turn (per the
-  strategy's shell partition). Working set: O(N) per
-  emitted tuple plus a small per-shell counter.
+  strategy's shell partition). Working set: the lattice index
+  space, which the strategy buckets by shell; the selection it
+  keeps is the first n positions.
 
 For strategies in this list, R2 collapses `ORDER_MATERIALIZE`
 to a strategy-aware streaming source. The barrier disappears.
+
+R2 is executed on both paths. On the streaming surfaces
+`ORDER_MATERIALIZE` over an addressable input holds only the
+strategy's `Selection` and computes each selected tuple from its
+position as it is emitted; over any other input it buffers the
+input first. On the traversal path (`runtime::evaluate_indexed`) an
+order holds its operand and the selected positions, and each
+activation computes its tuple. Extrema and Shells rank the input's
+whole index space while they select, so their working set is that
+index space, not the selection (§6.3).
 
 **R3 — `order(filter(c, p), lex, None)` → `filter(order(c, lex,
 None), p)`** by N2: when un-truncated, filter and Lex order
@@ -1948,9 +2003,11 @@ The optimizer recognizes:
 
 So R2 generalizes to zip-with-Cycle: emit 100 Halton draws over
 `0..1_000_000`, look each draw up against the zip's index
-function. Working set: 100 indices + 3 buffered `limit` values (for
-the zip's shorter-child barrier from §6.3). Per-pull cost: one
-Halton draw + two modulo operations.
+function. Working set: 100 positions. Both children are indexed
+under the operand plan (§3.3): the range is read at `i` and the
+`limit` list at `i mod 3`, so the zip buffers nothing and is not a
+barrier. Per-pull cost: one position lookup and two modulo
+operations.
 
 Because the optimizer runs before compilation, `zip · order(halton)`
 samples 100 tuples from a very large cycle without holding the
@@ -2266,9 +2323,9 @@ construction, not in a guard predicate.
 
 `zip(c1, ..., cN, mode)` (children must all be discrete per V7):
 - cardinality: per §6.1
-- index_addressable: `Some(Lockstep { length: |c| })` for Strict/Truncate when every child is addressable; `Some(Modular { axis_sizes })` for Cycle when at least one child is bounded; else `None`
+- index_addressable: `Some(Lockstep { length: |c| })` for Strict/Truncate and `Some(Modular { axis_sizes })` for Cycle, when every child is addressable and bounded; else `None`
 - natural_order: `Lockstep`
-- materialization: `Streaming` for Strict/Truncate; `BoundedBarrier { working_set_size: Σ non-longest child cardinalities }` for Cycle
+- materialization: `Streaming` for Strict/Truncate. For Cycle, from the operand plan (§3.3, `metadata::cycle_operands`): `Streaming` when no child is buffered, `BoundedBarrier { working_set_size: Σ buffered bounds }` when every buffered child has a bound, and `UnboundedBarrier` when one does not
 
 `union(c1, ..., cN)` (children must all be discrete per V9):
 - cardinality: sum per §6.1
@@ -2295,7 +2352,7 @@ construction, not in a guard predicate.
 - cardinality: per §6.1 — note that `order(Continuous, sampling-strategy, Some(n))` produces `Bounded(n)` (V8's discharge mechanism: sampling materializes a continuous measure into n discrete points)
 - index_addressable: **`None`** at the AST level. R2 (§10.2) rewrites this node into an `indexed_order` IR opcode that *is* index-addressable through the strategy's draw function, but the AST-level metadata stops here. If a parent operator chains over this output, it sees `None` and falls back to streaming consumption.
 - natural_order: `Strategy(strategy_name)`
-- materialization: `BoundedBarrier { working_set_size: strategy.working_set_for(c.index_addressable, t) }` per §6.3's strategy-specific sizing. For Continuous input + sampling strategy + `Some(n)`, the working set is O(n) — the n drawn sample points, not the (uncountable) input measure.
+- materialization: over an addressable input, `BoundedBarrier { working_set_size: strategy.working_set_for(c.index_addressable, t) }` per §6.3's strategy-specific sizing: `n` for Halton, Sobol, Shuffle, ReverseLex, Diagonal, and Antidiagonal; `n · dim` for Lhs; the whole index space for Extrema and Shells, which rank it while selecting. For Continuous input + sampling strategy + `Some(n)`, the working set is O(n) — the n drawn sample points, not the (uncountable) input measure. Over an input with no `IndexFn` the order buffers its input: `BoundedBarrier { working_set_size: |c| }` when `c` has a bound, else `UnboundedBarrier`.
 
 #### 10.7.3 Closure property
 
@@ -2465,19 +2522,21 @@ binds its names, exactly as §10.7.0 describes.
 
 #### 10.7.8 Strategy invocation contract
 
-Strategies (§3.6) implement one apply method:
+Strategies (§3.6) implement one selection method:
 
 ```text
-struct EvaluatedInput {
-  tuples: Vec<Tuple>,      // the input's tuples, in source order
-  cardinality: u64,        // tuples.len()
-  index_fn: IndexFn,       // the addressing scheme the input satisfies
+enum Selection {
+  Prefix(u64),                       // positions 0..n
+  Reverse { total: u64, len: u64 },  // total-1, total-2, ..., len of them
+  Positions(Vec<u64>),               // the chosen positions, in order
 }
 
 trait Strategy {
   fn name(&self) -> StrategyName;
   fn accepts_input(&self, idx: Option<&IndexFn>) -> bool;   // V4
   fn has_closed_form_for(&self, idx: &IndexFn) -> bool;     // R2 eligibility
+  fn select(&self, index_fn: &IndexFn, cardinality: u64,
+            truncation: Option<u64>, seed: Option<u64>) -> Selection;
   fn apply(&self, input: &EvaluatedInput, truncation: Option<u64>) -> Vec<Tuple>;
 }
 ```
@@ -2486,12 +2545,14 @@ trait Strategy {
 whether the strategy accepts an input with the given addressing
 scheme (the V4 check). `has_closed_form_for` reports whether the
 strategy can select tuples directly from that addressing scheme
-(R2 eligibility). `apply` takes the evaluated input and an optional
-truncation and returns the reordered, possibly truncated, tuples;
-it reads `input.index_fn` and `input.tuples` to compute its
-permutation. There is one `apply` method: whether the strategy has
-lattice metadata to work with is determined by inspecting the
-`EvaluatedSource` it receives.
+(R2 eligibility). `select` takes the input's shape, an optional
+truncation, and the authored seed, and returns the positions the
+strategy emits; it reads no tuple, and it is deterministic in its
+arguments. `apply` is that selection looked up against an
+`EvaluatedInput { tuples, cardinality, index_fn }` that holds its
+tuples. An input with no `IndexFn` is selected as one axis of its
+observed length, and a zip or a union is one axis of its own
+enumeration for every strategy.
 
 **§V4 enforcement timing.** V4 ("non-`Lex` strategies require
 the input's `IndexFn` to be non-`None`") fires at
@@ -3221,12 +3282,12 @@ AST: `zip([clause(tick, {tick_stream}), clause(color, [red, green, blue])], Cycl
 
 - Cardinality: `Unbounded` (tick_stream is unbounded;
   color repeats indefinitely).
-- Footprint: O(3) for the colors buffer (cycling requires re-
-  emit); O(1) for the unbounded `tick` stream's per-tuple
-  state.
+- Footprint: O(1). The colours list is indexed under the operand
+  plan (§3.3) and read at `i mod 3`, and the `tick` stream, whose
+  count is unknown, is the streamed child. Nothing is buffered,
+  so the zip is not a barrier.
 - Validity: V6 satisfied — no materializing order applied to
-  this; zip Cycle accepts one unbounded child. Whether the
-  runtime evaluator streams that child is open (§15.1).
+  this; zip Cycle accepts a child of unknown count.
 
 ### 11.9 Derived streamers from one base
 
@@ -3454,7 +3515,7 @@ This specification guarantees the following properties:
    §6.2's footprint table and §9.3's resource bound together
    guarantee that the only memory above per-operator constants
    is at named barriers (non-Lex `order`, `zip(Cycle)`'s
-   shorter children). The optimizer's push-down rules shrink
+   buffered children). The optimizer's push-down rules shrink
    those barriers further; nothing inflates them.
 
 ---
@@ -3481,9 +3542,11 @@ This specification guarantees the following properties:
   the immutable stack program.
 - `polydat_core::iteration::comprehension::surfaces` implements the
   static algebra consumers (§9.5), while
-  `polydat_core::iteration::comprehension::runtime::evaluate_for_iteration`
+  `polydat_core::iteration::comprehension::runtime::evaluate_indexed`
   performs scope-dependent tuple evaluation against a `Lookup` view
-  of the scope. `strategies`, `predicate`, `eval`, `eval_source`,
+  of the scope, holding the tuples by position;
+  `evaluate_for_iteration` is the same evaluation with every tuple
+  computed. `strategies`, `predicate`, `eval`, `eval_source`,
   `source_values`, and `streamer_value` are likewise
   `polydat_core::iteration::comprehension` modules.
 - Strategy selection uses the closed `StrategyName` enum. There
@@ -3599,47 +3662,32 @@ with an error naming it (§9.5.2), never dispensed empty.
 
 ### 15.1 Stream-first evaluation on the traversal path
 
-**The contract.** The first of §9.6's invariants is
-stream-first execution: a clause source is a stream producer, and
-materialization happens only at an operation whose metadata declares a
-barrier. §3.3 and §11.8 depend on it (`Cycle` streams its longest,
-possibly unbounded, child while buffering the others), as do §6.2's
-cost table and §10.2's R2 (a closed-form strategy selects tuples by
-index without materializing its input).
+**Resolved.** The traversal path addresses tuples by position, and
+this section records the rule that holds there.
 
-**The implementation.** The IR interpreter behind the consumption surfaces
-(§9.5) is stream-first for cartesian, union, filter, and `Lex` order.
-The runtime evaluator that `for` traversals and tile projections use
-(`runtime::evaluate_for_iteration`) is not: every node evaluates to a
-vector, so every clause, filter, and zip is a barrier there. In both
-executors `Cycle` drains every child before emitting, and a strategy
-drains its whole input before `apply`, R2's index lookup included. No
-source the algebra can express is infinite, so in this implementation
-"unbounded" means a count unknown at compile time.
-
-**What decides it.** The traversal surface is random access by contract
+The traversal surface is random access by contract
 (for_traversal.md §7: `len`, `seek`, `activation(index)`, fibers
-partitioned by index), so on that path opening a traversal is itself a
-barrier, and a stream-first evaluator would still collect every tuple
-at the end. Stream-first evaluation reduces memory there only together
-with R2's lazy index lookup, which lets `order halton/n` over a large
-product materialize n tuples instead of the product. An infinite
-`Cycle` child can never be the source of a traversal; it can occur
-only on the streaming surfaces.
+partitioned by index), so a traversal cannot consume its tuples as a
+one-pass stream. Instead, opening a traversal evaluates every source,
+so every source error surfaces at open, and holds the comprehension's
+tuples by position (`runtime::evaluate_indexed`). Each activation
+computes its own tuple from its position, so `order halton/n` over a
+large product holds the product's axes and n positions rather than
+the product. The per-shape costs are for_traversal.md §5.2's growth
+table.
 
-**Costs of stream-first evaluation:** error timing moves from open to pull on
-the streaming surfaces, which need a fallible item; `on_empty` fires per
-prefix on first pull instead of once at open; `Cycle` must choose its
-streaming child by cardinality class and fall back to measuring when no
-child is unbounded; two stream-first executors must be kept tuple-for-
-tuple equivalent; boxed iterator composition can slow the small
-comprehensions that are most common; the evaluator becomes harder to
-read.
+Stream-first execution in the one-pass sense holds on the streaming
+surfaces (§9.5), where the IR interpreter pulls each operand and
+materializes only at a declared barrier (§9.6). A cycle zip on either
+path holds its children by the operand plan (§3.3), and an order on
+either path executes R2 by selecting positions (§10.2). No source the
+algebra can express is infinite, so "unbounded" means a count unknown
+at compile time, and such a child is evaluated at open when it is the
+source of a traversal.
 
-**Decision pending.** Either implement stream-first evaluation and R2's
-lazy lookup together, with the equivalence harness as the oracle
-and a measured cost at open, or narrow the invariant to the IR
-interpreter and restate §3.3, §6.2, §10.2, and §11.8 for an evaluator
-that materializes at every node. Until the decision is made, the
-sections above remain the specification, and the implementation
-behaves as this section describes.
+The reference evaluator, `runtime::evaluate_for_iteration_materialized`,
+materializes every node. The equivalence harness
+(`polydat/tests/indexed_equivalence.rs`) is the oracle for the
+position-addressed evaluator: over every comprehension shape the two
+yield the same tuples in the same order, fail with the same error,
+and report the same clause yields.
