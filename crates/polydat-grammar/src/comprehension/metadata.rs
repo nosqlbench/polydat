@@ -441,6 +441,10 @@ fn union_metadata(children: &[Comprehension]) -> Metadata {
 fn filter_metadata(child: &Comprehension) -> Metadata {
     let child_meta = child.metadata();
     let cardinality = match &child_meta.cardinality {
+        // Filtering nothing keeps exactly nothing.
+        CardinalityClass::Bounded(0) | CardinalityClass::BoundedAtMost(0) => {
+            CardinalityClass::Bounded(0)
+        }
         CardinalityClass::Bounded(n) | CardinalityClass::BoundedAtMost(n) => {
             CardinalityClass::BoundedAtMost(*n)
         }
@@ -469,26 +473,7 @@ fn order_metadata(
     truncation: Option<u64>,
 ) -> Metadata {
     let child_meta = child.metadata();
-    let cardinality = match (&child_meta.cardinality, truncation) {
-        // Continuous + sampling + Some(n) → Bounded(n) (V8 discharge).
-        (CardinalityClass::Continuous { .. }, Some(n))
-        | (CardinalityClass::ContinuousAtMost { .. }, Some(n))
-        | (CardinalityClass::Hybrid(_), Some(n))
-            if !matches!(strategy, StrategyName::Lex) =>
-        {
-            CardinalityClass::Bounded(n)
-        }
-        // Discrete + truncation: min of (child, n).
-        (CardinalityClass::Bounded(child_n), Some(n)) => {
-            CardinalityClass::Bounded((*child_n).min(n))
-        }
-        (CardinalityClass::BoundedAtMost(child_n), Some(n)) => {
-            CardinalityClass::BoundedAtMost((*child_n).min(n))
-        }
-        (_, Some(n)) => CardinalityClass::Bounded(n), // unbounded + Some(n) → Bounded(n)
-        // No truncation: inherit child's cardinality.
-        (c, None) => c.clone(),
-    };
+    let cardinality = order_cardinality(child, &child_meta.cardinality, strategy, truncation);
 
     let (index_addressable, natural_order, materialization) = match strategy {
         StrategyName::Lex => (
@@ -534,35 +519,22 @@ fn order_metadata(
 fn combine_cartesian_cardinality(children: &[Metadata]) -> CardinalityClass {
     let mut has_continuous = false;
     let mut has_discrete = false;
-    let mut has_unbounded = false;
-    let mut product: u64 = 1;
-    let mut overflow = false;
+    let mut counts: Vec<Count> = Vec::new();
     let mut discrete_axes: Vec<u64> = Vec::new();
     let mut continuous_intervals: Vec<Interval> = Vec::new();
     let mut continuous_measures: Vec<ProductMeasure> = Vec::new();
 
     for m in children {
         match &m.cardinality {
-            CardinalityClass::Bounded(n) => {
+            CardinalityClass::Bounded(n) | CardinalityClass::BoundedAtMost(n) => {
                 has_discrete = true;
-                discrete_axes.push(*n);
-                product = product.checked_mul(*n).unwrap_or_else(|| {
-                    overflow = true;
-                    u64::MAX
-                });
-            }
-            CardinalityClass::BoundedAtMost(n) => {
-                has_discrete = true;
-                discrete_axes.push(*n); // upper bound
-                product = product.checked_mul(*n).unwrap_or_else(|| {
-                    overflow = true;
-                    u64::MAX
-                });
+                discrete_axes.push(*n); // the count, or its upper bound
+                counts.extend(Count::of(&m.cardinality));
             }
             CardinalityClass::Unbounded => {
-                has_unbounded = true;
                 has_discrete = true;
                 discrete_axes.push(0);
+                counts.push(Count::Unknown);
             }
             CardinalityClass::Continuous { intervals, measure }
             | CardinalityClass::ContinuousAtMost {
@@ -583,8 +555,6 @@ fn combine_cartesian_cardinality(children: &[Metadata]) -> CardinalityClass {
         }
     }
 
-    let _ = overflow; // discard; saturating product is the policy
-
     if has_continuous && has_discrete {
         CardinalityClass::Hybrid(Hybrid {
             discrete_axes,
@@ -596,10 +566,8 @@ fn combine_cartesian_cardinality(children: &[Metadata]) -> CardinalityClass {
             intervals: continuous_intervals,
             measure: simplify_measures(continuous_measures),
         }
-    } else if has_unbounded {
-        CardinalityClass::Unbounded
     } else {
-        CardinalityClass::Bounded(product)
+        cartesian_count(&counts).class()
     }
 }
 
@@ -668,56 +636,221 @@ fn combine_cartesian_index_fn(children: &[Metadata]) -> Option<IndexFn> {
 }
 
 fn combine_zip_cardinality(children: &[Metadata], mode: ZipMode) -> CardinalityClass {
-    // V7 should have rejected mixed-class / continuous; here we
-    // assume discrete children.
-    let counts: Vec<Option<u64>> = children
+    // A continuous child is a V7 failure; its count is unknown here.
+    let counts: Vec<Count> = children
         .iter()
-        .map(|m| match &m.cardinality {
-            CardinalityClass::Bounded(n) | CardinalityClass::BoundedAtMost(n) => Some(*n),
-            CardinalityClass::Unbounded => None,
-            // Continuous / Hybrid here would be a V7 failure
-            // that slipped through; treat as Unbounded for
-            // metadata purposes.
-            _ => None,
-        })
+        .map(|m| Count::of(&m.cardinality).unwrap_or(Count::Unknown))
         .collect();
-
     match mode {
-        ZipMode::Strict => {
-            // V7 should have caught mismatch. Use any bounded child's count.
-            counts
-                .iter()
-                .find_map(|c| *c)
-                .map(CardinalityClass::Bounded)
-                .unwrap_or(CardinalityClass::Unbounded)
-        }
-        ZipMode::Truncate => {
-            let bounded: Vec<u64> = counts.iter().filter_map(|c| *c).collect();
-            if bounded.is_empty() {
-                CardinalityClass::Unbounded
-            } else {
-                CardinalityClass::Bounded(*bounded.iter().min().unwrap())
+        ZipMode::Strict => strict_zip_count(&counts),
+        ZipMode::Truncate => truncate_zip_count(&counts),
+        ZipMode::Cycle => cycle_zip_count(&counts),
+    }
+    .class()
+}
+
+// ---- tuple counts ----
+
+/// A discrete tuple count as metadata knows it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Count {
+    /// Exactly this many.
+    Exact(u64),
+    /// Between zero and this many.
+    AtMost(u64),
+    /// No known bound.
+    Unknown,
+}
+
+impl Count {
+    /// The count a discrete class states, `None` for a continuous one.
+    /// At most zero is exactly zero.
+    fn of(class: &CardinalityClass) -> Option<Self> {
+        Some(match class {
+            CardinalityClass::Bounded(n) | CardinalityClass::BoundedAtMost(n @ 0) => {
+                Count::Exact(*n)
             }
+            CardinalityClass::BoundedAtMost(n) => Count::AtMost(*n),
+            CardinalityClass::Unbounded => Count::Unknown,
+            _ => return None,
+        })
+    }
+
+    fn bound(self) -> Option<u64> {
+        match self {
+            Count::Exact(n) | Count::AtMost(n) => Some(n),
+            Count::Unknown => None,
         }
-        // An operand known empty empties the zip. Otherwise an operand
-        // whose count is an upper bound may be empty at open, so the
-        // zip's count is an upper bound too.
-        ZipMode::Cycle => {
-            if children.iter().any(known_empty) {
-                CardinalityClass::Bounded(0)
-            } else if counts.iter().any(Option::is_none) {
-                CardinalityClass::Unbounded
-            } else {
-                let max = counts.iter().filter_map(|c| *c).max().unwrap_or(0);
-                if children
-                    .iter()
-                    .any(|m| matches!(m.cardinality, CardinalityClass::BoundedAtMost(_)))
-                {
-                    CardinalityClass::BoundedAtMost(max)
-                } else {
-                    CardinalityClass::Bounded(max)
-                }
+    }
+
+    /// `n` exactly when every count it was combined from is exact, at
+    /// most `n` otherwise.
+    fn combined(n: u64, counts: &[Count]) -> Self {
+        if counts.iter().all(|c| matches!(c, Count::Exact(_))) {
+            Count::Exact(n)
+        } else {
+            Count::AtMost(n)
+        }
+    }
+
+    fn class(self) -> CardinalityClass {
+        match self {
+            Count::Exact(n) | Count::AtMost(n @ 0) => CardinalityClass::Bounded(n),
+            Count::AtMost(n) => CardinalityClass::BoundedAtMost(n),
+            Count::Unknown => CardinalityClass::Unbounded,
+        }
+    }
+}
+
+/// A cartesian's count: exactly zero when an operand is exactly empty,
+/// whatever the others; unknown when an operand's count is; otherwise
+/// the product of the operands' counts, exact when every one is.
+fn cartesian_count(counts: &[Count]) -> Count {
+    if counts.contains(&Count::Exact(0)) {
+        return Count::Exact(0);
+    }
+    let Some(bounds) = counts.iter().map(|c| c.bound()).collect::<Option<Vec<_>>>() else {
+        return Count::Unknown;
+    };
+    Count::combined(bounds.into_iter().fold(1, u64::saturating_mul), counts)
+}
+
+/// A truncating zip's count: the shortest operand's. Exactly zero when
+/// an operand is exactly empty; exact when every operand is; otherwise
+/// at most the least bound, since an operand at most `m` or of unknown
+/// count may end at any length before `m`. Unknown only when no operand
+/// has a bound.
+fn truncate_zip_count(counts: &[Count]) -> Count {
+    if counts.contains(&Count::Exact(0)) {
+        return Count::Exact(0);
+    }
+    match counts.iter().filter_map(|c| c.bound()).min() {
+        Some(m) => Count::combined(m, counts),
+        None => Count::Unknown,
+    }
+}
+
+/// A strict zip's count when it yields: every operand's, so an exact
+/// operand's count exactly; otherwise at most the least bound. Operands
+/// that end apart fail the zip instead.
+fn strict_zip_count(counts: &[Count]) -> Count {
+    if let Some(exact) = counts.iter().find(|c| matches!(c, Count::Exact(_))) {
+        return *exact;
+    }
+    match counts.iter().filter_map(|c| c.bound()).min() {
+        Some(m) => Count::AtMost(m),
+        None => Count::Unknown,
+    }
+}
+
+/// A cycle zip's count ([`cycle_length`]): exactly zero when an operand
+/// is exactly empty; unknown when an operand's count is; otherwise the
+/// longest operand's, exact when every operand is exact, and at most
+/// that when one is at most, since it may be empty at open.
+fn cycle_zip_count(counts: &[Count]) -> Count {
+    if counts.contains(&Count::Exact(0)) {
+        return Count::Exact(0);
+    }
+    let Some(bounds) = counts.iter().map(|c| c.bound()).collect::<Option<Vec<_>>>() else {
+        return Count::Unknown;
+    };
+    Count::combined(bounds.into_iter().max().unwrap_or(0), counts)
+}
+
+/// A union's count: the sum of its operands', exact when every one is,
+/// unknown when one is.
+fn union_count(counts: &[Count]) -> Count {
+    let Some(bounds) = counts.iter().map(|c| c.bound()).collect::<Option<Vec<_>>>() else {
+        return Count::Unknown;
+    };
+    Count::combined(bounds.into_iter().fold(0, u64::saturating_add), counts)
+}
+
+/// An order's count. `Lex` and the strategies that truncate by tuple
+/// count (`reverse_lex`, `diagonal`, `antidiagonal`, `halton`, `sobol`,
+/// `lhs`, `shuffle`) keep `min(count, n)` of a discrete input; `extrema`
+/// and `shells` truncate by whole strata or shells, so they keep at
+/// most the input's count. Over a continuous space a sampling strategy
+/// draws `n` points, exactly `n` unless a filter in the space or a
+/// discrete axis of inexact count may leave fewer; `extrema` takes
+/// the strata of the box, each continuous axis contributing its two
+/// ends.
+fn order_cardinality(
+    child: &Comprehension,
+    child_class: &CardinalityClass,
+    strategy: StrategyName,
+    truncation: Option<u64>,
+) -> CardinalityClass {
+    let strata = matches!(strategy, StrategyName::Extrema | StrategyName::Shells);
+    let Some(count) = Count::of(child_class) else {
+        // A continuous space, sampled by a non-`Lex` order with a count
+        // (V8); any other order over one is invalid and keeps its class.
+        let Some(n) = truncation.filter(|_| !matches!(strategy, StrategyName::Lex)) else {
+            return child_class.clone();
+        };
+        let mut space = SampledSpace::default();
+        space.collect(child);
+        if space.discrete.contains(&Count::Exact(0)) {
+            return CardinalityClass::Bounded(0);
+        }
+        return if matches!(strategy, StrategyName::Extrema) {
+            // `n` strata of the box: at most all of its corners.
+            let mut axes = space.discrete;
+            axes.extend(std::iter::repeat_n(Count::Exact(2), space.continuous));
+            match cartesian_count(&axes) {
+                Count::Exact(m) | Count::AtMost(m) => Count::AtMost(m),
+                Count::Unknown => Count::Unknown,
             }
+        } else if !space.filtered && space.discrete.iter().all(|c| matches!(c, Count::Exact(_))) {
+            Count::Exact(n)
+        } else {
+            Count::AtMost(n)
+        }
+        .class();
+    };
+    match (count, truncation) {
+        (Count::Exact(0), _) | (_, None) => count,
+        (Count::Exact(c) | Count::AtMost(c), Some(_)) if strata => Count::AtMost(c),
+        (Count::Exact(c), Some(n)) => Count::Exact(c.min(n)),
+        (Count::AtMost(c), Some(n)) => Count::AtMost(c.min(n)),
+        (Count::Unknown, Some(_)) if strata => Count::Unknown,
+        (Count::Unknown, Some(n)) => Count::AtMost(n),
+    }
+    .class()
+}
+
+/// The axes an order over a continuous space samples, walked as the
+/// runtime walks them: clauses through cartesians and filters, any
+/// other node one discrete axis of its tuples.
+#[derive(Default)]
+struct SampledSpace {
+    /// Each discrete axis's count.
+    discrete: Vec<Count>,
+    /// How many continuous axes.
+    continuous: usize,
+    /// Whether a filter sits between the order and its clauses.
+    filtered: bool,
+}
+
+impl SampledSpace {
+    fn collect(&mut self, c: &Comprehension) {
+        match c {
+            Comprehension::Clause { source, .. } => match source.cardinality() {
+                CardinalityClass::Continuous { .. } => self.continuous += 1,
+                class => self
+                    .discrete
+                    .push(Count::of(&class).unwrap_or(Count::Unknown)),
+            },
+            Comprehension::Cartesian { children } => {
+                children.iter().for_each(|child| self.collect(child));
+            }
+            Comprehension::Filter { child, .. } => {
+                self.filtered = true;
+                self.collect(child);
+            }
+            other => self
+                .discrete
+                .push(Count::of(&other.metadata().cardinality).unwrap_or(Count::Unknown)),
         }
     }
 }
@@ -751,32 +884,12 @@ fn combine_zip_index_fn(children: &[Metadata], mode: ZipMode) -> Option<IndexFn>
 }
 
 fn combine_union_cardinality(children: &[Metadata]) -> CardinalityClass {
-    let mut sum: u64 = 0;
-    let mut any_unbounded = false;
-    let mut any_atmost = false;
-    for m in children {
-        match &m.cardinality {
-            CardinalityClass::Bounded(n) => {
-                sum = sum.saturating_add(*n);
-            }
-            CardinalityClass::BoundedAtMost(n) => {
-                sum = sum.saturating_add(*n);
-                any_atmost = true;
-            }
-            CardinalityClass::Unbounded => {
-                any_unbounded = true;
-            }
-            // V9 should have caught continuous-in-union.
-            _ => any_unbounded = true,
-        }
-    }
-    if any_unbounded {
-        CardinalityClass::Unbounded
-    } else if any_atmost {
-        CardinalityClass::BoundedAtMost(sum)
-    } else {
-        CardinalityClass::Bounded(sum)
-    }
+    // A continuous child is a V9 failure; its count is unknown here.
+    let counts: Vec<Count> = children
+        .iter()
+        .map(|m| Count::of(&m.cardinality).unwrap_or(Count::Unknown))
+        .collect();
+    union_count(&counts).class()
 }
 
 fn combine_union_index_fn(children: &[Metadata]) -> Option<IndexFn> {
@@ -1221,6 +1334,215 @@ mod tests {
             ZipMode::Cycle,
         );
         assert_eq!(c.metadata().cardinality, CardinalityClass::BoundedAtMost(5));
+    }
+
+    /// The tuple counts an operand of count `c` may have: an exact
+    /// count its own, an at-most count every count up to its bound, an
+    /// unknown count small and large ones.
+    fn witnesses(c: Count) -> Vec<u64> {
+        match c {
+            Count::Exact(n) => vec![n],
+            Count::AtMost(n) => (0..=n).collect(),
+            Count::Unknown => (0..=7).chain([1000]).collect(),
+        }
+    }
+
+    /// Assert `claim` holds for every count the operator yields over
+    /// the operands' witnesses, and is tight: exact means every yield is
+    /// that count, at most means none exceeds the bound and one meets
+    /// it, and unknown means some yield exceeds any bound the operands
+    /// state.
+    fn assert_describes(claim: Count, yields: &[u64], what: &str) {
+        let Some(&max) = yields.iter().max() else {
+            return; // the operator never yields, as a strict zip of unequal operands
+        };
+        match claim {
+            Count::Exact(n) => assert!(yields.iter().all(|&y| y == n), "{what}: {yields:?}"),
+            Count::AtMost(n) => {
+                assert!(max <= n, "{what}: {yields:?} exceed {n}");
+                assert_eq!(max, n, "{what}: the bound is not tight");
+                assert!(n > 0, "{what}: at most zero is exactly zero");
+                assert!(
+                    yields.iter().any(|&y| y != n),
+                    "{what}: always {n}, so exact"
+                );
+            }
+            Count::Unknown => assert!(max >= 1000, "{what}: bounded by {max}"),
+        }
+    }
+
+    const KINDS: [Count; 5] = [
+        Count::Exact(0),
+        Count::Exact(3),
+        Count::Exact(5),
+        Count::AtMost(4),
+        Count::Unknown,
+    ];
+
+    /// Every combination of the operands' witnesses.
+    fn combinations(counts: &[Count]) -> Vec<Vec<u64>> {
+        counts.iter().fold(vec![Vec::new()], |acc, c| {
+            acc.iter()
+                .flat_map(|prefix| {
+                    witnesses(*c).into_iter().map(move |w| {
+                        let mut next = prefix.clone();
+                        next.push(w);
+                        next
+                    })
+                })
+                .collect()
+        })
+    }
+
+    /// Each operator's count over every pair and triple of kinds holds
+    /// for, and is tight over, what the operator yields.
+    #[test]
+    fn every_kind_combination_counts_what_the_operator_yields() {
+        let mut shapes: Vec<Vec<Count>> = Vec::new();
+        for a in KINDS {
+            for b in KINDS {
+                shapes.push(vec![a, b]);
+                for c in KINDS {
+                    shapes.push(vec![a, b, c]);
+                }
+            }
+        }
+        for counts in &shapes {
+            let combos = combinations(counts);
+            let product: Vec<u64> = combos.iter().map(|c| c.iter().product()).collect();
+            assert_describes(
+                cartesian_count(counts),
+                &product,
+                &format!("cartesian {counts:?}"),
+            );
+            let sum: Vec<u64> = combos.iter().map(|c| c.iter().sum()).collect();
+            assert_describes(union_count(counts), &sum, &format!("union {counts:?}"));
+            let shortest: Vec<u64> = combos.iter().map(|c| *c.iter().min().unwrap()).collect();
+            assert_describes(
+                truncate_zip_count(counts),
+                &shortest,
+                &format!("truncate {counts:?}"),
+            );
+            let cycled: Vec<u64> = combos.iter().map(|c| cycle_length(c)).collect();
+            assert_describes(
+                cycle_zip_count(counts),
+                &cycled,
+                &format!("cycle {counts:?}"),
+            );
+            let strict: Vec<u64> = combos
+                .iter()
+                .filter(|c| c.iter().all(|&n| n == c[0]))
+                .map(|c| c[0])
+                .collect();
+            assert_describes(
+                strict_zip_count(counts),
+                &strict,
+                &format!("strict {counts:?}"),
+            );
+        }
+    }
+
+    fn filtered(c: Comprehension) -> Comprehension {
+        Comprehension::filter(c, "true")
+    }
+
+    /// The combinators report a filtered operand's bound as a bound: a
+    /// product and a truncating zip over one are at most, not exactly,
+    /// their count.
+    #[test]
+    fn an_operand_at_most_makes_a_combination_at_most() {
+        let at_most = || filtered(clause("k", &[1, 2, 3, 4, 5, 6, 7, 8, 9]));
+        let colors = || clause("c", &[1, 2]);
+        let product = Comprehension::cartesian(vec![at_most(), colors()]);
+        assert_eq!(
+            product.metadata().cardinality,
+            CardinalityClass::BoundedAtMost(18)
+        );
+        let zip = Comprehension::zip(vec![at_most(), colors()], ZipMode::Truncate);
+        assert_eq!(
+            zip.metadata().cardinality,
+            CardinalityClass::BoundedAtMost(2)
+        );
+        let zip = Comprehension::zip(vec![unknown_count("u"), colors()], ZipMode::Truncate);
+        assert_eq!(
+            zip.metadata().cardinality,
+            CardinalityClass::BoundedAtMost(2)
+        );
+        let product = Comprehension::cartesian(vec![unknown_count("u"), clause("e", &[])]);
+        assert_eq!(product.metadata().cardinality, CardinalityClass::Bounded(0));
+        let empty = filtered(clause("e", &[]));
+        assert_eq!(empty.metadata().cardinality, CardinalityClass::Bounded(0));
+    }
+
+    /// An order keeps `min(count, n)` under a strategy that truncates by
+    /// tuple count, at most its input's count under one that truncates
+    /// by strata, and `n` samples of a continuous space unless a filter
+    /// may leave fewer.
+    #[test]
+    fn an_order_counts_by_its_strategy() {
+        let order = |c, s, t| Comprehension::order(c, s, t).metadata().cardinality;
+        let ks = || clause("k", &[1, 2, 3, 4, 5, 6]);
+        for s in [
+            StrategyName::Lex,
+            StrategyName::ReverseLex,
+            StrategyName::Diagonal,
+            StrategyName::Halton,
+            StrategyName::Sobol,
+            StrategyName::Lhs,
+            StrategyName::Shuffle,
+        ] {
+            assert_eq!(
+                order(ks(), s, Some(4)),
+                CardinalityClass::Bounded(4),
+                "{s:?}"
+            );
+            assert_eq!(
+                order(ks(), s, Some(9)),
+                CardinalityClass::Bounded(6),
+                "{s:?}"
+            );
+            assert_eq!(order(ks(), s, None), CardinalityClass::Bounded(6), "{s:?}");
+            assert_eq!(
+                order(filtered(ks()), s, Some(4)),
+                CardinalityClass::BoundedAtMost(4),
+                "{s:?}"
+            );
+            assert_eq!(
+                order(unknown_count("u"), s, Some(4)),
+                CardinalityClass::BoundedAtMost(4),
+                "{s:?}"
+            );
+        }
+        for s in [StrategyName::Extrema, StrategyName::Shells] {
+            assert_eq!(
+                order(ks(), s, Some(1)),
+                CardinalityClass::BoundedAtMost(6),
+                "{s:?}"
+            );
+            assert_eq!(order(ks(), s, None), CardinalityClass::Bounded(6), "{s:?}");
+            assert_eq!(
+                order(clause("e", &[]), s, Some(1)),
+                CardinalityClass::Bounded(0)
+            );
+        }
+        let space = || Comprehension::cartesian(vec![clause("k", &[1, 2]), continuous_clause("u")]);
+        assert_eq!(
+            order(space(), StrategyName::Halton, Some(5)),
+            CardinalityClass::Bounded(5)
+        );
+        assert_eq!(
+            order(filtered(space()), StrategyName::Halton, Some(5)),
+            CardinalityClass::BoundedAtMost(5)
+        );
+        assert_eq!(
+            order(space(), StrategyName::Extrema, Some(1)),
+            CardinalityClass::BoundedAtMost(4)
+        );
+        let empty_axis = Comprehension::cartesian(vec![clause("k", &[]), continuous_clause("u")]);
+        assert_eq!(
+            order(empty_axis, StrategyName::Sobol, Some(5)),
+            CardinalityClass::Bounded(0)
+        );
     }
 
     /// Two operands of unknown count: one streams, the other has no

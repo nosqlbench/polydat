@@ -19,7 +19,9 @@
 //! and that surface yields exactly the traversal's tuples in the same
 //! order; where the traversal refuses a shape, a stream that reaches the
 //! fault fails with the same kind of error, a strict mismatch after the
-//! tuples before it.
+//! tuples before it. On every shape a traversal yields, the cardinality
+//! its metadata reports holds: an exact count is the count yielded, and
+//! an at-most count is never exceeded.
 
 use polydat::iteration::comprehension::ast::Comprehension;
 use polydat::iteration::comprehension::cardinality::{Interval, ProductMeasure};
@@ -100,6 +102,7 @@ fn compare(ast: &Comprehension, scope: &polydat::kernel::PolydatKernel) -> Compa
                 "clause yields differ for {ast:?}"
             );
             assert_eq!(reported.tuples, reference.tuples);
+            assert_counts(ast, reference.tuples.len());
             Ok(reference.tuples)
         }
         (Err(reference), Err(indexed)) => {
@@ -157,6 +160,7 @@ fn compare(ast: &Comprehension, scope: &polydat::kernel::PolydatKernel) -> Compa
     });
     match &optimized {
         Ok(expected) => {
+            assert_counts(&optimized_ast, expected.len());
             // On a shape that validates, which the streaming surface
             // compiles, every tuple binds every name.
             let names = shape_names(ast);
@@ -212,6 +216,24 @@ fn compare(ast: &Comprehension, scope: &polydat::kernel::PolydatKernel) -> Compa
         tuples,
         streamed: true,
         rewritten,
+    }
+}
+
+/// Assert the cardinality `ast`'s metadata reports holds for the
+/// `yielded` tuples: an exact count is the count, and an at-most count
+/// is never exceeded.
+fn assert_counts(ast: &Comprehension, yielded: usize) {
+    use polydat::iteration::comprehension::CardinalityClass;
+    match ast.metadata().cardinality {
+        CardinalityClass::Bounded(n) => assert_eq!(
+            yielded as u64, n,
+            "the metadata reports exactly {n} tuples for {ast:?}"
+        ),
+        CardinalityClass::BoundedAtMost(n) => assert!(
+            yielded as u64 <= n,
+            "the metadata reports at most {n} tuples for {ast:?}, which yields {yielded}"
+        ),
+        _ => {}
     }
 }
 
@@ -1299,6 +1321,43 @@ fn predicates_group_by_the_one_precedence_table() {
     // The grouping `!` over the whole disjunction keeps other tuples.
     assert_ne!(traversal("!{a} || {b}"), traversal("!({a} || {b})"));
     assert_ne!(stream("!{a} || {b}"), stream("!({a} || {b})"));
+}
+
+/// A shape whose count the metadata bounds but does not know reports
+/// that bound, and a traversal over it counts what it dispenses: its
+/// length is the number of tuples its evaluation kept at open.
+#[test]
+fn a_traversal_over_an_at_most_shape_counts_what_it_dispenses() {
+    use polydat::iteration::comprehension::CardinalityClass;
+    let scope = scope();
+    let ast = Comprehension::cartesian(vec![
+        Comprehension::filter(range("k", 1, 10, 1), "{k} > 3"),
+        words("c", &["a", "b"]),
+    ]);
+    assert_eq!(
+        ast.metadata().cardinality,
+        CardinalityClass::BoundedAtMost(18)
+    );
+    assert_eq!(evaluate_indexed(&ast, &scope).unwrap().len(), 12);
+    assert_eq!(assert_equivalent(&ast, &scope), 12);
+
+    let text = "k in 1..10, c in a,b where {k} > 3";
+    let src = format!(
+        "input cycle: u64\nsweep := for {text}\nfor {text} {{\n    s := u64_add(k, 1)\n}}\n"
+    );
+    let mut kernel = polydat::dsl::compile_polydat_interpreter(&src).unwrap();
+    kernel.set_inputs(&[0]);
+    let sweep = kernel.pull_ref("sweep").clone();
+    let streamer = sweep.as_streamer().unwrap();
+    assert_eq!(streamer.cardinality(), CardinalityClass::BoundedAtMost(18));
+    assert_eq!(streamer.coordinate_stream().unwrap().count(), 12);
+    let mut stream = kernel.traverse(0).unwrap();
+    assert_eq!(stream.len(), 12);
+    let mut count = 0;
+    while stream.advance().unwrap().is_some() {
+        count += 1;
+    }
+    assert_eq!(count, 12);
 }
 
 /// The open cost of a large product: the reference evaluator builds
