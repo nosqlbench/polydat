@@ -351,6 +351,15 @@ semantics. A `None` that arrives in native code anyway causes a panic naming
 the extern, which detects a violation of this rule, and never produces a
 wrong value.
 
+An unset extern answers for exactly the outputs that depend on it, on all
+four engines. A fusion unit runs whole, so every member of a unit depends
+on the same set of externs a host can clear (§8), and a unit never holds a
+node that does not depend on an extern beside one that does. For example,
+with `t := hash(x)`, `a := hash(t)`, `b := u64_mul(t, mode)`, and
+`c := u64_add(b, 1)`, clearing `mode` leaves `a` served on every engine,
+while `b` and `c` are `None` on the interpreter, the closure tier, and
+native and refused on pure native.
+
 **Pure native and an unset extern.** Pure native has no closures to fall
 back on, so where the other engines would propagate a `None` from an unset
 extern, it refuses the pull instead, naming the extern and telling the host
@@ -693,9 +702,10 @@ inside an engine, not refusals:
   wires, so it reads each wire as the graph typed it; the classifier
   never re-types a wire to admit a named lowering.
 - A P3 segment is a fusion unit (`compile/fusion_units.rs`), formed by the
-  rule SRD-105's cone planner uses: a connected, convex group of
-  native-eligible nodes of one lifecycle and one volatility, joined where one
-  reads another's output. (Convex means no path leaves the group and comes
+  rule the interpreter's cone planner (`compile/cone.rs`) and pure native's
+  units also use: a connected, convex group of native-eligible nodes of one
+  lifecycle, one volatility, and one set of extern dependencies, joined
+  where one reads another's output. (Convex means no path leaves the group and comes
   back into it.) The rule has these consequences:
   - Two chains that share nothing are two segments however their statements
     interleave, so a pull runs only its own.
@@ -713,6 +723,14 @@ inside an engine, not refusals:
     holds for pure native's units (the class bits of `compile/hybrid.rs`)
     and for the interpreter's native cones (`compile/cone.rs` passes the
     volatile class to `fusion_units::components`).
+  - Nodes join only when they depend, directly or through their producers,
+    on the same set of externs a host can clear (`refine_by_externs` in
+    `compile/fusion_units.rs`). A `const`'s slot and its fallback input are
+    not in that set, and a `shared` register with a computed start is. A
+    pull runs the units that feed its output, and every extern such a unit
+    depends on is one the output depends on too, so an unset extern
+    answers for exactly its dependents (§3.3). A program with
+    no such externs forms the same units as without the rule.
   - A side channel never shares a fusion unit with another node, so it fires
     under its own currency on all four engines: on native it runs as a
     closure step (`fusible` in `compile/hybrid.rs` excludes it), and on pure

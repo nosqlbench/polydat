@@ -68,8 +68,9 @@ section.
 - **Provenance.** The set of inputs a node transitively depends
   on, fixed at build (§2).
 - **Fusion unit.** A connected, convex group of nodes with
-  native lowerings, compiled to one native function that runs
-  whole ([engines.md](engines.md) §8).
+  native lowerings that depend on one set of externs, compiled to
+  one native function that runs whole ([engines.md](engines.md)
+  §8).
 - **Engine.** One of the four ways a program runs: the
   interpreter (P1), the closure tier (P2), the native tier (P3),
   and pure native. "Every engine" in this specification means

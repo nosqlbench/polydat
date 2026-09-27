@@ -54,7 +54,7 @@ the generated code is a few arithmetic instructions.
 | Site | What runs natively | Where |
 |---|---|---|
 | An embedded cone | A fused subgraph of an interpreter kernel, one native function per cone, over a slot buffer and the members' scratch entries, which the evaluating state owns as the cone node's scratch | `compile/cone.rs`, the cone node's `eval_in` |
-| A segment of the P3 kernel | A fusion unit: a connected, convex group of native-eligible nodes of one lifecycle and one volatility, with a side channel always a segment by itself, one native function per segment, all of a kernel's segments in one compiled module, over the kernel's own buffer and scratch; the nodes outside segments run as closure steps | `compile/fusion_units.rs`, `compile/hybrid.rs`, the step runner |
+| A segment of the P3 kernel | A fusion unit: a connected, convex group of native-eligible nodes of one lifecycle, one volatility, and one set of extern dependencies, with a side channel never in a segment (it runs as a closure step), one native function per segment, all of a kernel's segments in one compiled module, over the kernel's own buffer and scratch; the nodes outside segments run as closure steps | `compile/fusion_units.rs`, `compile/hybrid.rs`, the step runner |
 | The pure native tier | The whole program as one native function over the kernel's buffer and scratch, built of the same fusion units, one block each, and entered with a cone order of units and their clean flags, which the code tests itself, running the stale units and marking each current as it ends | `compile/jit/kernels.rs`, `JitCore::run_units` |
 
 The pure native tier is the differential reference for native
