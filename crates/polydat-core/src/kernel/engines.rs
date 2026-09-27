@@ -1,9 +1,9 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Polydat evaluation engines: EngineCore (shared eval loop) and the three
-//! P1 engine types — PolydatState (dependent-list), RawState (no provenance),
-//! and ProvScanState (provenance-scan).
+//! Polydat evaluation engines: EngineCore (shared eval loop) and the two
+//! P1 engine types — PolydatState (dependent-list) and ProvScanState
+//! (provenance-scan).
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -1041,7 +1041,7 @@ impl PolydatState {
     /// Dependents-marking is the dependent-list invalidation
     /// strategy carried by `PolydatState`; it's the write-side
     /// half of the engine's dirty-tracking. Other engines
-    /// (`RawState`, `ProvScanState`) implement different
+    /// (`ProvScanState`) implement different
     /// strategies — see their own `set_inputs` impls.
     pub fn set_input(&mut self, idx: usize, value: Value) {
         if let Some(cell) = self.core.shared_cells.get(idx).and_then(|c| c.as_ref()) {
@@ -1309,32 +1309,6 @@ impl OutputAccessor {
     /// Whether this accessor has no outputs.
     pub fn is_empty(&self) -> bool {
         self.indices.is_empty()
-    }
-}
-
-// =================================================================
-// RawState: no provenance engine (all nodes dirty every eval)
-// =================================================================
-
-/// Polydat evaluation engine with no provenance. Every `set_inputs()`
-/// marks all nodes dirty. Baseline for benchmarking provenance overhead.
-pub struct RawState {
-    /// Shared evaluation core.
-    pub core: EngineCore,
-}
-
-impl RawState {
-    /// Set new input values and mark all nodes dirty (no provenance check).
-    pub fn set_inputs(&mut self, coords: &[u64]) {
-        for (i, &c) in coords.iter().enumerate().take(self.core.inputs.len()) {
-            self.core.inputs[i] = Value::U64(c);
-        }
-        self.core.node_clean.fill(false);
-    }
-
-    /// Pull a named output variate from the program.
-    pub fn pull(&mut self, program: &PolydatProgram, output_name: &str) -> &Value {
-        self.core.pull(program, output_name)
     }
 }
 

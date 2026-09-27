@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use super::engines::{EngineCore, PolydatState, ProvScanState, RawState};
+use super::engines::{EngineCore, PolydatState, ProvScanState};
 use super::{InputDef, WireSource};
 use crate::ast::{PolydatNode, Value};
 use crate::dsl::ast::{PolydatFile, Statement};
@@ -1034,13 +1034,6 @@ impl PolydatProgram {
         PolydatState::from_parts(core, self.input_dependents.clone(), nondeterministic_nodes)
     }
 
-    /// Create a raw state (no provenance). For benchmarking.
-    pub fn create_raw_state(&self) -> RawState {
-        RawState {
-            core: self.build_engine_core(),
-        }
-    }
-
     /// Create the provenance-scan engine state (for benchmarking).
     pub fn create_provscan_state(&self) -> ProvScanState {
         let core = self.build_engine_core();
@@ -1086,9 +1079,9 @@ impl PolydatProgram {
     }
 
     /// Lookup the declared port type of an input by index.
-    /// Returns `None` if `idx` is out of range. Used by the
-    /// typed-write fast path so [`Dataflow::set_wire_idx`](crate::kernel::api::Dataflow::set_wire_idx) can
-    /// type-check without reverse-resolving an index to a name.
+    /// Returns `None` if `idx` is out of range. The typed write
+    /// checks a value against it without reverse-resolving an index
+    /// to a name.
     pub fn input_port_type_by_idx(&self, idx: usize) -> Option<crate::ast::PortType> {
         self.input_defs.get(idx).map(|d| d.port_type)
     }
