@@ -1,7 +1,7 @@
 ---
 type: specification
 title: Compiled By-Reference Slots
-timestamp: 2026-09-25
+timestamp: 2026-09-27
 description: How Str, Bytes, Json, Ext, and Handle values occupy compiled slots as reference pairs into step-owned scratch, and what crosses the interpreter boundary.
 tags: [engines, native, types]
 ---
@@ -277,7 +277,8 @@ their pairs. The kit's rules are these:
   and no mask; a `None` on the closure tier and P3 is the kernel's
   per-slot mask (a step whose node does not accept `None` emits `None`
   without running), and pure
-  native code refuses to run with an unset extern.
+  native refuses a pull whose output depends on an unset extern, so
+  its kits never see one ([engines.md](engines.md) §3.3).
 
 A node that supplies its own closure names it with
 `compiled_slot = <path>` (`fn(&Node, &[PortType]) -> CompiledSlotKit`);

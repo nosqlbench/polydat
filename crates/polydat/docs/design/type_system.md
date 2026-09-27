@@ -1,7 +1,7 @@
 ---
 type: specification
 title: Type System
-timestamp: 2026-09-25
+timestamp: 2026-09-27
 description: The static PortType contract on wires, its runtime Value representation, and the adapter catalog between types.
 tags: [types]
 ---
@@ -361,8 +361,9 @@ state of optional ports. Per [none_semantics.md](none_semantics.md) it
 propagates through node evaluation: a node whose inputs include `None`
 emits `None` on every output unless it declares
 `PolydatNode::accepts_none_inputs()`. This holds on the interpreter,
-the closure tier, and native; pure native refuses to run while an
-extern is unset, so no `None` arises there. `None` is not a
+the closure tier, and native; pure native refuses a pull whose output
+depends on an unset extern and serves every other pull, so no `None`
+arises there ([engines.md](engines.md) §3.3). `None` is not a
 `PortType`: no wire declares `None`, and `port_type()` reports `U64`
 as a placeholder.
 

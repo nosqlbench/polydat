@@ -1,7 +1,7 @@
 ---
 type: specification
 title: None Semantics
-timestamp: 2026-09-25
+timestamp: 2026-09-27
 description: How Value::None flows through the kernel and the language, including the conditional-shadow const rule.
 tags: [runtime, language, types]
 ---
@@ -99,13 +99,22 @@ accepts None. On P3 a step downstream of an unset extern is a closure
 step, so a None arrives at a native segment only if a host clears an
 extern after the build, and that is a panic. The interpreter's
 native-cone extraction admits a None-tolerant node into a cone only
-when every input is an intra-cone wire, where no None can arrive. Pure
-native refuses to run while any extern is unset, so no None arises
-there; the check skips const slots and the fallback inputs a const
-reads at initialization, because only initialization reads them, and
-initialization on pure native refuses a const whose value is None
-(`KernelError::Refused`). `Kernel::pull` returns `None` for a slot that holds None on the
+when every input is an intra-cone wire, where no None can arrive.
+`Kernel::pull` returns `None` for a slot that holds None on the
 interpreter, the closure tier, and native.
+
+Pure native has no closures to hold a None, so it refuses a pull
+whose output depends on an unset input, naming the extern, where the
+other three engines would return `None` for that output
+([engines.md](engines.md) §3.3). A pull of an output that reads no
+unset input is served as on the other engines: after `mode` is
+cleared, pulling an output that never reads `mode` returns its value,
+and pulling one that reads `mode` is refused. The check exempts the
+slots only initialization reads, a const's slot and the fallback
+input a const reads, and exempts a `shared` register with a computed
+start only until initialization seeds it; after that the register
+counts like any other extern. Initialization on pure native refuses a
+const whose value is None (`KernelError::Refused`).
 
 ### Rule 2 — Defaults are explicit expressions
 
@@ -226,7 +235,9 @@ inner const evaluates to None.
   The closure tier's step guard and the hybrid kernel's
   `run_hybrid_step` enforce it through the None mask on the closure
   tier and native, and native code never receives a None; pure native
-  refuses to run with an unset extern.
+  refuses a pull whose output depends on an unset extern
+  (`Externs::unset_read` and the per-output input lists;
+  [engines.md](engines.md) §3.3).
 - `default_or` is the explicit None-aware fallback primitive for
   Rule 2.
 - The compiler's conditional-shadow auto-extern rule
@@ -251,8 +262,8 @@ inner const evaluates to None.
 - **`Value::None` semantics are unified.** Every operation that
   consumes a value either propagates None or refuses to coerce it
   silently. This holds on the interpreter, the closure tier, and
-  native; pure native admits no None, because it refuses to run with
-  an unset extern.
+  native; pure native admits no None, because it refuses a pull whose
+  output depends on an unset extern and serves every other pull.
 
 ## See also
 
