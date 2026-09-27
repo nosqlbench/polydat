@@ -27,10 +27,7 @@
 //! `halton/N` / `sobol/N` for count subsampling, `shells/N` for
 //! concentric-shell depth). See `take_n_strata`.
 
-use super::{
-    EvaluatedInput, MultiIndex, Strategy, Tuple, index_fn_dim, index_fn_supports_lookup,
-    multi_index_to_flat,
-};
+use super::{MultiIndex, Selection, Strategy, capped, index_fn_dim, index_fn_supports_lookup};
 use crate::iteration::comprehension::metadata::IndexFn;
 use crate::iteration::comprehension::strategy::StrategyName;
 
@@ -57,53 +54,45 @@ impl Strategy for Extrema {
         )
     }
 
-    fn apply(&self, input: &EvaluatedInput, truncation: Option<u64>) -> Vec<Tuple> {
+    fn select(
+        &self,
+        index_fn: &IndexFn,
+        cardinality: u64,
+        truncation: Option<u64>,
+        _seed: Option<u64>,
+    ) -> Selection {
         // Always go through the indexed path when the input
         // supports lookup — Extrema's correctness over a 1-D
         // Lattice (giving {first, last}) and over a multi-axis
         // Lattice (giving the 2^N corners) both come from the
-        // indexed form. The pre-α "naive_apply" path only
-        // produced first/last and was the source of the
-        // observed Generator+Extrema bug.
-        if index_fn_supports_lookup(&input.index_fn) {
-            let mis = extrema_multi_indices(&input.index_fn, truncation);
-            mis.into_iter()
-                .filter_map(|mi| multi_index_to_flat(&input.index_fn, &mi))
-                .filter_map(|flat| input.tuples.get(flat).cloned())
-                .collect()
+        // indexed form.
+        if index_fn_supports_lookup(index_fn) {
+            let mis = extrema_multi_indices(index_fn, truncation);
+            Selection::from_multi_indices(index_fn, mis, cardinality)
         } else {
             // Continuous / Hybrid: no pre-materialized tuples exist,
             // and the runtime samples them through
-            // `extrema_multi_indices` before `apply` is reached. A
-            // caller that still arrives here gets a naive prefix
-            // ordering of whatever tuples it has.
-            naive_extrema_prefix(&input.tuples, truncation)
+            // `extrema_multi_indices` before selection is reached. A
+            // caller that still arrives here gets the first and last
+            // positions, then the rest in order.
+            Selection::Positions(naive_extrema_positions(cardinality, truncation))
         }
     }
 }
 
-fn naive_extrema_prefix(input: &[Tuple], truncation: Option<u64>) -> Vec<Tuple> {
-    if input.is_empty() {
-        return Vec::new();
-    }
-    let n = truncation
-        .unwrap_or(input.len() as u64)
-        .min(input.len() as u64);
+/// The first and last of `0..total`, then the positions between.
+fn naive_extrema_positions(total: u64, truncation: Option<u64>) -> Vec<u64> {
+    let n = capped(truncation, total);
     if n == 0 {
         return Vec::new();
     }
     if n == 1 {
-        return vec![input[0].clone()];
+        return vec![0];
     }
     let mut out = Vec::with_capacity(n as usize);
-    out.push(input[0].clone());
-    out.push(input[input.len() - 1].clone());
-    for item in input.iter().take(input.len() - 1).skip(1) {
-        if (out.len() as u64) >= n {
-            break;
-        }
-        out.push(item.clone());
-    }
+    out.push(0);
+    out.push(total - 1);
+    out.extend((1..total - 1).take((n - 2) as usize));
     out
 }
 

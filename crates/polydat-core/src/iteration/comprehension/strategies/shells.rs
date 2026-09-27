@@ -26,8 +26,8 @@
 //!   `tests::shells_are_chebyshev_strata_outermost_first`.
 
 use super::{
-    EvaluatedInput, MultiIndex, Strategy, Tuple, index_fn_size, index_fn_supports_lookup,
-    lex::lex_multi_indices, multi_index_to_flat,
+    MultiIndex, Selection, Strategy, capped, index_fn_size, index_fn_supports_lookup,
+    lex::lex_multi_indices,
 };
 use crate::iteration::comprehension::metadata::IndexFn;
 use crate::iteration::comprehension::strategy::StrategyName;
@@ -51,23 +51,19 @@ impl Strategy for Shells {
         matches!(idx, IndexFn::Lattice { .. })
     }
 
-    fn apply(&self, input: &EvaluatedInput, truncation: Option<u64>) -> Vec<Tuple> {
-        if index_fn_supports_lookup(&input.index_fn) {
-            let mis = shells_multi_indices(&input.index_fn, truncation);
-            mis.into_iter()
-                .filter_map(|mi| multi_index_to_flat(&input.index_fn, &mi))
-                .filter_map(|flat| input.tuples.get(flat).cloned())
-                .collect()
+    fn select(
+        &self,
+        index_fn: &IndexFn,
+        cardinality: u64,
+        truncation: Option<u64>,
+        _seed: Option<u64>,
+    ) -> Selection {
+        if index_fn_supports_lookup(index_fn) {
+            let mis = shells_multi_indices(index_fn, truncation);
+            Selection::from_multi_indices(index_fn, mis, cardinality)
         } else {
-            naive_lex_prefix(&input.tuples, truncation)
+            Selection::Prefix(capped(truncation, cardinality))
         }
-    }
-}
-
-fn naive_lex_prefix(input: &[Tuple], truncation: Option<u64>) -> Vec<Tuple> {
-    match truncation {
-        Some(n) => input.iter().take(n as usize).cloned().collect(),
-        None => input.to_vec(),
     }
 }
 

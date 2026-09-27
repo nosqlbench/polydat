@@ -70,7 +70,7 @@ use crate::iteration::comprehension::eval_source::{EvalContext, SourceEval};
 use crate::iteration::comprehension::measure::AxisMeasure;
 use crate::iteration::comprehension::metadata::IndexFn;
 use crate::iteration::comprehension::source::Source;
-use crate::iteration::comprehension::strategies::{EvaluatedInput, Tuple, TupleValue};
+use crate::iteration::comprehension::strategies::Selection;
 use crate::iteration::comprehension::strategy::StrategyName;
 #[cfg(test)]
 use crate::kernel::PolydatKernel;
@@ -635,6 +635,7 @@ impl EvalState<'_> {
         let mut child_index_fns: Vec<Option<IndexFn>> = Vec::with_capacity(children.len());
         let mut dependent_observed = false;
         let result_tuples = self.evaluate_cartesian_rec(
+            children.len(),
             children,
             prefix,
             &mut child_index_fns,
@@ -659,6 +660,7 @@ impl EvalState<'_> {
 
     fn evaluate_cartesian_rec(
         &mut self,
+        child_count: usize,
         children: &[Comprehension],
         prefix: &[(String, Value)],
         child_index_fns: &mut Vec<Option<IndexFn>>,
@@ -670,14 +672,12 @@ impl EvalState<'_> {
         let (head, tail) = children.split_first().unwrap();
         let head_eval = self.evaluate_node(head, prefix)?;
         let head_axis_len = head_eval.tuples.len() as u64;
-        // First time through, record the head's index_fn.
-        if child_index_fns.len() <= prefix_depth(prefix, child_index_fns) {
+        // The head's position among the cartesian's children: the
+        // first evaluation at a position records its index_fn.
+        let depth = child_count - children.len();
+        if child_index_fns.len() <= depth {
             child_index_fns.push(head_eval.index_fn.clone());
-        } else if let Some(prev) = child_index_fns
-            .get(prefix_depth(prefix, child_index_fns))
-            .cloned()
-            .flatten()
-        {
+        } else if let Some(prev) = child_index_fns.get(depth).cloned().flatten() {
             // Subsequent prefix iterations of a dependent
             // cartesian: if the per-prefix child cardinality
             // differs from the first prefix's, mark dependent.
@@ -694,6 +694,7 @@ impl EvalState<'_> {
             let mut extended_prefix: Vec<(String, Value)> = prefix.to_vec();
             extended_prefix.extend(head_tuple.iter().cloned());
             let tail_tuples = self.evaluate_cartesian_rec(
+                child_count,
                 tail,
                 &extended_prefix,
                 child_index_fns,
@@ -1054,7 +1055,6 @@ impl EvalState<'_> {
             halton::Halton, lex::Lex, lhs::Lhs, reverse_lex::ReverseLex, shells::Shells,
             shuffle::Shuffle, sobol::Sobol,
         };
-        use crate::iteration::comprehension::surfaces::polydat_value_to_tuple_value;
 
         let dispatch: Box<dyn Strategy> = match strategy {
             StrategyName::Lex => Box::new(Lex),
@@ -1077,67 +1077,20 @@ impl EvalState<'_> {
             });
         }
 
-        // Build algebra tuples for the strategy in parallel
-        // with the runtime tuples. Conversion preserves the
-        // input's index order: post-apply we recover the
-        // chosen runtime tuples via algebra-Tuple PartialEq
-        // with a consumed-index bitmap so duplicate-valued
-        // tuples preserve original ordering.
-        let algebra_tuples: Vec<Tuple> = input
-            .tuples
+        // The strategy selects positions from the input's shape
+        // alone (its `IndexFn` and tuple count), so the chosen tuples
+        // are the input's tuples at those positions.
+        let selection = order_selection(
+            dispatch.as_ref(),
+            input.index_fn.as_ref(),
+            input.tuples.len() as u64,
+            truncation,
+            seed,
+        );
+        let out = selection
             .iter()
-            .map(|rt| Tuple {
-                bindings: rt
-                    .iter()
-                    .map(|(n, v)| {
-                        let tv = polydat_value_to_tuple_value(v)
-                            .unwrap_or(TupleValue::Str(v.to_display_string()));
-                        (n.clone(), tv)
-                    })
-                    .collect(),
-            })
+            .map(|p| input.tuples[p as usize].clone())
             .collect();
-
-        // Strategy needs SOME IndexFn to operate; if the
-        // upstream walker couldn't claim one (filter / dependent
-        // cartesian without combine), fall back to a 1-D
-        // Lattice of the observed length. The strategy's
-        // accepts_input still gated this via V4 above; Lex
-        // accepts None and reaches here; every other strategy
-        // requires Some(_) and reached here only because the
-        // walker provided one.
-        let index_fn = input.index_fn.clone().unwrap_or(IndexFn::Lattice {
-            axis_sizes: vec![algebra_tuples.len() as u64],
-        });
-        let cardinality = algebra_tuples.len() as u64;
-        let evaluated_input = EvaluatedInput {
-            tuples: algebra_tuples.clone(),
-            cardinality,
-            index_fn,
-        };
-
-        let ordered = dispatch.apply_seeded(&evaluated_input, truncation, seed);
-
-        // Map ordered algebra tuples back to runtime tuples via
-        // PartialEq + consumed-index bitmap.
-        let mut consumed = vec![false; algebra_tuples.len()];
-        let mut out = Vec::with_capacity(ordered.len());
-        for ordered_tuple in &ordered {
-            let idx = algebra_tuples
-                .iter()
-                .enumerate()
-                .find(|(i, at)| !consumed[*i] && *at == ordered_tuple)
-                .map(|(i, _)| i)
-                .ok_or_else(|| RuntimeError::OrderEval {
-                    strategy,
-                    message: "ordered tuple lost reference to runtime source — \
-                              Strategy::apply must return tuples drawn from \
-                              EvaluatedInput.tuples (per spec §10.7.8)"
-                        .into(),
-                })?;
-            consumed[idx] = true;
-            out.push(input.tuples[idx].clone());
-        }
         // Order may produce a different index_fn (e.g., Lex
         // preserves; non-Lex destroys), but downstream
         // consumers of evaluate_for_iteration only read tuples.
@@ -1146,6 +1099,31 @@ impl EvalState<'_> {
             index_fn: None,
         })
     }
+}
+
+/// The positions `strategy` selects over an input of `cardinality`
+/// tuples addressed by `index_fn`. An input the walker could not
+/// address (a filter's output, a dependent cartesian whose axes vary)
+/// is ordered as a one-axis lattice of its tuples: V4 admits only
+/// `Lex` over one, and `Lex` reads nothing but the count.
+fn order_selection(
+    strategy: &dyn crate::iteration::comprehension::strategies::Strategy,
+    index_fn: Option<&IndexFn>,
+    cardinality: u64,
+    truncation: Option<u64>,
+    seed: Option<u64>,
+) -> Selection {
+    let fallback;
+    let index_fn = match index_fn {
+        Some(idx) => idx,
+        None => {
+            fallback = IndexFn::Lattice {
+                axis_sizes: vec![cardinality],
+            };
+            &fallback
+        }
+    };
+    strategy.select(index_fn, cardinality, truncation, seed)
 }
 
 /// How many times a sampled order redraws, doubling the count each
@@ -1291,18 +1269,6 @@ pub(crate) fn has_continuous_axis(c: &Comprehension) -> bool {
             false
         }
     }
-}
-
-/// Helper: prefix depth into the child_index_fns recording.
-/// At runtime, each clause is evaluated against a prefix; the
-/// first prefix slot per clause records its index_fn. This
-/// function returns the prefix depth count = number of named
-/// bindings in `prefix` that originate from the current
-/// cartesian sequence — which for the simple recursive walker
-/// equals the prefix length minus any names we've already
-/// recorded. Conservatively returns prefix.len().
-fn prefix_depth(prefix: &[(String, Value)], _recorded: &[Option<IndexFn>]) -> usize {
-    prefix.len()
 }
 
 fn combine_cartesian_index_fn(children: &[Option<IndexFn>]) -> Option<IndexFn> {
@@ -1629,6 +1595,34 @@ mod tests {
 
         let tuples = evaluate_for_iteration(&comp, &*canonical).unwrap();
         assert_eq!(tuples.len(), 5);
+    }
+
+    /// A cartesian's lattice has one axis per child, however many
+    /// names a child binds: a two-name zip at the head is one axis, so
+    /// `halton/6` over the 2 x 3 product draws all six tuples.
+    #[test]
+    fn a_multi_name_head_is_one_lattice_axis() {
+        use crate::iteration::comprehension::strategy::ZipMode;
+        let lit = |name: &str, vs: &[i64]| Comprehension::Clause {
+            name: name.into(),
+            source: Source::Literal {
+                values: vs.iter().map(|v| LiteralValue::Int(*v)).collect(),
+            },
+        };
+        let comp = Comprehension::order(
+            Comprehension::cartesian(vec![
+                Comprehension::zip(vec![lit("a", &[1, 2]), lit("b", &[3, 4])], ZipMode::Strict),
+                lit("c", &[5, 6, 7]),
+            ]),
+            StrategyName::Halton,
+            Some(6),
+        );
+        let tuples = evaluate_for_iteration(&comp, &*empty_kernel()).unwrap();
+        assert_eq!(
+            tuples.len(),
+            6,
+            "every tuple of the 2 x 3 product: {tuples:?}"
+        );
     }
 
     /// PR α bug regression: a Generator-evaluated source can

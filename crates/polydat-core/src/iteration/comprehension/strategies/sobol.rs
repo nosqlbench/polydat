@@ -39,8 +39,7 @@
 //!   in `tests::matches_published_joe_kuo_points`.
 
 use super::{
-    EvaluatedInput, MultiIndex, Strategy, Tuple, index_fn_dim, index_fn_size,
-    index_fn_supports_lookup, multi_index_to_flat,
+    MultiIndex, Selection, Strategy, capped, index_fn_dim, index_fn_size, index_fn_supports_lookup,
 };
 use crate::iteration::comprehension::metadata::IndexFn;
 use crate::iteration::comprehension::strategy::StrategyName;
@@ -146,28 +145,28 @@ impl Strategy for Sobol {
         true
     }
 
-    fn apply(&self, input: &EvaluatedInput, truncation: Option<u64>) -> Vec<Tuple> {
-        if index_fn_supports_lookup(&input.index_fn) {
-            let mis = sobol_multi_indices(&input.index_fn, truncation);
-            mis.into_iter()
-                .filter_map(|mi| multi_index_to_flat(&input.index_fn, &mi))
-                .filter_map(|flat| input.tuples.get(flat).cloned())
-                .collect()
+    fn select(
+        &self,
+        index_fn: &IndexFn,
+        cardinality: u64,
+        truncation: Option<u64>,
+        _seed: Option<u64>,
+    ) -> Selection {
+        if index_fn_supports_lookup(index_fn) {
+            let mis = sobol_multi_indices(index_fn, truncation);
+            Selection::from_multi_indices(index_fn, mis, cardinality)
         } else {
-            naive_sobol_over_tuples(&input.tuples, truncation)
+            Selection::Positions(naive_sobol_positions(cardinality, truncation))
         }
     }
 }
 
-fn naive_sobol_over_tuples(input: &[Tuple], truncation: Option<u64>) -> Vec<Tuple> {
-    let total = input.len() as u64;
+/// A 1-D Sobol walk over `0..total` positions, as one axis.
+fn naive_sobol_positions(total: u64, truncation: Option<u64>) -> Vec<u64> {
     if total == 0 {
         return Vec::new();
     }
-    let n = match truncation {
-        Some(t) => t.min(total),
-        None => total,
-    };
+    let n = capped(truncation, total);
     let dirs0 = direction_numbers(0); // 1-D Sobol direction numbers
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::with_capacity(n as usize);
@@ -179,7 +178,7 @@ fn naive_sobol_over_tuples(input: &[Tuple], truncation: Option<u64>) -> Vec<Tupl
         let idx = (pt * total as f64).floor() as u64;
         let idx = idx.min(total - 1);
         if seen.insert(idx) {
-            out.push(input[idx as usize].clone());
+            out.push(idx);
         }
         i += 1;
         attempts += 1;

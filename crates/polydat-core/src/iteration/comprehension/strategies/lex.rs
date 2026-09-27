@@ -16,7 +16,7 @@
 //!   coordinate is least significant and varies fastest. Cross-checked
 //!   in `tests::lex_multi_indices_is_mixed_radix_order`.
 
-use super::{EvaluatedInput, MultiIndex, Strategy, Tuple, index_fn_dim, index_fn_size};
+use super::{MultiIndex, Selection, Strategy, capped, index_fn_dim, index_fn_size};
 use crate::iteration::comprehension::metadata::IndexFn;
 use crate::iteration::comprehension::strategy::StrategyName;
 
@@ -38,14 +38,15 @@ impl Strategy for Lex {
         true
     }
 
-    fn apply(&self, input: &EvaluatedInput, truncation: Option<u64>) -> Vec<Tuple> {
-        // Lex is identity over the natural source order; no
-        // need to round-trip through indexed_multi_indices /
-        // multi_index_to_flat.
-        match truncation {
-            Some(n) => input.tuples.iter().take(n as usize).cloned().collect(),
-            None => input.tuples.clone(),
-        }
+    fn select(
+        &self,
+        _index_fn: &IndexFn,
+        cardinality: u64,
+        truncation: Option<u64>,
+        _seed: Option<u64>,
+    ) -> Selection {
+        // Lex is the natural source order, cut to the truncation.
+        Selection::Prefix(capped(truncation, cardinality))
     }
 }
 
@@ -89,7 +90,7 @@ pub(crate) fn lex_multi_indices(idx: &IndexFn, truncation: Option<u64>) -> Vec<M
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::iteration::comprehension::strategies::TupleValue;
+    use crate::iteration::comprehension::strategies::{EvaluatedInput, Tuple, TupleValue};
 
     fn tup(k: i64) -> Tuple {
         Tuple::new().with("k", TupleValue::I64(k))

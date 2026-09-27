@@ -31,8 +31,8 @@
 //! each onto its axis's measure (spec §3.6, §10.2 R2).
 
 use super::{
-    EvaluatedInput, MultiIndex, Strategy, Tuple, index_fn_dim, index_fn_size,
-    index_fn_supports_lookup, multi_index_to_flat, prng::Prng,
+    MultiIndex, Selection, Strategy, index_fn_dim, index_fn_size, index_fn_supports_lookup,
+    prng::Prng,
 };
 use crate::iteration::comprehension::metadata::IndexFn;
 use crate::iteration::comprehension::strategy::StrategyName;
@@ -58,42 +58,32 @@ impl Strategy for Shuffle {
         true
     }
 
-    fn apply(&self, input: &EvaluatedInput, truncation: Option<u64>) -> Vec<Tuple> {
-        self.apply_seeded(input, truncation, None)
-    }
-
-    fn apply_seeded(
+    fn select(
         &self,
-        input: &EvaluatedInput,
+        index_fn: &IndexFn,
+        cardinality: u64,
         truncation: Option<u64>,
         seed: Option<u64>,
-    ) -> Vec<Tuple> {
-        if index_fn_supports_lookup(&input.index_fn) {
-            let mis = shuffle_multi_indices(&input.index_fn, truncation, seed);
-            mis.into_iter()
-                .filter_map(|mi| multi_index_to_flat(&input.index_fn, &mi))
-                .filter_map(|flat| input.tuples.get(flat).cloned())
-                .collect()
+    ) -> Selection {
+        if index_fn_supports_lookup(index_fn) {
+            let mis = shuffle_multi_indices(index_fn, truncation, seed);
+            Selection::from_multi_indices(index_fn, mis, cardinality)
         } else {
-            naive_shuffle_over_tuples(input.tuples.clone(), truncation, seed)
+            Selection::Positions(naive_shuffle_positions(cardinality, truncation, seed))
         }
     }
 }
 
-fn naive_shuffle_over_tuples(
-    mut input: Vec<Tuple>,
-    truncation: Option<u64>,
-    seed: Option<u64>,
-) -> Vec<Tuple> {
-    let mut rng = Prng::new(
-        seed.unwrap_or(DEFAULT_SEED)
-            .wrapping_add(input.len() as u64),
-    );
-    rng.shuffle(&mut input);
-    match truncation {
-        Some(n) => input.into_iter().take(n as usize).collect(),
-        None => input,
+/// A seeded permutation of `0..total` positions, as one axis, cut to
+/// the truncation.
+fn naive_shuffle_positions(total: u64, truncation: Option<u64>, seed: Option<u64>) -> Vec<u64> {
+    let mut rng = Prng::new(seed.unwrap_or(DEFAULT_SEED).wrapping_add(total));
+    let mut positions: Vec<u64> = (0..total).collect();
+    rng.shuffle(&mut positions);
+    if let Some(n) = truncation {
+        positions.truncate(usize::try_from(n).unwrap_or(usize::MAX));
     }
+    positions
 }
 
 /// The multi-indices of a shuffle over `idx`, `truncation` of them,
@@ -171,15 +161,22 @@ pub(crate) fn try_shuffle_multi_indices(
                     .map(|i| linear_to_multi(i, &axis_sizes))
                     .collect()
             } else {
-                let mut pool: Vec<u64> = (0..total).collect();
+                // A partial Fisher–Yates over the pool `0..total`, held
+                // sparsely: only the slots a draw has displaced are
+                // stored, so `n` draws hold at most `n` entries whatever
+                // the input's size, and draw what the dense pool draws.
+                let mut displaced: std::collections::HashMap<u64, u64> =
+                    std::collections::HashMap::new();
                 let mut out = Vec::with_capacity(n as usize);
                 for i in 0..n {
+                    let last = total - i - 1;
                     let j = rng.next_bounded(total - i);
-                    let pick = pool[j as usize];
+                    let pick = displaced.get(&j).copied().unwrap_or(j);
                     out.push(linear_to_multi(pick, &axis_sizes));
-                    let last = pool.len() - 1;
-                    pool.swap(j as usize, last);
-                    pool.pop();
+                    let tail = displaced.remove(&last).unwrap_or(last);
+                    if j != last {
+                        displaced.insert(j, tail);
+                    }
                 }
                 out
             }
@@ -208,7 +205,33 @@ fn linear_to_multi(mut linear: u64, axis_sizes: &[u64]) -> MultiIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::iteration::comprehension::strategies::TupleValue;
+    use crate::iteration::comprehension::strategies::{EvaluatedInput, Tuple, TupleValue};
+
+    /// The sparse partial shuffle draws what a dense pool of every
+    /// position draws, step for step.
+    #[test]
+    fn partial_shuffle_matches_the_dense_pool() {
+        for (total, n, seed) in [(10u64, 3u64, 1u64), (97, 40, 7), (1000, 999, 3), (5, 1, 9)] {
+            let idx = IndexFn::Lattice {
+                axis_sizes: vec![total],
+            };
+            let sparse: Vec<u64> = shuffle_multi_indices(&idx, Some(n), Some(seed))
+                .into_iter()
+                .map(|mi| mi[0])
+                .collect();
+            let mut rng = Prng::new(seed.wrapping_add(total));
+            let mut pool: Vec<u64> = (0..total).collect();
+            let mut dense = Vec::new();
+            for i in 0..n {
+                let j = rng.next_bounded(total - i) as usize;
+                dense.push(pool[j]);
+                let last = pool.len() - 1;
+                pool.swap(j, last);
+                pool.pop();
+            }
+            assert_eq!(sparse, dense, "total {total}, n {n}, seed {seed}");
+        }
+    }
 
     fn tup(k: i64) -> Tuple {
         Tuple::new().with("k", TupleValue::I64(k))

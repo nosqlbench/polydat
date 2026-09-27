@@ -34,8 +34,8 @@
 //!   `tests::lhs_latin_property_each_axis_is_a_permutation`.
 
 use super::{
-    EvaluatedInput, MultiIndex, Strategy, Tuple, index_fn_dim, index_fn_size,
-    index_fn_supports_lookup, multi_index_to_flat, prng::Prng,
+    MultiIndex, Selection, Strategy, capped, index_fn_dim, index_fn_size, index_fn_supports_lookup,
+    prng::Prng,
 };
 use crate::iteration::comprehension::metadata::IndexFn;
 use crate::iteration::comprehension::strategy::StrategyName;
@@ -61,49 +61,34 @@ impl Strategy for Lhs {
         true
     }
 
-    fn apply(&self, input: &EvaluatedInput, truncation: Option<u64>) -> Vec<Tuple> {
-        self.apply_seeded(input, truncation, None)
-    }
-
-    fn apply_seeded(
+    fn select(
         &self,
-        input: &EvaluatedInput,
+        index_fn: &IndexFn,
+        cardinality: u64,
         truncation: Option<u64>,
         seed: Option<u64>,
-    ) -> Vec<Tuple> {
-        if index_fn_supports_lookup(&input.index_fn) {
-            let mis = lhs_multi_indices(&input.index_fn, truncation, seed);
-            mis.into_iter()
-                .filter_map(|mi| multi_index_to_flat(&input.index_fn, &mi))
-                .filter_map(|flat| input.tuples.get(flat).cloned())
-                .collect()
+    ) -> Selection {
+        if index_fn_supports_lookup(index_fn) {
+            let mis = lhs_multi_indices(index_fn, truncation, seed);
+            Selection::from_multi_indices(index_fn, mis, cardinality)
         } else {
-            naive_lhs_over_tuples(&input.tuples, truncation, seed)
+            Selection::Positions(naive_lhs_positions(cardinality, truncation, seed))
         }
     }
 }
 
-fn naive_lhs_over_tuples(
-    input: &[Tuple],
-    truncation: Option<u64>,
-    seed: Option<u64>,
-) -> Vec<Tuple> {
-    let total = input.len() as u64;
+/// A seeded permutation of `0..total` positions, as one axis, cut to
+/// the truncation.
+fn naive_lhs_positions(total: u64, truncation: Option<u64>, seed: Option<u64>) -> Vec<u64> {
     if total == 0 {
         return Vec::new();
     }
-    let n = match truncation {
-        Some(t) => t.min(total),
-        None => total,
-    };
+    let n = capped(truncation, total);
     let mut rng = Prng::new(seed.unwrap_or(SEED).wrapping_add(total));
     let mut indices: Vec<u64> = (0..total).collect();
     rng.shuffle(&mut indices);
+    indices.truncate(n as usize);
     indices
-        .into_iter()
-        .take(n as usize)
-        .map(|i| input[i as usize].clone())
-        .collect()
 }
 
 /// The multi-indices of a Latin hypercube over `idx`, `truncation`

@@ -20,8 +20,8 @@
 //!   `tests::diagonal_matches_cantor_enumeration_3x3`.
 
 use super::{
-    EvaluatedInput, MultiIndex, Strategy, Tuple, index_fn_size, index_fn_supports_lookup,
-    lex::lex_multi_indices, multi_index_to_flat,
+    MultiIndex, Selection, Strategy, capped, index_fn_size, index_fn_supports_lookup,
+    lex::lex_multi_indices,
 };
 use crate::iteration::comprehension::metadata::IndexFn;
 use crate::iteration::comprehension::strategy::StrategyName;
@@ -45,16 +45,14 @@ impl Strategy for Diagonal {
         matches!(idx, IndexFn::Lattice { .. })
     }
 
-    fn apply(&self, input: &EvaluatedInput, truncation: Option<u64>) -> Vec<Tuple> {
-        if index_fn_supports_lookup(&input.index_fn) {
-            let mis = diagonal_multi_indices(&input.index_fn, truncation, false);
-            mis.into_iter()
-                .filter_map(|mi| multi_index_to_flat(&input.index_fn, &mi))
-                .filter_map(|flat| input.tuples.get(flat).cloned())
-                .collect()
-        } else {
-            naive_lex_prefix(&input.tuples, truncation)
-        }
+    fn select(
+        &self,
+        index_fn: &IndexFn,
+        cardinality: u64,
+        truncation: Option<u64>,
+        _seed: Option<u64>,
+    ) -> Selection {
+        diagonal_selection(index_fn, cardinality, truncation, false)
     }
 }
 
@@ -77,23 +75,30 @@ impl Strategy for Antidiagonal {
         matches!(idx, IndexFn::Lattice { .. })
     }
 
-    fn apply(&self, input: &EvaluatedInput, truncation: Option<u64>) -> Vec<Tuple> {
-        if index_fn_supports_lookup(&input.index_fn) {
-            let mis = diagonal_multi_indices(&input.index_fn, truncation, true);
-            mis.into_iter()
-                .filter_map(|mi| multi_index_to_flat(&input.index_fn, &mi))
-                .filter_map(|flat| input.tuples.get(flat).cloned())
-                .collect()
-        } else {
-            naive_lex_prefix(&input.tuples, truncation)
-        }
+    fn select(
+        &self,
+        index_fn: &IndexFn,
+        cardinality: u64,
+        truncation: Option<u64>,
+        _seed: Option<u64>,
+    ) -> Selection {
+        diagonal_selection(index_fn, cardinality, truncation, true)
     }
 }
 
-fn naive_lex_prefix(input: &[Tuple], truncation: Option<u64>) -> Vec<Tuple> {
-    match truncation {
-        Some(n) => input.iter().take(n as usize).cloned().collect(),
-        None => input.to_vec(),
+/// The diagonal walk over a lookup-capable `index_fn`, or the Lex
+/// prefix of the positions otherwise.
+fn diagonal_selection(
+    index_fn: &IndexFn,
+    cardinality: u64,
+    truncation: Option<u64>,
+    descending: bool,
+) -> Selection {
+    if index_fn_supports_lookup(index_fn) {
+        let mis = diagonal_multi_indices(index_fn, truncation, descending);
+        Selection::from_multi_indices(index_fn, mis, cardinality)
+    } else {
+        Selection::Prefix(capped(truncation, cardinality))
     }
 }
 
@@ -144,21 +149,28 @@ fn diagonal_walk(axis_sizes: &[u64], n: u64, descending: bool) -> Vec<MultiIndex
             s,
             &mut Vec::with_capacity(axis_sizes.len()),
             &mut out,
+            n as usize,
         );
         if out.len() as u64 >= n {
             break;
         }
     }
-    out.truncate(n as usize);
     out
 }
 
+/// Push the multi-indices whose sum is `target_sum` in Lex order,
+/// stopping once `out` holds `limit`: a diagonal is emitted in Lex
+/// order, so its first `k` are a prefix of it.
 fn enumerate_index_sum(
     axis_sizes: &[u64],
     target_sum: u64,
     current: &mut Vec<u64>,
     out: &mut Vec<MultiIndex>,
+    limit: usize,
 ) {
+    if out.len() >= limit {
+        return;
+    }
     let dim = axis_sizes.len();
     if current.len() == dim {
         let s: u64 = current.iter().sum();
@@ -183,8 +195,11 @@ fn enumerate_index_sum(
             continue;
         }
         current.push(v);
-        enumerate_index_sum(axis_sizes, target_sum, current, out);
+        enumerate_index_sum(axis_sizes, target_sum, current, out, limit);
         current.pop();
+        if out.len() >= limit {
+            return;
+        }
     }
 }
 

@@ -3,31 +3,26 @@
 
 //! Strategy implementations — spec §3.6 + §10.2 R2 + §10.7.8.
 //!
-//! ## Single invocation surface
+//! ## Selection, then lookup
 //!
-//! Every named strategy exposes one public entry point —
-//! [`Strategy::apply`]. The caller passes an [`EvaluatedInput`]
-//! carrying the materialized tuples, their cardinality, and the
-//! `IndexFn` they actually satisfy. The strategy decides
-//! internally whether to dispatch its closed-form indexed
-//! algorithm (when `has_closed_form_for(&input.index_fn)`) or
-//! its fallback reorder over the materialized tuples.
+//! A strategy's order is a function of its input's shape alone: the
+//! input's `IndexFn`, its tuple count, the truncation, and the seed.
+//! [`Strategy::select`] computes that order as a [`Selection`] of
+//! positions into the input without seeing a tuple, which is what
+//! lets an index-addressed evaluator choose `order halton/100`'s
+//! tuples from a large product and compute only those 100 (spec
+//! §10.2 R2). [`Strategy::apply`] is the same selection looked up
+//! against an [`EvaluatedInput`]'s materialized tuples.
 //!
 //! Per spec §10.7.8 this is the **strategy invocation
-//! contract**: V4 fires at `apply` time against the
-//! `EvaluatedInput`'s `index_fn` — definitively, regardless of
-//! how the input source was authored (literal, range,
-//! registry-recognized generator, or workload-param).
+//! contract**: V4 fires at invocation time against the input's
+//! `index_fn` — definitively, regardless of how the input source
+//! was authored (literal, range, context-free generator, or
+//! workload-param).
 //!
-//! ## Internal split
-//!
-//! Per-strategy modules organise the implementation into two
-//! private helpers (`apply_indexed` for the R2 closed-form path
-//! when applicable, `apply_naive` for the generic fallback);
-//! [`Strategy::apply`] is the dispatcher. The trait surface
-//! exposes only the dispatcher plus the V4/R2 introspection
-//! predicates ([`Strategy::accepts_input`],
-//! [`Strategy::has_closed_form_for`]).
+//! Each strategy module holds a closed-form path over an `IndexFn`
+//! that supports lookup and a fallback over a one-axis position
+//! range; both produce positions.
 //!
 //! Strategies are selected by [`StrategyName`]; [`for_name`]
 //! dispatches a strategy name to its boxed [`Strategy`] impl.
@@ -129,15 +124,81 @@ pub struct EvaluatedInput {
     pub index_fn: IndexFn,
 }
 
+/// The positions a strategy emits, in emission order, as offsets
+/// into its input's natural enumeration.
+///
+/// A prefix and a reversal are held as their bounds; every other
+/// order is the list of positions it chose, one per emitted tuple.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Selection {
+    /// Positions `0..n`.
+    Prefix(u64),
+    /// Positions `total - 1`, `total - 2`, …, `len` of them.
+    Reverse {
+        /// The input's tuple count.
+        total: u64,
+        /// How many positions are emitted.
+        len: u64,
+    },
+    /// The chosen positions, each below the input's tuple count.
+    Positions(Vec<u64>),
+}
+
+impl Selection {
+    /// How many positions the selection emits.
+    pub fn len(&self) -> u64 {
+        match self {
+            Selection::Prefix(n) => *n,
+            Selection::Reverse { len, .. } => *len,
+            Selection::Positions(p) => p.len() as u64,
+        }
+    }
+
+    /// Whether the selection emits nothing.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The input position emitted at `i`, or `None` past the end.
+    pub fn get(&self, i: u64) -> Option<u64> {
+        match self {
+            Selection::Prefix(n) => (i < *n).then_some(i),
+            Selection::Reverse { total, len } => (i < *len).then(|| total - 1 - i),
+            Selection::Positions(p) => usize::try_from(i).ok().and_then(|i| p.get(i).copied()),
+        }
+    }
+
+    /// The emitted positions, in order.
+    pub fn iter(&self) -> impl Iterator<Item = u64> + '_ {
+        (0..self.len()).filter_map(|i| self.get(i))
+    }
+
+    /// The positions of `multi_indices` over `idx`, keeping those
+    /// that land below `cardinality`.
+    pub(crate) fn from_multi_indices(
+        idx: &IndexFn,
+        multi_indices: Vec<MultiIndex>,
+        cardinality: u64,
+    ) -> Self {
+        Selection::Positions(
+            multi_indices
+                .into_iter()
+                .filter_map(|mi| multi_index_to_flat(idx, &mi))
+                .map(|flat| flat as u64)
+                .filter(|p| *p < cardinality)
+                .collect(),
+        )
+    }
+}
+
 /// The strategy invocation surface per spec §10.7.8.
 ///
-/// Implementations are stateless — every call to [`apply`](Strategy::apply)
-/// produces the same output given the same inputs
-/// (deterministic). PRNG-based strategies (`Shuffle`, `Lhs`)
-/// derive their state from the authored seed of
-/// [`apply_seeded`](Strategy::apply_seeded), or a module constant
-/// when none is authored, plus the input length; no per-streamer
-/// seed is threaded.
+/// Implementations are stateless — every call to
+/// [`select`](Strategy::select) produces the same positions given the
+/// same inputs (deterministic). PRNG-based strategies (`Shuffle`,
+/// `Lhs`) derive their state from the authored seed, or a module
+/// constant when none is authored, plus the input length; no
+/// per-streamer seed is threaded.
 pub trait Strategy {
     /// The strategy's name. Mirrors [`StrategyName`].
     fn name(&self) -> StrategyName;
@@ -148,40 +209,59 @@ pub trait Strategy {
     /// per the per-strategy rules in spec §3.6's table.
     fn accepts_input(&self, idx: Option<&IndexFn>) -> bool;
 
-    /// R2 push-down eligibility (spec §10.2 R2). `true` if
-    /// this strategy has a closed-form indexed lookup over the
-    /// given input. If `false`, [`apply`](Strategy::apply) uses the strategy's
-    /// fallback reorder over the materialized tuples.
+    /// R2 push-down eligibility (spec §10.2 R2). `true` if this
+    /// strategy has a closed-form multi-index rule over the given
+    /// input; otherwise [`select`](Strategy::select) orders the
+    /// input's positions as one axis.
     fn has_closed_form_for(&self, idx: &IndexFn) -> bool;
 
-    /// Apply this strategy to the given input.
+    /// The positions this strategy emits over an input of
+    /// `cardinality` tuples addressed by `index_fn`, cut to
+    /// `truncation`, under the authored `seed` (comprehension_forms.md
+    /// §3.6: a seeded strategy, `Shuffle` or `Lhs`, derives its state
+    /// from the seed and the input's structural identity, and from its
+    /// fixed default when `seed` is `None`; every other strategy
+    /// ignores it).
     ///
-    /// Internally dispatches: when the strategy has a
-    /// closed-form rule for `input.index_fn`, it uses the
-    /// indexed-form algorithm (compute multi-indices over the
-    /// index space, look up against `input.tuples` via
-    /// [`multi_index_to_flat`]). Otherwise it falls back to a
-    /// per-strategy reorder over `input.tuples` directly.
+    /// The selection reads no tuple, so a caller that can compute the
+    /// tuple at a position computes only the selected ones. V4 is the
+    /// caller's responsibility: call `accepts_input` first.
+    fn select(
+        &self,
+        index_fn: &IndexFn,
+        cardinality: u64,
+        truncation: Option<u64>,
+        seed: Option<u64>,
+    ) -> Selection;
+
+    /// Apply this strategy to the given input: its
+    /// [`select`](Strategy::select)ion looked up against
+    /// `input.tuples`.
     ///
     /// V4 is the caller's responsibility — call
     /// `accepts_input(Some(&input.index_fn))` before `apply`
     /// to fire V4 at strategy-invocation time per spec §10.7.8.
-    fn apply(&self, input: &EvaluatedInput, truncation: Option<u64>) -> Vec<Tuple>;
+    fn apply(&self, input: &EvaluatedInput, truncation: Option<u64>) -> Vec<Tuple> {
+        self.apply_seeded(input, truncation, None)
+    }
 
-    /// [`apply`](Strategy::apply) under an authored seed
-    /// (comprehension_forms.md §3.6): a seeded strategy (`Shuffle`,
-    /// `Lhs`) derives its state from `seed` and the input's
-    /// structural identity, and from its fixed default when `seed`
-    /// is `None`. Every other strategy ignores the seed.
+    /// [`apply`](Strategy::apply) under an authored seed.
     fn apply_seeded(
         &self,
         input: &EvaluatedInput,
         truncation: Option<u64>,
         seed: Option<u64>,
     ) -> Vec<Tuple> {
-        let _ = seed;
-        self.apply(input, truncation)
+        self.select(&input.index_fn, input.tuples.len() as u64, truncation, seed)
+            .iter()
+            .filter_map(|p| input.tuples.get(p as usize).cloned())
+            .collect()
     }
+}
+
+/// `n` capped at `total`, or `total` when there is no cap.
+pub(crate) fn capped(truncation: Option<u64>, total: u64) -> u64 {
+    truncation.map_or(total, |t| t.min(total))
 }
 
 /// Dispatch a [`StrategyName`] to its concrete [`Strategy`]

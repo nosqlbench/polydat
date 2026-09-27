@@ -15,7 +15,7 @@
 //!   colex from the high end. The exact reversal is cross-checked in
 //!   `tests::reverse_lex_multi_indices_2d`.
 
-use super::{EvaluatedInput, MultiIndex, Strategy, Tuple, index_fn_size, lex::lex_multi_indices};
+use super::{MultiIndex, Selection, Strategy, capped, index_fn_size, lex::lex_multi_indices};
 use crate::iteration::comprehension::metadata::IndexFn;
 use crate::iteration::comprehension::strategy::StrategyName;
 
@@ -38,18 +38,20 @@ impl Strategy for ReverseLex {
         !idx.has_continuous_axis()
     }
 
-    fn apply(&self, input: &EvaluatedInput, truncation: Option<u64>) -> Vec<Tuple> {
-        // Reverse the tuple list in source order; the indexed
-        // form would compute reverse-Lex multi-indices and
-        // look each up, but for the natural enumeration the
-        // input.tuples list is already in Lex order, so a
-        // direct reverse + truncate is both faster and
-        // equivalent.
-        let mut out: Vec<Tuple> = input.tuples.iter().rev().cloned().collect();
-        if let Some(n) = truncation {
-            out.truncate(n as usize);
+    fn select(
+        &self,
+        _index_fn: &IndexFn,
+        cardinality: u64,
+        truncation: Option<u64>,
+        _seed: Option<u64>,
+    ) -> Selection {
+        // The input's natural enumeration is its Lex order, so the
+        // reverse is its positions from the last down, cut to the
+        // truncation.
+        Selection::Reverse {
+            total: cardinality,
+            len: capped(truncation, cardinality),
         }
-        out
     }
 }
 
@@ -71,7 +73,7 @@ pub(crate) fn reverse_lex_multi_indices(idx: &IndexFn, truncation: Option<u64>) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::iteration::comprehension::strategies::TupleValue;
+    use crate::iteration::comprehension::strategies::{EvaluatedInput, Tuple, TupleValue};
 
     fn tup(k: i64) -> Tuple {
         Tuple::new().with("k", TupleValue::I64(k))
