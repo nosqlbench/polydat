@@ -6,8 +6,10 @@
 //! A [`CompiledPredicate`] parses the predicate once
 //! ([`parse_predicate`]) and tests each tuple against the tree. `||`,
 //! `&&`, `!`, the comparisons, and membership evaluate directly over
-//! the tuple's values; `&&` and `||` evaluate every operand, as the
-//! language's operators do, and `!` negates its operand's truth. A
+//! the tuple's values. `&&` and `||` evaluate their operands left to
+//! right and stop at the first that decides the result, so filters
+//! folded into one conjunction (R6) evaluate exactly what the chain
+//! did; `!` negates its operand's truth. A
 //! `{name}` the tuple does not bind resolves in the scope the tuple was
 //! drawn in. Any other expression (arithmetic, a function call, a cast)
 //! is interpolated against the tuple over that scope and evaluated as a
@@ -92,18 +94,20 @@ impl CompiledPredicate {
     ) -> Result<Scalar, String> {
         Ok(match &node.kind {
             PredicateKind::Or(parts) => {
-                let mut any = false;
                 for part in parts {
-                    any |= truth(&self.eval(part, tuple, scope)?)?;
+                    if truth(&self.eval(part, tuple, scope)?)? {
+                        return Ok(Scalar::Bool(true));
+                    }
                 }
-                Scalar::Bool(any)
+                Scalar::Bool(false)
             }
             PredicateKind::And(parts) => {
-                let mut all = true;
                 for part in parts {
-                    all &= truth(&self.eval(part, tuple, scope)?)?;
+                    if !truth(&self.eval(part, tuple, scope)?)? {
+                        return Ok(Scalar::Bool(false));
+                    }
                 }
-                Scalar::Bool(all)
+                Scalar::Bool(true)
             }
             PredicateKind::Not(inner) => Scalar::Bool(!truth(&self.eval(inner, tuple, scope)?)?),
             PredicateKind::Compare(op, a, b) => {
@@ -302,6 +306,9 @@ mod tests {
         assert!(keeps("{c} != 2", &t));
         assert!(!keeps("{c} == 2", &t));
         assert!(keeps("{c} == s0", &t));
+        // An operand after the one that decides is not evaluated.
+        assert!(!keeps("{c} == 2 && {c} > 2", &t));
+        assert!(keeps("{c} != 2 || {c} > 2", &t));
         let error = CompiledPredicate::new("{c} > 2")
             .keeps(&t, &NoScope::new())
             .unwrap_err();

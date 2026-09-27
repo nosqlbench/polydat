@@ -155,6 +155,15 @@ pub enum ValidationError {
         /// The names its source references.
         references: Vec<String>,
     },
+    /// A filter whose predicate names what its tuples do not bind, on
+    /// the scope-less surfaces: a traversal resolves such a name in
+    /// the scope it opens in, and a coordinate stream has none.
+    PredicateContextRequired {
+        /// The predicate.
+        predicate: String,
+        /// The names it references that its tuples do not bind.
+        references: Vec<String>,
+    },
     /// A context-free source that could not be evaluated, on the
     /// scope-less surfaces. Its only evaluation is the compile's, in
     /// the empty scope, so its failure is the comprehension's error.
@@ -216,6 +225,15 @@ impl std::fmt::Display for ValidationError {
             Self::ContextRequired { name, references } => write!(
                 f,
                 "clause '{name}' needs a scope to bind {}; a coordinate stream has none: \n                 traverse it with `for`, which captures those names when it opens",
+                references.join(", ")
+            ),
+            Self::PredicateContextRequired {
+                predicate,
+                references,
+            } => write!(
+                f,
+                "predicate '{predicate}' needs a scope to bind {}; a coordinate stream has none: \
+                 traverse it with `for`, which captures those names when it opens",
                 references.join(", ")
             ),
             Self::V9UnionClassMismatch { reason } => {

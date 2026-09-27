@@ -12,13 +12,14 @@
 //! report the same clause yields. The shapes here are fixed cases for
 //! each constructor and a seeded generator over their compositions:
 //! cartesians (independent and dependent), the three zip modes, unions,
-//! every order strategy with and without truncation and seed, filters,
-//! and sampled continuous spaces. On a shape with discrete sources and
-//! constant filters that the scope-less streaming surface compiles,
-//! every tuple binds every name of the shape and that surface yields
-//! the same count of tuples binding the same names; where the traversal
-//! refuses a shape, a stream that reaches the fault fails with the same
-//! error after the tuples before it.
+//! every order strategy with and without truncation and seed, filters
+//! over comparisons, mixed kinds, negation, membership, and function
+//! calls, and sampled continuous spaces. On every shape the scope-less
+//! streaming surface compiles, every tuple binds every name of the shape
+//! and that surface yields exactly the traversal's tuples in the same
+//! order; where the traversal refuses a shape, a stream that reaches the
+//! fault fails with the same kind of error, a strict mismatch after the
+//! tuples before it.
 
 use polydat::iteration::comprehension::ast::Comprehension;
 use polydat::iteration::comprehension::cardinality::{Interval, ProductMeasure};
@@ -34,11 +35,45 @@ fn scope() -> polydat::kernel::PolydatKernel {
     polydat::dsl::compile_polydat_interpreter("input cycle: u64\n").unwrap()
 }
 
-/// Assert the two evaluators agree on `ast`, returning the tuple count.
+/// Assert the two evaluators agree on `ast`, and the streaming surface
+/// with them, returning the tuple count.
 fn assert_equivalent(ast: &Comprehension, scope: &polydat::kernel::PolydatKernel) -> usize {
+    compare(ast, scope).tuples
+}
+
+/// What comparing one shape found.
+struct Compared {
+    /// The traversal's tuple count; 0 when it fails.
+    tuples: usize,
+    /// Whether the streaming surface compiled the shape.
+    streamed: bool,
+    /// How the optimizer's rewrite of the shape changes its outcome, if
+    /// it does.
+    rewritten: Option<Rewrite>,
+}
+
+/// The rewrites known to change a shape's outcome.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Rewrite {
+    /// R7 folds `order(order(c, s1), s2, t)` into `order(c, s2, t)`
+    /// (§7.4 O1), dropping the inner permutation the outer strategy
+    /// selects positions from.
+    OrderChain,
+    /// R5 pushes a filter onto one axis of a cartesian, where it tests
+    /// values the shape as written never tests when another axis is
+    /// empty, and fails on one.
+    PushedPredicate,
+    /// A rewrite of an order's input (R0a dropping a `true` filter, R3
+    /// commuting a filter) changes whether the strategy accepts the
+    /// input's shape (V4).
+    StrategyAdmission,
+}
+
+/// [`assert_equivalent`], reporting what it found.
+fn compare(ast: &Comprehension, scope: &polydat::kernel::PolydatKernel) -> Compared {
     let reference = evaluate_for_iteration_materialized(ast, scope);
     let indexed = evaluate_indexed(ast, scope);
-    match (reference, indexed) {
+    let outcome = match (reference, indexed) {
         (Ok(reference), Ok(indexed)) => {
             assert_eq!(
                 indexed.len(),
@@ -65,31 +100,7 @@ fn assert_equivalent(ast: &Comprehension, scope: &polydat::kernel::PolydatKernel
                 "clause yields differ for {ast:?}"
             );
             assert_eq!(reported.tuples, reference.tuples);
-            if let Some(streamed) = constant_filters(ast).then(|| streamed(ast)).flatten() {
-                assert!(
-                    streamed.error.is_none(),
-                    "the streaming surface failed where the traversal did not, for {ast:?}: {:?}",
-                    streamed.error
-                );
-                let names = shape_names(ast);
-                for tuple in &reference.tuples {
-                    assert_eq!(
-                        tuple_names(tuple.iter().map(|(n, _)| n)),
-                        names,
-                        "a tuple does not bind every name of {ast:?}"
-                    );
-                }
-                assert_eq!(
-                    streamed.tuples.len(),
-                    reference.tuples.len(),
-                    "the streaming surface's tuple count differs for {ast:?}"
-                );
-                assert!(
-                    streamed.names().iter().all(|t| *t == names),
-                    "a streamed tuple does not bind every name of {ast:?}"
-                );
-            }
-            reference.tuples.len()
+            Ok(reference.tuples)
         }
         (Err(reference), Err(indexed)) => {
             assert_eq!(
@@ -97,21 +108,144 @@ fn assert_equivalent(ast: &Comprehension, scope: &polydat::kernel::PolydatKernel
                 reference.to_string(),
                 "errors differ for {ast:?}"
             );
-            // A strict mismatch is the one refusal the streaming surface
-            // shares; others (a strategy refusing its input's shape)
-            // are the traversal's alone.
-            if matches!(reference, RuntimeError::ZipLengthMismatch { .. })
-                && let Some(streamed) = constant_filters(ast).then(|| streamed(ast)).flatten()
-            {
-                assert_stream_failure(ast, &streamed, &reference);
-            }
-            0
+            Err(reference)
         }
         (reference, indexed) => panic!(
             "one evaluator failed for {ast:?}:\n  reference: {:?}\n  indexed: {:?}",
             reference.map(|r| r.tuples.len()),
             indexed.map(|t| t.len())
         ),
+    };
+    let tuples = outcome.as_ref().map_or(0, Vec::len);
+    let Some(streamed) = streamed(ast) else {
+        return Compared {
+            tuples,
+            streamed: false,
+            rewritten: None,
+        };
+    };
+    // The streaming surface compiles the optimized tree (§10.6). Where
+    // the optimizer's rewrite keeps the shape's outcome, the stream is
+    // held to the traversal of the shape as written; where it does not,
+    // to the traversal of the tree it compiles, and the rewrite must be
+    // one known to change an outcome: R7 folding an order chain (§7.4
+    // O1), a filter pushed onto one axis (R5) testing values the shape
+    // as written never tests, or a rewrite of an order's input changing
+    // whether its strategy accepts the input's shape (V4).
+    let optimized_ast = polydat::iteration::comprehension::optimize::optimize(ast.clone());
+    let optimized = evaluate_indexed(&optimized_ast, scope).map(|t| t.to_vec());
+    let rewritten = (!same_outcome(&outcome, &optimized)).then(|| {
+        let fails = |kind: fn(&RuntimeError) -> bool| {
+            [&outcome, &optimized]
+                .iter()
+                .any(|r| r.as_ref().err().is_some_and(kind))
+        };
+        if has_order_chain(ast) {
+            Rewrite::OrderChain
+        } else if fails(|e| matches!(e, RuntimeError::FilterEval { .. })) {
+            Rewrite::PushedPredicate
+        } else if fails(|e| matches!(e, RuntimeError::StrategyRejectsInput { .. })) {
+            Rewrite::StrategyAdmission
+        } else {
+            panic!(
+                "the optimizer's rewrite changes the outcome of {ast:?}:\n  as written: {:?}\n  \
+                 optimized: {:?}",
+                outcome.as_ref().map(Vec::len),
+                optimized.as_ref().map(Vec::len)
+            )
+        }
+    });
+    match &optimized {
+        Ok(expected) => {
+            // On a shape that validates, which the streaming surface
+            // compiles, every tuple binds every name.
+            let names = shape_names(ast);
+            for tuple in expected {
+                assert_eq!(
+                    tuple_names(tuple.iter().map(|(n, _)| n)),
+                    names,
+                    "a tuple does not bind every name of {ast:?}"
+                );
+            }
+            assert!(
+                streamed.error.is_none(),
+                "the streaming surface failed where the traversal did not, for {ast:?}: {:?}",
+                streamed.error
+            );
+            assert_eq!(
+                streamed.tuples.iter().map(stream_row).collect::<Vec<_>>(),
+                expected
+                    .iter()
+                    .map(|t| traversal_row(t))
+                    .collect::<Vec<_>>(),
+                "the streaming surface's tuples differ for {ast:?}"
+            );
+        }
+        Err(expected) => {
+            // A stream fails where it reaches a fault: the traversal's,
+            // a strict mismatch after the tuples before it, or another
+            // fault of the shape that it pulls first, which the
+            // traversal raises once every strict zip truncates.
+            if let Some(error) = &streamed.error {
+                let kind = std::mem::discriminant(error);
+                if kind == std::mem::discriminant(expected) {
+                    if matches!(expected, RuntimeError::ZipLengthMismatch { .. }) {
+                        assert_stream_failure(ast, &streamed, expected);
+                    }
+                } else {
+                    let another_fault = match error {
+                        RuntimeError::ZipLengthMismatch { .. } => strict_zips(ast) > 0,
+                        _ => evaluate_indexed(&truncated(&optimized_ast), scope)
+                            .err()
+                            .is_some_and(|e| std::mem::discriminant(&e) == kind),
+                    };
+                    assert!(
+                        another_fault,
+                        "the stream failed with a fault the shape does not have, for {ast:?}: \
+                         {error}, where the traversal failed with {expected}"
+                    );
+                }
+            }
+        }
+    }
+    Compared {
+        tuples,
+        streamed: true,
+        rewritten,
+    }
+}
+
+/// Whether two traversals end alike: the same tuples, or the same kind
+/// of error.
+fn same_outcome(
+    a: &Result<Vec<polydat::iteration::comprehension::runtime::RuntimeTuple>, RuntimeError>,
+    b: &Result<Vec<polydat::iteration::comprehension::runtime::RuntimeTuple>, RuntimeError>,
+) -> bool {
+    match (a, b) {
+        (Ok(a), Ok(b)) => a == b,
+        (Err(a), Err(b)) => std::mem::discriminant(a) == std::mem::discriminant(b),
+        _ => false,
+    }
+}
+
+/// Whether `c` orders an untruncated order: the site of R7, which folds
+/// the pair into the outer order (comprehension_forms.md §7.4 O1).
+fn has_order_chain(c: &Comprehension) -> bool {
+    match c {
+        Comprehension::Clause { .. } => false,
+        Comprehension::Cartesian { children }
+        | Comprehension::Zip { children, .. }
+        | Comprehension::Union { children } => children.iter().any(has_order_chain),
+        Comprehension::Filter { child, .. } => has_order_chain(child),
+        Comprehension::Order { child, .. } => {
+            matches!(
+                child.as_ref(),
+                Comprehension::Order {
+                    truncation: None,
+                    ..
+                }
+            ) || has_order_chain(child)
+        }
     }
 }
 
@@ -256,23 +390,52 @@ fn assert_stream_failure(
     true
 }
 
-/// Whether every filter in `c` is the constant `true` or `false` and
-/// no clause is continuous: the shapes on which the streaming surface
-/// and the traversal evaluators share predicate and sampling semantics,
-/// so their tuple counts are comparable.
-fn constant_filters(c: &Comprehension) -> bool {
-    match c {
-        Comprehension::Clause { source, .. } => {
-            !matches!(source, Source::ContinuousInterval { .. })
-        }
-        Comprehension::Cartesian { children }
-        | Comprehension::Zip { children, .. }
-        | Comprehension::Union { children } => children.iter().all(constant_filters),
-        Comprehension::Filter { child, predicate } => {
-            matches!(predicate.as_str(), "true" | "false") && constant_filters(child)
-        }
-        Comprehension::Order { child, .. } => constant_filters(child),
-    }
+/// A value as both surfaces carry it: the traversal's `U64` and the
+/// stream's `I64` are one integer, a float compares by its bits, and
+/// JSON by its text.
+#[derive(Debug, PartialEq)]
+enum Cell {
+    Int(u64),
+    Float(u64),
+    Str(String),
+    Bool(bool),
+}
+
+fn traversal_row(tuple: &[(String, polydat::ast::Value)]) -> Vec<(String, Cell)> {
+    use polydat::ast::Value;
+    tuple
+        .iter()
+        .map(|(name, value)| {
+            let cell = match value {
+                Value::U64(n) => Cell::Int(*n),
+                Value::I64(n) => Cell::Int(*n as u64),
+                Value::F64(f) => Cell::Float(f.to_bits()),
+                Value::Bool(b) => Cell::Bool(*b),
+                Value::Str(s) => Cell::Str(s.to_string()),
+                Value::Json(j) => Cell::Str(j.to_string()),
+                other => Cell::Str(other.to_display_string()),
+            };
+            (name.clone(), cell)
+        })
+        .collect()
+}
+
+fn stream_row(tuple: &Tuple) -> Vec<(String, Cell)> {
+    use polydat::iteration::comprehension::strategies::TupleValue;
+    tuple
+        .bindings
+        .iter()
+        .map(|(name, value)| {
+            let cell = match value {
+                TupleValue::U64(n) => Cell::Int(*n),
+                TupleValue::I64(n) => Cell::Int(*n as u64),
+                TupleValue::F64(f) => Cell::Float(f.to_bits()),
+                TupleValue::Bool(b) => Cell::Bool(*b),
+                TupleValue::Str(s) => Cell::Str(s.clone()),
+            };
+            (name.clone(), cell)
+        })
+        .collect()
 }
 
 fn ints(name: &str, vs: &[i64]) -> Comprehension {
@@ -280,6 +443,18 @@ fn ints(name: &str, vs: &[i64]) -> Comprehension {
         name,
         Source::Literal {
             values: vs.iter().map(|v| LiteralValue::Int(*v)).collect(),
+        },
+    )
+}
+
+fn words(name: &str, vs: &[&str]) -> Comprehension {
+    Comprehension::clause(
+        name,
+        Source::Literal {
+            values: vs
+                .iter()
+                .map(|v| LiteralValue::String((*v).to_string()))
+                .collect(),
         },
     )
 }
@@ -396,7 +571,62 @@ fn every_shape_indexes_as_it_materializes() {
             StrategyName::Sobol,
             Some(4),
         ),
+        // Mixed kinds: a string is never equal to a number, and
+        // ordering the two fails on every path.
+        Comprehension::filter(
+            Comprehension::cartesian(vec![words("w", &["s0", "s1", "s2"]), ints("n", &[1, 2])]),
+            "{w} != 2 && {n} != s1",
+        ),
+        Comprehension::filter(words("w", &["s0", "s1"]), "{w} in [s1, 2, 3.5]"),
+        Comprehension::filter(words("w", &["s0", "s1"]), "{w} > 2"),
+        // Negation binds to its operand.
+        Comprehension::filter(product(), "!({a} == 1) || {b} == 5"),
+        Comprehension::filter(product(), "!({a} < 2) && !({b} > 6) || {a} == 0"),
+        // Function calls, over numbers and over strings.
+        Comprehension::filter(product(), "u64_mul({a}, 2) + 1 > {b}"),
+        Comprehension::filter(product(), "u64_mod(u64_add({a}, {b}), 3) == 0 || {a} == 3"),
+        Comprehension::filter(words("w", &["s0", "s1"]), "u64_add({w}, 1) > 1"),
+        // Orders over continuous spaces, with every sampling strategy,
+        // alone and inside other combinators.
+        Comprehension::cartesian(vec![
+            ints("p", &[1, 2]),
+            Comprehension::order(unit("u"), StrategyName::Lhs, Some(3)),
+        ]),
+        Comprehension::zip(
+            vec![
+                Comprehension::order_seeded(unit("u"), StrategyName::Shuffle, Some(4), Some(9)),
+                range("k", 0, 6, 1),
+            ],
+            ZipMode::Truncate,
+        ),
+        Comprehension::union(vec![
+            Comprehension::order(unit("u"), StrategyName::Halton, Some(2)),
+            Comprehension::order(unit("u"), StrategyName::Sobol, Some(3)),
+        ]),
     ];
+    for strategy in [
+        StrategyName::Halton,
+        StrategyName::Sobol,
+        StrategyName::Lhs,
+        StrategyName::Shuffle,
+        StrategyName::Extrema,
+    ] {
+        for truncation in [Some(1), Some(5)] {
+            shapes.push(Comprehension::order(
+                Comprehension::cartesian(vec![ints("p", &[1, 2, 3]), unit("u")]),
+                strategy,
+                truncation,
+            ));
+            shapes.push(Comprehension::order(
+                Comprehension::filter(
+                    Comprehension::cartesian(vec![unit("u"), unit("v")]),
+                    "{u} + {v} > 1.0",
+                ),
+                strategy,
+                truncation,
+            ));
+        }
+    }
     for strategy in STRATEGIES {
         for truncation in [None, Some(1), Some(4), Some(100)] {
             for seed in [None, Some(7)] {
@@ -736,6 +966,10 @@ struct Shapes {
     names: u64,
     /// Cycle zips given an operand that keeps nothing.
     emptied: u64,
+    /// Orders over a continuous axis.
+    sampled: u64,
+    /// Filters whose predicate calls a function.
+    called: u64,
 }
 
 impl Shapes {
@@ -786,8 +1020,39 @@ impl Shapes {
         if depth == 0 {
             return self.clause(bound);
         }
-        match self.rng.below(10) {
+        match self.rng.below(11) {
             0 | 1 => self.clause(bound),
+            10 => {
+                // A sampled space: a continuous axis, perhaps beside a
+                // discrete clause and under a filter on the sample.
+                let u = self.name();
+                let mut axes = vec![unit(&u)];
+                if self.rng.coin(60) {
+                    let at = self.rng.below(2) as usize;
+                    axes.insert(at, self.clause(&[]));
+                }
+                let mut space = if axes.len() == 1 {
+                    axes.remove(0)
+                } else {
+                    Comprehension::cartesian(axes)
+                };
+                if self.rng.coin(40) {
+                    space = Comprehension::filter(
+                        space,
+                        format!("{{{u}}} > 0.{}", 1 + self.rng.below(8)),
+                    );
+                }
+                let strategy = [
+                    StrategyName::Halton,
+                    StrategyName::Sobol,
+                    StrategyName::Lhs,
+                    StrategyName::Shuffle,
+                    StrategyName::Extrema,
+                ][self.rng.below(5) as usize];
+                let seed = self.rng.coin(30).then(|| self.rng.below(1000));
+                self.sampled += 1;
+                Comprehension::order_seeded(space, strategy, Some(1 + self.rng.below(8)), seed)
+            }
             2 | 3 => {
                 let mut children = Vec::new();
                 let mut seen = bound.to_vec();
@@ -830,10 +1095,19 @@ impl Shapes {
             6 | 7 => {
                 let child = self.shape(depth - 1, bound);
                 let names = child.coordinate_names();
-                let predicate = match (names.first(), self.rng.below(4)) {
+                let predicate = match (names.first(), self.rng.below(8)) {
                     (Some(n), 0) => format!("{{{n}}} > {}", self.rng.below(3)),
                     (Some(n), 1) => format!("{{{n}}} != {}", self.rng.below(3)),
                     (Some(n), 2) if names.len() > 1 => format!("{{{n}}} <= {{{}}}", names[1]),
+                    (Some(n), 3) => {
+                        self.called += 1;
+                        format!("u64_mod(u64_add({{{n}}}, 1), 3) != 0")
+                    }
+                    (Some(n), 4) => format!("!({{{n}}} == {}) || {{{n}}} == s0", self.rng.below(3)),
+                    (Some(n), 5) => format!("{{{n}}} in [0, 2, s1]"),
+                    (Some(n), 6) if names.len() > 1 => {
+                        format!("{{{n}}} != s1 && {{{}}} != 2", names[1])
+                    }
                     _ => if self.rng.coin(50) { "true" } else { "false" }.to_string(),
                 };
                 Comprehension::filter(child, predicate)
@@ -874,8 +1148,8 @@ fn bound(c: &Comprehension) -> u64 {
 }
 
 /// Seeded compositions of every constructor: the two evaluators agree
-/// on each one, and the streaming surface agrees with them, failing
-/// where a strict zip's operands end apart.
+/// on each one, and the streaming surface yields the same tuples,
+/// failing where a strict zip's operands end apart.
 #[test]
 fn generated_shapes_index_as_they_materialize() {
     let scope = scope();
@@ -884,30 +1158,50 @@ fn generated_shapes_index_as_they_materialize() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(1500);
     let (mut compared, mut tuples, mut emptied, mut mismatched) = (0u64, 0usize, 0u64, 0u64);
+    let (mut streamed_tuples, mut sampled, mut called) = (0usize, 0u64, 0u64);
+    let mut rewritten = std::collections::BTreeMap::new();
     for case in 0..cases {
         let mut shapes = Shapes {
             rng: Rng(0x5EED_0000 + case),
             names: 0,
             emptied: 0,
+            sampled: 0,
+            called: 0,
         };
         let shape = shapes.shape(3, &[]);
         if bound(&shape) > 4000 {
             continue;
         }
-        tuples += assert_equivalent(&shape, &scope);
+        let found = compare(&shape, &scope);
+        tuples += found.tuples;
         compared += 1;
         emptied += shapes.emptied;
-        // Strict zips over operands of random lengths often end apart;
-        // count the streams that reached such a mismatch.
-        if constant_filters(&shape)
-            && streamed(&shape)
+        sampled += shapes.sampled;
+        called += shapes.called;
+        if let Some(rewrite) = found.rewritten {
+            *rewritten.entry(format!("{rewrite:?}")).or_insert(0u64) += 1;
+        }
+        if found.streamed {
+            streamed_tuples += found.tuples;
+            // Strict zips over operands of random lengths often end
+            // apart; count the streams that reached such a mismatch.
+            if streamed(&shape)
                 .is_some_and(|s| matches!(s.error, Some(RuntimeError::ZipLengthMismatch { .. })))
-        {
-            mismatched += 1;
+            {
+                mismatched += 1;
+            }
         }
     }
+    eprintln!(
+        "{compared} shapes compared, {tuples} tuples, {streamed_tuples} through streams; \
+         optimizer rewrites that change an outcome: {rewritten:?}"
+    );
     assert!(compared > cases / 2, "only {compared} of {cases} compared");
     assert!(tuples > 0, "no generated shape produced a tuple");
+    assert!(
+        streamed_tuples > tuples / 4,
+        "streams yielded only {streamed_tuples} of {tuples} compared tuples"
+    );
     assert!(
         emptied >= cases / 100,
         "only {emptied} compared cycle zips had an emptied operand"
@@ -915,6 +1209,14 @@ fn generated_shapes_index_as_they_materialize() {
     assert!(
         mismatched >= cases / 100,
         "only {mismatched} compared streams reached a strict mismatch"
+    );
+    assert!(
+        sampled >= cases / 20,
+        "only {sampled} compared shapes sampled a continuous space"
+    );
+    assert!(
+        called >= cases / 50,
+        "only {called} compared filters called a function"
     );
 }
 
@@ -953,8 +1255,7 @@ fn predicates_group_by_the_one_precedence_table() {
         assert!(s.error.is_none(), "{predicate}: {:?}", s.error);
         s.tuples
     };
-    // Pairs of every precedence level the streaming surface evaluates.
-    let shared = [
+    let pairs = [
         ("!true || {x} == 1", "(!true) || {x} == 1"),
         ("!false && {x} == 1", "(!false) && {x} == 1"),
         ("{x} == 1 || !true", "{x} == 1 || (!true)"),
@@ -967,12 +1268,6 @@ fn predicates_group_by_the_one_precedence_table() {
             "({x} == 1 && {y} == 2) || {x} == 0",
         ),
         ("{x} < 2 && {y} >= 1", "({x} < 2) && ({y} >= 1)"),
-    ];
-    for (bare, grouped) in shared {
-        assert_eq!(traversal(bare), traversal(grouped), "{bare}");
-        assert_eq!(stream(bare), stream(grouped), "{bare}");
-    }
-    let traversal_only = [
         ("!{a} || {b}", "(!{a}) || {b}"),
         ("!{a} && {b}", "(!{a}) && {b}"),
         ("{a} || {b} && {c}", "{a} || ({b} && {c})"),
@@ -990,12 +1285,20 @@ fn predicates_group_by_the_one_precedence_table() {
         ),
         ("{x} in [0, 2] || {a}", "({x} in [0, 2]) || {a}"),
     ];
-    for (bare, grouped) in traversal_only {
-        assert_eq!(traversal(bare), traversal(grouped), "{bare}");
+    for (bare, grouped) in pairs {
+        let kept = traversal(bare);
+        assert_eq!(kept, traversal(grouped), "{bare}");
+        let streamed: Vec<_> = stream(bare).iter().map(stream_row).collect();
+        assert_eq!(
+            streamed,
+            kept.iter().map(|t| traversal_row(t)).collect::<Vec<_>>(),
+            "{bare}"
+        );
+        assert_eq!(stream(grouped), stream(bare), "{bare}");
     }
     // The grouping `!` over the whole disjunction keeps other tuples.
     assert_ne!(traversal("!{a} || {b}"), traversal("!({a} || {b})"));
-    assert_ne!(stream("!true || {x} == 1"), stream("!(true || {x} == 1)"));
+    assert_ne!(stream("!{a} || {b}"), stream("!({a} || {b})"));
 }
 
 /// The open cost of a large product: the reference evaluator builds

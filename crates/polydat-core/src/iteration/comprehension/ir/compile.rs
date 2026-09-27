@@ -6,15 +6,14 @@
 //! Bottom-up tree walk: each AST node emits its children's IR
 //! sequences in left-to-right order, then its own operator(s).
 //! `cartesian` / `zip` / `union` use N-arity opcodes; `filter`
-//! / `order` use unary wrappers. The terminal `Dispense` is
-//! appended at the end.
+//! and `order(Lex, _)` use unary wrappers. The terminal
+//! `Dispense` is appended at the end.
 //!
-//! R1 and R2 (the metadata-driven catalog entries from spec
-//! §10.2) are realized here: `order(Lex, _)` compiles to
-//! `Op::OrderStreaming` (R1); `order(non-Lex, Some(n))` over
-//! an index-addressable input compiles to
-//! `Op::OrderMaterialize { indexed: true }` (R2); the naïve
-//! path uses `indexed: false`.
+//! `order(Lex, _)` compiles to `Op::OrderStreaming` (R1). A
+//! non-`Lex` order compiles to one `Op::OrderMaterialize` holding
+//! its input, which the interpreter evaluates as a traversal does:
+//! R2 over an index-addressable input, sampling over a continuous
+//! one.
 
 use crate::iteration::comprehension::ast::Comprehension;
 use crate::iteration::comprehension::metadata::cycle_operands;
@@ -89,38 +88,22 @@ fn emit(ast: &Comprehension, ops: &mut Vec<Op>) {
             truncation,
             seed,
         } => {
-            emit(child, ops);
-            ops.push(order_op(child, *strategy, *truncation, *seed));
+            if matches!(strategy, StrategyName::Lex) {
+                emit(child, ops);
+                ops.push(Op::OrderStreaming {
+                    kind: OrderStreamingKind::Lex,
+                    truncation: *truncation,
+                });
+            } else {
+                ops.push(Op::OrderMaterialize {
+                    strategy: *strategy,
+                    truncation: *truncation,
+                    seed: *seed,
+                    input_index_fn: child.metadata().index_addressable,
+                    input: child.clone(),
+                });
+            }
         }
-    }
-}
-
-/// Choose between `OrderStreaming` (R1: Lex) and
-/// `OrderMaterialize` (R2: non-Lex with indexed push-down
-/// when the input's metadata is index-addressable).
-fn order_op(
-    child: &Comprehension,
-    strategy: StrategyName,
-    truncation: Option<u64>,
-    seed: Option<u64>,
-) -> Op {
-    if matches!(strategy, StrategyName::Lex) {
-        return Op::OrderStreaming {
-            kind: OrderStreamingKind::Lex,
-            truncation,
-        };
-    }
-    // R2: the input's index function, when the metadata propagator
-    // (spec §10.7) claims one. Its presence is what makes the order
-    // indexed: the strategy reads it from the evaluated input and
-    // routes accordingly (§10.7.8).
-    let metadata = child.metadata();
-
-    Op::OrderMaterialize {
-        strategy,
-        truncation,
-        seed,
-        input_index_fn: metadata.index_addressable,
     }
 }
 

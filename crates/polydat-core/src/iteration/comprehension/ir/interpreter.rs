@@ -23,13 +23,24 @@
 //! an operand at `i mod |operand|` instead of buffering it, and a
 //! non-`Lex` order over such an input selects its positions and
 //! computes only the selected tuples (spec §6.2, §10.2 R2).
+//!
+//! Predicates and non-`Lex` orders evaluate as a traversal evaluates
+//! them, in the empty scope: a filter through [`CompiledPredicate`],
+//! and an order through [`evaluate_indexed`] over its input, so a
+//! stream and a traversal of one comprehension yield the same tuples.
 
-use crate::iteration::comprehension::metadata::{CycleOperand, IndexFn, cycle_length};
-use crate::iteration::comprehension::predicate::{PredicateKind, parse_predicate};
-use crate::iteration::comprehension::runtime::RuntimeError;
+use crate::ast::Value;
+use crate::iteration::comprehension::ast::Comprehension;
+use crate::iteration::comprehension::metadata::{CycleOperand, cycle_length};
+use crate::iteration::comprehension::predicate::CompiledPredicate;
+use crate::iteration::comprehension::runtime::{
+    IndexedTuples, RuntimeError, RuntimeTuple, evaluate_indexed,
+};
 use crate::iteration::comprehension::source::{LiteralValue, Source};
-use crate::iteration::comprehension::strategies::{Selection, Tuple, TupleValue};
-use crate::iteration::comprehension::strategy::{StrategyName, ZipMode};
+use crate::iteration::comprehension::strategies::{Tuple, TupleValue};
+use crate::iteration::comprehension::strategy::ZipMode;
+use crate::iteration::comprehension::surfaces::tuple_value_to_polydat_value;
+use crate::kernel::interp::NoScope;
 
 use super::op::{Op, OrderStreamingKind};
 use super::program::Program;
@@ -96,7 +107,7 @@ pub fn interpret(program: &Program) -> BoxedStream {
             }
             Op::Filter { predicate } => {
                 let inner = stack.pop().expect("Filter on empty stack");
-                stack.push(Box::new(FilterStream::new(inner, predicate.clone())));
+                stack.push(Box::new(FilterStream::new(inner, predicate)));
             }
             Op::OrderStreaming { kind, truncation } => {
                 let inner = stack.pop().expect("OrderStreaming on empty stack");
@@ -109,16 +120,12 @@ pub fn interpret(program: &Program) -> BoxedStream {
             Op::OrderMaterialize {
                 strategy,
                 truncation,
-                input_index_fn,
                 seed,
+                input,
+                ..
             } => {
-                let inner = stack.pop().expect("OrderMaterialize on empty stack");
                 stack.push(Box::new(OrderMaterializeStream::new(
-                    inner,
-                    *strategy,
-                    *truncation,
-                    input_index_fn.clone(),
-                    *seed,
+                    Comprehension::order_seeded((**input).clone(), *strategy, *truncation, *seed),
                 )));
             }
             Op::Dispense => {
@@ -807,21 +814,35 @@ impl TupleStream for UnionStream {
 
 // ---- FilterStream ----
 
+/// Keeps the tuples that pass a predicate, evaluated as a traversal
+/// evaluates it ([`CompiledPredicate`]), in the empty scope: the
+/// compile refuses a predicate that names anything its tuples do not
+/// bind.
 struct FilterStream {
     inner: BoxedStream,
-    predicate: String,
+    predicate: CompiledPredicate,
+    scope: NoScope,
 }
 
 impl FilterStream {
-    fn new(inner: BoxedStream, predicate: String) -> Self {
-        Self { inner, predicate }
+    fn new(inner: BoxedStream, predicate: &str) -> Self {
+        Self {
+            inner,
+            predicate: CompiledPredicate::new(predicate),
+            scope: NoScope::new(),
+        }
     }
 }
 
 impl TupleStream for FilterStream {
     fn advance(&mut self) -> Result<Option<Tuple>, RuntimeError> {
         while let Some(candidate) = self.inner.advance()? {
-            if evaluate_predicate(&self.predicate, &candidate) {
+            let bindings: RuntimeTuple = candidate
+                .bindings
+                .iter()
+                .map(|(name, value)| (name.clone(), tuple_value_to_polydat_value(value)))
+                .collect();
+            if self.predicate.keeps(&bindings, &self.scope)? {
                 return Ok(Some(candidate));
             }
         }
@@ -887,85 +908,66 @@ impl TupleStream for OrderStreamingStream {
 
 // ---- OrderMaterializeStream ----
 
-/// MATERIALIZATION BARRIER. On first advance, the strategy selects
-/// the positions it emits from the input's shape (spec §10.7.8):
-/// the `input_index_fn` the compiler propagated from upstream
-/// metadata, or a 1-axis Lattice of the observed length when the
-/// metadata claims none.
+/// MATERIALIZATION BARRIER. On first advance the order is evaluated as
+/// a traversal evaluates it ([`evaluate_indexed`]), in the empty
+/// scope: the strategy selects positions from the input's evaluated
+/// shape and length, and V4 refuses an input shape the strategy does
+/// not accept.
 ///
-/// Over an addressable input (R2) the stream holds only the
-/// selection and computes each selected tuple as it is emitted;
-/// over any other input it buffers the input first and emits the
-/// selected tuples from the buffer.
+/// Over an addressable input (R2) the stream holds only the selection
+/// and computes each selected tuple as it is emitted; over any other
+/// input it holds the input's tuples, and over a continuous axis the
+/// samples, as the traversal does.
 struct OrderMaterializeStream {
-    inner: BoxedStream,
-    strategy: StrategyName,
-    truncation: Option<u64>,
-    input_index_fn: Option<IndexFn>,
-    seed: Option<u64>,
-    /// The emitted positions, once selected.
-    selection: Option<Selection>,
-    /// The input's tuples, when the input is not addressable.
-    buffer: Option<Vec<Tuple>>,
+    order: Comprehension,
+    state: Selected,
     pos: u64,
 }
 
+/// What an order stream holds.
+enum Selected {
+    /// Not evaluated yet.
+    Pending,
+    /// The selected tuples, addressed by position.
+    Ready(IndexedTuples),
+    /// The error the evaluation ended with, returned on every pull.
+    Failed(RuntimeError),
+}
+
 impl OrderMaterializeStream {
-    fn new(
-        inner: BoxedStream,
-        strategy: StrategyName,
-        truncation: Option<u64>,
-        input_index_fn: Option<IndexFn>,
-        seed: Option<u64>,
-    ) -> Self {
+    fn new(order: Comprehension) -> Self {
         Self {
-            inner,
-            strategy,
-            truncation,
-            input_index_fn,
-            seed,
-            selection: None,
-            buffer: None,
+            order,
+            state: Selected::Pending,
             pos: 0,
         }
-    }
-
-    fn select(&mut self) -> Result<(), RuntimeError> {
-        let cardinality = match (&self.input_index_fn, self.inner.indexed_len()) {
-            (Some(_), Some(len)) => len,
-            _ => {
-                let mut buf = Vec::new();
-                while let Some(t) = self.inner.advance()? {
-                    buf.push(t);
-                }
-                let len = buf.len() as u64;
-                self.buffer = Some(buf);
-                len
-            }
-        };
-        let index_fn = self.input_index_fn.clone().unwrap_or(IndexFn::Lattice {
-            axis_sizes: vec![cardinality],
-        });
-        let dispatched = crate::iteration::comprehension::strategies::for_name(self.strategy);
-        self.selection =
-            Some(dispatched.select(&index_fn, cardinality, self.truncation, self.seed));
-        Ok(())
     }
 }
 
 impl TupleStream for OrderMaterializeStream {
     fn advance(&mut self) -> Result<Option<Tuple>, RuntimeError> {
-        if self.selection.is_none() {
-            self.select()?;
+        if matches!(self.state, Selected::Pending) {
+            self.state = match evaluate_indexed(&self.order, &NoScope::new()) {
+                Ok(tuples) => Selected::Ready(tuples),
+                Err(error) => Selected::Failed(error),
+            };
         }
-        let Some(p) = self.selection.as_ref().and_then(|s| s.get(self.pos)) else {
-            return Ok(None);
-        };
-        self.pos += 1;
-        Ok(match &self.buffer {
-            Some(buf) => buf.get(p as usize).cloned(),
-            None => self.inner.tuple_at(p),
-        })
+        match &self.state {
+            Selected::Ready(tuples) => {
+                let tuple = tuples.get(self.pos).map(|bindings| Tuple {
+                    bindings: bindings
+                        .iter()
+                        .map(|(name, value)| (name.clone(), stream_value(value)))
+                        .collect(),
+                });
+                if tuple.is_some() {
+                    self.pos += 1;
+                }
+                Ok(tuple)
+            }
+            Selected::Failed(error) => Err(error.clone()),
+            Selected::Pending => unreachable!("evaluated above"),
+        }
     }
 
     fn rewind(&mut self) {
@@ -973,270 +975,25 @@ impl TupleStream for OrderMaterializeStream {
     }
 }
 
-// ---- Predicate evaluator ----
-
-/// Simple predicate evaluator covering the §10.9.5 catalog.
-/// Returns `true` for unrecognized predicates (the
-/// conservative choice: keep tuples we can't decide on; the
-/// caller's algebra-level predicate analyzer marks unknown
-/// patterns Opaque so the optimizer doesn't push them
-/// down; the IR interpreter then runs them per-tuple here).
-///
-/// Implementations:
-/// - `{name} OP literal` and `literal OP {name}` for the 6
-///   comparison operators.
-/// - `p && q`, `p || q`, `!p` (recursive).
-/// - `{name} in [v1, v2, ...]` discrete-set membership.
-/// - Literal `true` / `false`.
-///
-/// Anything else evaluates to `true` (passes through). This
-/// evaluator serves the IR surfaces; the production `runtime`
-/// walker evaluates richer predicates through the scope.
-fn evaluate_predicate(predicate: &str, tuple: &Tuple) -> bool {
-    let trimmed = predicate.trim();
-    // Disjunction, conjunction, and negation, as the predicate grammar
-    // groups them: `!` binds tighter than `&&`, and `&&` tighter than
-    // `||`.
-    if let Ok(tree) = parse_predicate(trimmed) {
-        match &tree.kind {
-            PredicateKind::Or(parts) => {
-                return parts
-                    .iter()
-                    .any(|p| evaluate_predicate(p.text(trimmed), tuple));
-            }
-            PredicateKind::And(parts) => {
-                return parts
-                    .iter()
-                    .all(|p| evaluate_predicate(p.text(trimmed), tuple));
-            }
-            PredicateKind::Not(inner) => return !evaluate_predicate(inner.text(trimmed), tuple),
-            _ => {}
-        }
+/// A traversal's value as the streams carry it: an integer as the
+/// `I64` a clause dispenses, and JSON as its text.
+fn stream_value(value: &Value) -> TupleValue {
+    match value {
+        Value::U64(n) => TupleValue::I64(*n as i64),
+        Value::I64(n) => TupleValue::I64(*n),
+        Value::F64(f) => TupleValue::F64(*f),
+        Value::Bool(b) => TupleValue::Bool(*b),
+        Value::Str(s) => TupleValue::Str(s.to_string()),
+        Value::Json(j) => TupleValue::Str(j.to_string()),
+        other => TupleValue::Str(other.to_display_string()),
     }
-    // A predicate wrapped in parentheses, as a folded filter's
-    // conjuncts are.
-    if let Some(inner) = enclosed(trimmed) {
-        return evaluate_predicate(inner, tuple);
-    }
-    if trimmed.eq_ignore_ascii_case("true") {
-        return true;
-    }
-    if trimmed.eq_ignore_ascii_case("false") {
-        return false;
-    }
-    // `{name} in [v1, v2, ...]`
-    if let Some(in_pos) = trimmed.find(" in ") {
-        let lhs = trimmed[..in_pos].trim();
-        let rhs = trimmed[in_pos + 4..].trim();
-        if let Some(name) = strip_curly(lhs)
-            && let Some(inner) = rhs.strip_prefix('[').and_then(|s| s.strip_suffix(']'))
-        {
-            let needle = lookup(tuple, &name);
-            if needle.is_none() {
-                return true; // Unknown coord — pass through.
-            }
-            return inner.split(',').any(|item| {
-                parse_literal(item.trim())
-                    .map(|v| values_eq(&lit_to_tuple_value(&v), needle.unwrap()))
-                    .unwrap_or(false)
-            });
-        }
-    }
-    // Comparison ops: try longest first.
-    for (op, op_kind) in [
-        ("==", CmpKind::Eq),
-        ("!=", CmpKind::Ne),
-        ("<=", CmpKind::Le),
-        (">=", CmpKind::Ge),
-        ("<", CmpKind::Lt),
-        (">", CmpKind::Gt),
-    ] {
-        if let Some((lhs, rhs)) = split_top_level_op(trimmed, op) {
-            let lhs = lhs.trim();
-            let rhs = rhs.trim();
-            // {name} OP literal
-            if let (Some(name), Some(lit)) = (strip_curly(lhs), parse_literal(rhs)) {
-                let val = lookup(tuple, &name);
-                if val.is_none() {
-                    return true;
-                }
-                return compare(val.unwrap(), op_kind, &lit_to_tuple_value(&lit));
-            }
-            // literal OP {name}
-            if let (Some(name), Some(lit)) = (strip_curly(rhs), parse_literal(lhs)) {
-                let val = lookup(tuple, &name);
-                if val.is_none() {
-                    return true;
-                }
-                // Invert kind: a < b iff b > a.
-                let inv = invert_kind(op_kind);
-                return compare(val.unwrap(), inv, &lit_to_tuple_value(&lit));
-            }
-            // {a} OP {b}
-            if let (Some(a), Some(b)) = (strip_curly(lhs), strip_curly(rhs)) {
-                let va = lookup(tuple, &a);
-                let vb = lookup(tuple, &b);
-                if va.is_none() || vb.is_none() {
-                    return true;
-                }
-                return compare(va.unwrap(), op_kind, vb.unwrap());
-            }
-        }
-    }
-    true
-}
-
-#[derive(Clone, Copy)]
-enum CmpKind {
-    Eq,
-    Ne,
-    Lt,
-    Le,
-    Gt,
-    Ge,
-}
-
-fn invert_kind(k: CmpKind) -> CmpKind {
-    match k {
-        CmpKind::Lt => CmpKind::Gt,
-        CmpKind::Le => CmpKind::Ge,
-        CmpKind::Gt => CmpKind::Lt,
-        CmpKind::Ge => CmpKind::Le,
-        other => other,
-    }
-}
-
-fn lookup<'a>(tuple: &'a Tuple, name: &str) -> Option<&'a TupleValue> {
-    tuple
-        .bindings
-        .iter()
-        .find(|(k, _)| k == name)
-        .map(|(_, v)| v)
-}
-
-fn compare(a: &TupleValue, kind: CmpKind, b: &TupleValue) -> bool {
-    let ord = match (a, b) {
-        (TupleValue::I64(a), TupleValue::I64(b)) => a.cmp(b),
-        (TupleValue::U64(a), TupleValue::U64(b)) => a.cmp(b),
-        (TupleValue::F64(a), TupleValue::F64(b)) => {
-            a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
-        }
-        (TupleValue::I64(a), TupleValue::F64(b)) => (*a as f64)
-            .partial_cmp(b)
-            .unwrap_or(std::cmp::Ordering::Equal),
-        (TupleValue::F64(a), TupleValue::I64(b)) => a
-            .partial_cmp(&(*b as f64))
-            .unwrap_or(std::cmp::Ordering::Equal),
-        (TupleValue::Str(a), TupleValue::Str(b)) => a.cmp(b),
-        (TupleValue::Bool(a), TupleValue::Bool(b)) => a.cmp(b),
-        _ => return false,
-    };
-    match kind {
-        CmpKind::Eq => ord.is_eq(),
-        CmpKind::Ne => !ord.is_eq(),
-        CmpKind::Lt => ord.is_lt(),
-        CmpKind::Le => ord.is_le(),
-        CmpKind::Gt => ord.is_gt(),
-        CmpKind::Ge => ord.is_ge(),
-    }
-}
-
-fn values_eq(a: &TupleValue, b: &TupleValue) -> bool {
-    compare(a, CmpKind::Eq, b)
-}
-
-fn strip_curly(s: &str) -> Option<String> {
-    let s = s.trim();
-    if s.starts_with('{') && s.ends_with('}') {
-        let inner = &s[1..s.len() - 1];
-        let trimmed = inner.trim();
-        if trimmed.chars().all(|c| c.is_alphanumeric() || c == '_') && !trimmed.is_empty() {
-            return Some(trimmed.to_string());
-        }
-    }
-    None
-}
-
-fn parse_literal(s: &str) -> Option<LiteralValue> {
-    let s = s.trim();
-    if s.eq_ignore_ascii_case("true") {
-        return Some(LiteralValue::Bool(true));
-    }
-    if s.eq_ignore_ascii_case("false") {
-        return Some(LiteralValue::Bool(false));
-    }
-    if s.len() >= 2
-        && ((s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')))
-    {
-        return Some(LiteralValue::String(s[1..s.len() - 1].to_string()));
-    }
-    if let Ok(n) = s.parse::<i64>() {
-        return Some(LiteralValue::Int(n));
-    }
-    if let Ok(f) = s.parse::<f64>() {
-        return Some(LiteralValue::Float(f));
-    }
-    None
-}
-
-fn lit_to_tuple_value(lv: &LiteralValue) -> TupleValue {
-    literal_to_tuple_value(lv)
-}
-
-/// The text inside `s` when one pair of parentheses encloses all of it.
-fn enclosed(s: &str) -> Option<&str> {
-    let inner = s.strip_prefix('(')?.strip_suffix(')')?;
-    let mut depth = 0i64;
-    for b in inner.bytes() {
-        match b {
-            b'(' => depth += 1,
-            b')' => {
-                depth -= 1;
-                if depth < 0 {
-                    return None;
-                }
-            }
-            _ => {}
-        }
-    }
-    (depth == 0).then_some(inner)
-}
-
-fn split_top_level_op<'a>(s: &'a str, op: &str) -> Option<(&'a str, &'a str)> {
-    let mut depth = 0i64;
-    let bytes = s.as_bytes();
-    let op_bytes = op.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'(' | b'[' | b'{' => depth += 1,
-            b')' | b']' | b'}' => depth -= 1,
-            _ => {}
-        }
-        if depth == 0
-            && i + op_bytes.len() <= bytes.len()
-            && &bytes[i..i + op_bytes.len()] == op_bytes
-        {
-            if op.len() == 1 {
-                let next = bytes.get(i + 1).copied();
-                if next == Some(b'=') {
-                    i += 1;
-                    continue;
-                }
-            }
-            return Some((&s[..i], &s[i + op_bytes.len()..]));
-        }
-        i += 1;
-    }
-    None
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::iteration::comprehension::ast::Comprehension;
     use crate::iteration::comprehension::ir::compile;
-    use crate::iteration::comprehension::source::{LiteralValue, Source};
+    use crate::iteration::comprehension::strategy::StrategyName;
 
     fn clause(name: &str, vs: &[i64]) -> Comprehension {
         Comprehension::clause(

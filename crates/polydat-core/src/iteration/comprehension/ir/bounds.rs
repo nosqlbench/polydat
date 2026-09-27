@@ -85,6 +85,18 @@ pub fn check_bounds(program: &Program) -> ResourceBound {
         } else if !matches!(op, Op::Dispense) {
             bounds.streaming_op_count += 1;
         }
+        // An order holds its input, whose own barriers hold their
+        // working sets beneath it; they sit at the order's position.
+        if let Op::OrderMaterialize { input, .. } = op {
+            let inner = check_bounds(&super::compile(input));
+            bounds.streaming_op_count += inner.streaming_op_count;
+            bounds.barriers.extend(
+                inner
+                    .barriers
+                    .into_iter()
+                    .map(|b| Bound { op_index: i, ..b }),
+            );
+        }
     }
 
     bounds
@@ -181,17 +193,22 @@ mod tests {
         assert_eq!(b.streaming_op_count, 4); // push, push, cartesian, filter (dispense excluded)
     }
 
+    fn input() -> Box<crate::iteration::comprehension::ast::Comprehension> {
+        Box::new(crate::iteration::comprehension::ast::Comprehension::clause(
+            "a",
+            Source::Literal { values: vec![] },
+        ))
+    }
+
     #[test]
     fn order_materialize_reports_barrier() {
         let p = Program::new(vec![
-            push_clause("a"),
-            push_clause("b"),
-            Op::Cartesian { n: 2 },
             Op::OrderMaterialize {
                 strategy: StrategyName::Halton,
                 truncation: Some(50),
                 seed: None,
                 input_index_fn: None,
+                input: input(),
             },
             Op::Dispense,
         ]);
@@ -244,19 +261,21 @@ mod tests {
     #[test]
     fn multiple_barriers_sum() {
         let p = Program::new(vec![
-            push_clause("a"),
             Op::OrderMaterialize {
                 strategy: StrategyName::Halton,
                 truncation: Some(10),
                 seed: None,
                 input_index_fn: None,
+                input: input(),
             },
             Op::OrderMaterialize {
                 strategy: StrategyName::Shuffle,
                 truncation: Some(20),
                 seed: None,
                 input_index_fn: None,
+                input: input(),
             },
+            Op::Cartesian { n: 2 },
             Op::Dispense,
         ]);
         let b = check_bounds(&p);

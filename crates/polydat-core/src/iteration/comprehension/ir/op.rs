@@ -13,6 +13,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::iteration::comprehension::ast::Comprehension;
 use crate::iteration::comprehension::metadata::{CycleOperand, cycle_plan_is_empty};
 use crate::iteration::comprehension::source::Source;
 use crate::iteration::comprehension::strategy::{StrategyName, ZipMode};
@@ -79,28 +80,23 @@ pub enum Op {
         truncation: Option<u64>,
     },
 
-    /// MATERIALIZATION BARRIER. Build a working set sufficient
-    /// for the strategy, apply the strategy, emit permuted
-    /// tuples. Truncation is the output cap.
+    /// MATERIALIZATION BARRIER. Push a stream of the tuples a
+    /// non-`Lex` order selects from `input`. Truncation is the output
+    /// cap.
     ///
-    /// Per spec §10.2 R2: when the input is index-addressable
-    /// and the strategy has a closed-form push-down rule, the
-    /// working set shrinks from O(input) to O(output) — the
-    /// interpreter realizes this by drawing strategy-specific
-    /// multi-indices and looking each up against the input's
-    /// `IndexFn` rather than materializing the full input.
-    /// Whether R2 fires is `input_index_fn`'s presence: the strategy
-    /// reads the index function from the evaluated input and routes
-    /// accordingly, so the op carries no second flag saying so.
+    /// The order is evaluated as a traversal evaluates it
+    /// ([`crate::iteration::comprehension::runtime::evaluate_indexed`]),
+    /// on the first pull, in the empty scope: the strategy selects
+    /// positions from the input's evaluated shape and length, and
+    /// the stream computes each selected tuple as it emits it. Per
+    /// spec §10.2 R2, over an index-addressable input the working set
+    /// is the selection, O(output); over any other input it is the
+    /// input's tuples. An order over a continuous axis samples the
+    /// input's space and holds the samples.
     ///
-    /// `input_index_fn` carries the upstream comprehension's
-    /// addressing scheme (per spec §10.7.6 / §10.7.8) so the
-    /// strategy's indexed-form algorithms can dispatch
-    /// correctly without re-deriving the shape from observed
-    /// tuples (which would lose multi-axis lattice structure
-    /// after the flat materialization). `None` when the
-    /// upstream metadata propagator couldn't claim a closed-
-    /// form addressing function.
+    /// `input_index_fn` is the input's addressing scheme as the
+    /// metadata propagator claims it at compile time (spec §10.7.6),
+    /// which the bounds checker reads; `None` when it claims none.
     OrderMaterialize {
         /// The strategy applied.
         strategy: StrategyName,
@@ -109,11 +105,10 @@ pub enum Op {
         /// The authored seed a seeded strategy (`Shuffle`, `Lhs`)
         /// derives its state from; its fixed default when `None`.
         seed: Option<u64>,
-        /// Upstream input's IndexFn at compile time (spec
-        /// §10.7.6). The interpreter passes this into the
-        /// [`crate::iteration::comprehension::strategies::EvaluatedInput`]
-        /// it builds for [`crate::iteration::comprehension::strategies::Strategy::apply`].
+        /// The input's IndexFn from its metadata at compile time.
         input_index_fn: Option<crate::iteration::comprehension::metadata::IndexFn>,
+        /// The comprehension ordered.
+        input: Box<Comprehension>,
     },
 
     /// Bind the top stream as the comprehension's result.
@@ -145,7 +140,7 @@ impl Op {
             Op::Union { n } => (*n, 1),
             Op::Filter { .. } => (1, 1),
             Op::OrderStreaming { .. } => (1, 1),
-            Op::OrderMaterialize { .. } => (1, 1),
+            Op::OrderMaterialize { .. } => (0, 1),
             Op::Dispense => (1, 0),
         }
     }
@@ -191,6 +186,17 @@ mod tests {
         assert_eq!(Op::Dispense.stack_effect(), (1, 0));
     }
 
+    fn input() -> Box<Comprehension> {
+        Box::new(Comprehension::clause(
+            "k",
+            Source::IntRange {
+                lo: 0,
+                hi: 50,
+                step: 1,
+            },
+        ))
+    }
+
     #[test]
     fn barrier_classification() {
         assert!(
@@ -199,6 +205,7 @@ mod tests {
                 truncation: Some(10),
                 seed: None,
                 input_index_fn: None,
+                input: input(),
             }
             .is_barrier()
         );
@@ -250,6 +257,7 @@ mod tests {
                     axis_sizes: vec![10, 5],
                 },
             ),
+            input: input(),
         };
         let json = serde_json::to_string(&op).unwrap();
         let back: Op = serde_json::from_str(&json).unwrap();

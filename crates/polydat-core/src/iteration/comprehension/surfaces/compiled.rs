@@ -18,6 +18,7 @@ use crate::iteration::comprehension::eval_source::{EvalClass, SourceEval};
 use crate::iteration::comprehension::flatten::flatten_static_sources;
 use crate::iteration::comprehension::ir::{Program, compile as compile_to_ir};
 use crate::iteration::comprehension::optimize::optimize;
+use crate::iteration::comprehension::predicate::recognizers::extract_coord_refs;
 use crate::iteration::comprehension::validate::{
     Mode, ValidationError, ValidationReport, validate,
 };
@@ -68,6 +69,12 @@ impl CompiledComprehension {
         let ast = flatten_static_sources(ast, &NoScope::new());
         if let Some((name, references)) = first_context_required(&ast) {
             return Err(ValidationError::ContextRequired { name, references });
+        }
+        if let Some((predicate, references)) = first_unbound_predicate(&ast) {
+            return Err(ValidationError::PredicateContextRequired {
+                predicate,
+                references,
+            });
         }
         if let Some((name, message)) = first_failed_static(&ast) {
             return Err(ValidationError::SourceFailed { name, message });
@@ -159,6 +166,31 @@ fn first_context_required(ast: &Comprehension) -> Option<(String, Vec<String>)> 
         Comprehension::Filter { child, .. } | Comprehension::Order { child, .. } => {
             first_context_required(child)
         }
+    }
+}
+
+/// The first filter of `ast` whose predicate names what its tuples do
+/// not bind, with those names: the scope-less surfaces evaluate a
+/// predicate in the empty scope, so they refuse it by name.
+fn first_unbound_predicate(ast: &Comprehension) -> Option<(String, Vec<String>)> {
+    match ast {
+        Comprehension::Clause { .. } => None,
+        Comprehension::Cartesian { children }
+        | Comprehension::Zip { children, .. }
+        | Comprehension::Union { children } => children.iter().find_map(first_unbound_predicate),
+        Comprehension::Filter { child, predicate } => {
+            let bound = child.coordinate_names();
+            let unbound: Vec<String> = extract_coord_refs(predicate)
+                .into_iter()
+                .filter(|name| !bound.contains(name))
+                .collect();
+            if unbound.is_empty() {
+                first_unbound_predicate(child)
+            } else {
+                Some((predicate.clone(), unbound))
+            }
+        }
+        Comprehension::Order { child, .. } => first_unbound_predicate(child),
     }
 }
 
@@ -322,5 +354,25 @@ mod tests {
             "{err}"
         );
         assert!(err.to_string().contains("traverse it with `for`"), "{err}");
+    }
+
+    /// A predicate naming what its tuples do not bind has no scope to
+    /// resolve in on a coordinate stream: the compile refuses it by
+    /// name.
+    #[test]
+    fn from_ast_refuses_a_predicate_that_needs_a_scope() {
+        let ast = Comprehension::filter(clause("k", &[1, 2, 3]), "{k} > {limit} || {k} == 1");
+        let err = CompiledComprehension::from_ast(&ast).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ValidationError::PredicateContextRequired { ref references, .. }
+                    if references == &["limit".to_string()]
+            ),
+            "{err}"
+        );
+        assert!(err.to_string().contains("traverse it with `for`"), "{err}");
+        let bound = Comprehension::filter(clause("k", &[1, 2, 3]), "{k} > 1");
+        assert!(CompiledComprehension::from_ast(&bound).is_ok());
     }
 }

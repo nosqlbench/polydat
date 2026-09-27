@@ -105,7 +105,7 @@ fn derived_order_permutes_and_truncates() {
 #[test]
 fn derivations_chain_and_each_wire_is_distinct() {
     let mut k = compile(
-        "input cycle: u64\nbase := for k in 1..4, limit in 10,20,30\nedges := for base where {k} != 2\ntail := for edges order reverse_lex\n",
+        "input cycle: u64\nbase := for k in 1..4, limit in 10,20,30\nedges := for base order reverse_lex\ntail := for edges where {k} != 2\n",
     );
     k.set_inputs(&[0]);
     let base = tuples(
@@ -133,10 +133,42 @@ fn derivations_chain_and_each_wire_is_distinct() {
             .unwrap(),
     );
     assert_eq!(base.len(), 9);
-    assert_eq!(edges.len(), 6);
+    assert_eq!(edges.len(), 9);
     assert_eq!(tail.len(), 6);
+    assert_eq!(edges[0], vec![3, 30]);
     assert_eq!(tail[0], vec![3, 30]);
-    assert_eq!(edges[0], vec![1, 10]);
+    assert_eq!(tail[2], vec![3, 10]);
+    assert_eq!(tail[3], vec![1, 30]);
+}
+
+/// A producer's stream orders and filters as a traversal of the same
+/// comprehension does: over a filter's survivors, which have no
+/// position in an index space, only `lex` orders (V4), and the stream
+/// fails with the traversal's refusal.
+#[test]
+fn a_producer_orders_a_filter_as_a_traversal_does() {
+    let mut k = compile(
+        "input cycle: u64\nbase := for k in 1..4, limit in 10,20,30\nedges := for base where {k} != 2\n\
+         first := for edges order lex/2\ntail := for edges order reverse_lex\n",
+    );
+    k.set_inputs(&[0]);
+    let mut stream = |name: &str| {
+        k.pull_ref(name)
+            .clone()
+            .as_streamer()
+            .unwrap()
+            .coordinate_stream()
+            .unwrap()
+    };
+    assert_eq!(tuples(stream("first")), vec![vec![1, 10], vec![1, 20]]);
+    let error = stream("tail").next().unwrap().unwrap_err();
+    assert!(
+        matches!(
+            error,
+            polydat::iteration::comprehension::runtime::RuntimeError::StrategyRejectsInput { .. }
+        ),
+        "{error}"
+    );
 }
 
 #[test]
@@ -282,4 +314,57 @@ fn a_traversal_captures_its_sources_references_when_it_opens() {
         seen.push(a.cycle(0).pull("n").as_u64());
     }
     assert_eq!(seen, vec![4, 4]);
+}
+
+/// A producer's stream yields the tuples a traversal of the same
+/// comprehension activates: a sampled continuous space, a predicate
+/// that calls a function, and one comparing values of different kinds.
+#[test]
+fn a_producer_streams_what_a_traversal_activates() {
+    use polydat::ast::Value;
+    for text in [
+        "k in 1,2, theta in 0.0..1.0 where {theta} > 0.25 order halton/5",
+        "k in 1..9 where u64_mod({k}, 3) == 0 || {k} == 1",
+        "w in a,b,c, n in 1,2 where {w} != 2 && !({n} == 2)",
+    ] {
+        let src = format!("input cycle: u64\nsweep := for {text}\nfor {text} {{\n    c := 1\n}}\n");
+        let mut k = compile(&src);
+        k.set_inputs(&[0]);
+        let streamed: Vec<Vec<String>> = k
+            .pull_ref("sweep")
+            .clone()
+            .as_streamer()
+            .unwrap()
+            .coordinate_stream()
+            .unwrap()
+            .map(|t| {
+                t.unwrap()
+                    .bindings
+                    .iter()
+                    .map(|(_, v)| match v {
+                        TupleValue::I64(n) => n.to_string(),
+                        TupleValue::U64(n) => n.to_string(),
+                        TupleValue::F64(f) => f.to_string(),
+                        TupleValue::Str(s) => s.clone(),
+                        TupleValue::Bool(b) => b.to_string(),
+                    })
+                    .collect()
+            })
+            .collect();
+        let mut stream = k.traverse(0).unwrap();
+        let mut traversed = Vec::new();
+        while let Some(a) = stream.advance().unwrap() {
+            traversed.push(
+                a.coords
+                    .iter()
+                    .map(|(_, v)| match v {
+                        Value::F64(f) => f.to_string(),
+                        other => other.to_display_string(),
+                    })
+                    .collect::<Vec<_>>(),
+            );
+        }
+        assert!(!streamed.is_empty(), "{text}");
+        assert_eq!(streamed, traversed, "{text}");
+    }
 }
