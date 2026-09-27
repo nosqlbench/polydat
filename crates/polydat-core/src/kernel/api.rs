@@ -666,6 +666,42 @@ pub trait Kernel: Send + Sync + internals::KernelInternals {
     /// host keys a checkpoint on.
     fn canonical_hash(&self) -> [u8; 32];
 
+    /// The instance hash of this kernel's program under `ancestors`,
+    /// innermost first (scope_model.md §8.2): what
+    /// [`PolydatProgram::instance_hash`](crate::kernel::PolydatProgram::instance_hash)
+    /// gives for the same programs, whichever engines the kernels are on.
+    fn instance_hash(&self, ancestors: &[&dyn Kernel]) -> [u8; 32] {
+        let chain: Vec<[u8; 32]> = ancestors.iter().map(|a| a.canonical_hash()).collect();
+        crate::kernel::instance_hash_of(self.canonical_hash(), &chain)
+    }
+
+    /// Whether `other` runs the same program (scope_model.md §8.3): their
+    /// canonical hashes are equal, whichever engines the two are on.
+    fn is_equivalent_to(&self, other: &dyn Kernel) -> bool {
+        self.canonical_hash() == other.canonical_hash()
+    }
+
+    /// Whether this kernel's program adds nothing `parent`'s does not
+    /// already supply (scope_model.md §8.3): it is equivalent to
+    /// `parent`, or it outputs nothing but its own inputs and every
+    /// input it declares `parent` declares too. The answer
+    /// [`PolydatProgram::is_subset_of`](crate::kernel::PolydatProgram::is_subset_of)
+    /// gives for the same programs, on any engines.
+    fn is_subset_of(&self, parent: &dyn Kernel) -> bool {
+        if self.is_equivalent_to(parent) {
+            return true;
+        }
+        let inputs = Kernel::input_names(self);
+        if Kernel::output_names(self)
+            .iter()
+            .any(|name| !inputs.contains(name))
+        {
+            return false;
+        }
+        let parent_inputs = Kernel::input_names(parent);
+        inputs.iter().all(|name| parent_inputs.contains(name))
+    }
+
     // ── The per-cycle scope-tree surface (native_scope_trees.md §3) ──
     //
     // Index arguments are positions in `input_names`, coordinates
@@ -797,10 +833,11 @@ pub(crate) mod internals {
         /// nothing.
         fn reset_to_program(&mut self) {}
 
-        /// Record the digest of the graph the compiler resolved for this
-        /// kernel's program, before its engine lowered it: the graph part
-        /// of the program's canonical hash (scope_model.md §8).
-        fn set_graph_identity(&mut self, digest: [u8; 32]);
+        /// Mark `names` as the outputs this kernel's program re-exports
+        /// for its descendants without owning them, before the program
+        /// is shared: part of the program's canonical hash on every
+        /// engine (scope_model.md §8).
+        fn set_inherited_outputs(&mut self, names: Vec<String>);
 
         /// Record the Rule 2 write-throughs this kernel commits, as
         /// `(export_name, source_output)` pairs: what a scope module

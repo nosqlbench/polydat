@@ -311,6 +311,17 @@ constants or fuses nodes, so **one program built on the interpreter, the
 closure tier, native, or pure native code has one canonical hash**, and
 every kernel created from or forked off it reports the same one.
 
+Every kernel built from an assembler's graph carries that graph's
+digest, whichever constructor built it: the normal paths, the raw tier
+constructors (`compile_closures_raw`, `compile_native_raw`,
+`compile_pure_native_raw`), and a graph a host assembles node by node.
+A graph assembled by hand hashes as the source program that resolves to
+the same graph; the compiler also outputs every input by name through a
+port passthrough, so the hand-built graph matches once it declares those
+outputs too. An assembler holds no `for` traversal, which the source
+compile attaches after assembly, so a kernel a raw constructor builds
+from a program with one is hashed without it.
+
 The hash covers:
 
 - every input: its name, port type, kind (coordinate, extern, const),
@@ -323,8 +334,8 @@ The hash covers:
   a string or list with its length);
 - each output's `const`, `shared`, and `volatile` flags;
 - the names declared `const`;
-- the names a subscope builder marked inherited on the interpreter's
-  program;
+- the names a subscope builder marked inherited, which the scope
+  module marks on its program on every engine;
 - every cursor's name and extent; and
 - every `for` traversal in document order: its comprehension as written
   and its body program's canonical hash.
@@ -356,24 +367,30 @@ changes, and the **instance hash** is that identity: SHA-256 over a
 versioned tag, the program's canonical hash, and each ancestor's
 canonical hash, innermost ancestor first.
 `PolydatProgram::instance_hash(&ancestors)` computes it over
-interpreter programs; `polydat::kernel::instance_hash_of(own,
-&ancestor_hashes)` computes it over canonical hashes from any engine and
-yields the same value. The chain is order-sensitive, and polydat does not
-walk it: the host supplies the ancestors it binds the scope under.
+interpreter programs, `Kernel::instance_hash(&ancestors)` over kernels
+of any engine, and `polydat::kernel::instance_hash_of(own,
+&ancestor_hashes)` over canonical hashes from any engine; all three yield
+the same value for the same programs. The chain is order-sensitive, and
+polydat does not walk it: the host supplies the ancestors it binds the
+scope under.
 
 ### 8.3 Equivalence and subset
 
-`PolydatProgram::is_equivalent_to(other)` is true when the two programs'
-canonical hashes are equal, and so means what §8.1 means by the same
-program.
+`is_equivalent_to(other)` is true when the two programs' canonical
+hashes are equal, and so means what §8.1 means by the same program.
 
-`PolydatProgram::is_subset_of(parent)` answers whether a scope adds
-nothing its parent does not already supply. It is true when the program
-is equivalent to `parent`, or when it declares no output and every input
-it declares is also declared by `parent`. The check is structural and
-conservative: a program whose outputs are bindings identical to the
-parent's is not recognized as a subset, so a host that flattens on this
-answer flattens less than it could, never more.
+`is_subset_of(parent)` answers whether a scope adds nothing its parent
+does not already supply. It is true when the program is equivalent to
+`parent`, or when it outputs nothing but its own inputs, which the
+compiler re-exports by name, and every input it declares is also
+declared by `parent`. The check is structural and conservative: a
+program whose outputs are bindings identical to the parent's is not
+recognized as a subset, so a host that flattens on this answer flattens
+less than it could, never more.
+
+Both are on `PolydatProgram`, comparing interpreter programs, and on
+`Kernel`, comparing kernels of any engines; the two give the same answer
+for the same programs.
 
 ### 8.4 Extern closures
 

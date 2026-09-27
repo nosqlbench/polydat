@@ -690,12 +690,9 @@ macro_rules! impl_kernel_trait {
                 self.core.externs.resources()
             }
             fn canonical_hash(&self) -> [u8; 32] {
-                // A compiled kernel records no inherited outputs; the
-                // subscope builder marks them on the interpreter's
-                // program only.
                 crate::kernel::program_identity(
                     self.core.externs.graph_identity(),
-                    std::iter::empty(),
+                    self.core.externs.inherited_outputs().iter(),
                     crate::kernel::Kernel::cursor_schemas(self),
                     crate::kernel::Kernel::traversals(self),
                 )
@@ -797,8 +794,8 @@ macro_rules! impl_kernel_trait {
             fn set_write_throughs(&mut self, pairs: Vec<(String, String)>) {
                 self.core.externs.set_write_throughs(pairs);
             }
-            fn set_graph_identity(&mut self, digest: [u8; 32]) {
-                self.core.externs.set_graph_identity(digest);
+            fn set_inherited_outputs(&mut self, names: Vec<String>) {
+                self.core.externs.set_inherited_outputs(names);
             }
             /// A compiled kernel keeps the traversals; each carries the
             /// comprehension its producer resolved to at compile time.

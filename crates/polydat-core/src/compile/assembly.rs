@@ -1367,6 +1367,7 @@ impl PolydatAssembler {
             resolved.ledger.clone(),
         )?;
         extras.externs.set_resources(resolved.resources.clone());
+        extras.externs.set_graph_identity(resolved.graph_identity());
         extras.externs.set_output_names(&resolved.output_order);
         extras
             .externs
@@ -1593,7 +1594,9 @@ impl PolydatAssembler {
     }
 
     /// The extern inputs of a resolved graph, at the slots the layout
-    /// gives them.
+    /// gives them, with the graph's identity digest: every compiled
+    /// kernel built from a resolved graph, raw constructors included,
+    /// reports the canonical hash the graph has (scope_model.md §8).
     fn externs_of(resolved: &ResolvedDag) -> Result<crate::compile::externs::Externs, String> {
         let layout = slot_layout(resolved);
         let mut externs = crate::compile::externs::Externs::new(
@@ -1605,6 +1608,7 @@ impl PolydatAssembler {
             resolved.ledger.clone(),
         )?;
         externs.set_resources(resolved.resources.clone());
+        externs.set_graph_identity(resolved.graph_identity());
         externs.set_output_names(&resolved.output_order);
         externs.set_output_modifiers(&resolved.output_modifiers);
         externs.set_const_inits(&resolved.const_inits);
@@ -3375,9 +3379,7 @@ impl PolydatAssembler {
                 let folded = log.is_some().then(|| Self::constant_sites(&resolved));
                 let (node_total, output_total) =
                     (resolved.nodes.len(), resolved.output_order.len());
-                let identity = resolved.graph_identity();
-                let mut kernel = Self::closures_from(resolved, prov).map_err(asked)?;
-                kernel.set_graph_identity(identity);
+                let kernel = Self::closures_from(resolved, prov).map_err(asked)?;
                 Self::log_folded(kernel.as_ref(), folded, log.as_deref_mut());
                 Self::log_summary(log, node_total, output_total);
                 Ok(kernel)
@@ -3414,9 +3416,8 @@ impl PolydatAssembler {
                         ));
                     }
                     let prov = Self::provenance_for(prov, &resolved);
-                    let identity = resolved.graph_identity();
                     let kernel = Self::hybrid_from(resolved).map_err(asked)?;
-                    let mut kernel: Box<dyn crate::compile::SlotKernel> = match prov {
+                    let kernel: Box<dyn crate::compile::SlotKernel> = match prov {
                         Provenance::Raw => Box::new(kernel.into_raw()),
                         Provenance::Pull => Box::new(kernel.into_pull()),
                         // `provenance_for` resolves `Auto` to `Raw`,
@@ -3429,7 +3430,6 @@ impl PolydatAssembler {
                             return Err(refused("native code has no push-only kernel".into()));
                         }
                     };
-                    kernel.set_graph_identity(identity);
                     Self::log_folded(kernel.as_ref(), folded, log.as_deref_mut());
                     Self::log_summary(log, node_total, output_total);
                     Ok(kernel)
@@ -3467,12 +3467,10 @@ impl PolydatAssembler {
                             )));
                         }
                     };
-                    let identity = resolved.graph_identity();
-                    let mut kernel: Box<dyn crate::compile::SlotKernel> = match prov {
+                    let kernel: Box<dyn crate::compile::SlotKernel> = match prov {
                         Provenance::Raw => Box::new(Self::jit_raw_from(resolved).map_err(asked)?),
                         _ => Box::new(Self::jit_push_pull_from(resolved).map_err(asked)?),
                     };
-                    kernel.set_graph_identity(identity);
                     Self::log_folded(kernel.as_ref(), folded, log.as_deref_mut());
                     Self::log_summary(log, node_total, output_total);
                     Ok(kernel)

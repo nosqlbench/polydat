@@ -730,12 +730,11 @@ impl<P> SubcontextBuilder<P> {
                 .map_err(|e| ContractViolation::Compile(e.to_string()))?
         };
 
-        // ----- Apply inherited-output marking.
-        // Must happen before the program Arc is cloned out into
-        // the artifact (mark_inherited_outputs requires unique
-        // ownership of the program Arc).
+        // ----- Apply inherited-output marking, before the program Arc
+        // is cloned out into the artifact. The module keeps the names so
+        // its program on every other engine carries the same marks.
         if !inherited_outputs.is_empty() {
-            kernel.mark_inherited_outputs(inherited_outputs);
+            kernel.mark_inherited_outputs(inherited_outputs.clone());
         }
 
         // ----- Bake Rule 2 write-throughs into the program. -----
@@ -808,6 +807,7 @@ impl<P> SubcontextBuilder<P> {
             program,
             statements,
             options: dsl_options.clone(),
+            inherited_outputs,
             programs: std::sync::Mutex::new(std::collections::HashMap::from([(
                 crate::Engine::Interpreter(crate::JitMode::Auto),
                 seeded,

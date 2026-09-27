@@ -1300,8 +1300,8 @@ impl PolydatProgram {
     /// declaration is structurally a no-op).
     ///
     /// The check is structural: true when the inner program has
-    /// zero outputs and zero inputs beyond what the parent
-    /// already exposes. New bindings whose definitions equal
+    /// no outputs but its inputs' own and no inputs beyond what the
+    /// parent already exposes. New bindings whose definitions equal
     /// parent bindings are not recognized as a subset.
     pub fn is_subset_of(&self, parent: &PolydatProgram) -> bool {
         // Equivalent programs flatten trivially.
@@ -1313,8 +1313,15 @@ impl PolydatProgram {
         // / nodes the parent doesn't carry. Cheapest check:
         // an inner program with no outputs of its own and
         // every input also declared by the parent is a
-        // structural no-op.
-        if !self.output_list.is_empty() {
+        // structural no-op. An output named for an input is the
+        // input itself, which the compiler re-exports by name.
+        let inputs: std::collections::HashSet<&str> =
+            self.input_defs.iter().map(|d| d.name.as_str()).collect();
+        if self
+            .output_list
+            .iter()
+            .any(|(name, _, _)| !inputs.contains(name.as_str()))
+        {
             return false;
         }
         // Inputs: every name declared by `self` must be

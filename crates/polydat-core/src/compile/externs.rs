@@ -172,6 +172,10 @@ struct ScopeCells {
     /// The outputs whose value is fixed for a kernel's life: consts and
     /// values folded at build. `folded_value` answers only for these.
     fixed_outputs: std::collections::HashSet<String>,
+    /// The outputs the program re-exports for its descendants without
+    /// owning them, sorted: marked by the subscope builder, part of the
+    /// canonical hash (scope_model.md §8).
+    inherited_outputs: Vec<String>,
 }
 
 /// The extern inputs of one compiled kernel.
@@ -259,6 +263,7 @@ impl Clone for Externs {
                 origins: self.scope.origins.clone(),
                 const_inits: self.scope.const_inits.clone(),
                 fixed_outputs: self.scope.fixed_outputs.clone(),
+                inherited_outputs: self.scope.inherited_outputs.clone(),
             }),
             intent: self.intent.clone(),
             next_bit: std::sync::atomic::AtomicU8::new(
@@ -394,6 +399,20 @@ impl Externs {
     /// Record the graph digest of this kernel's program, once, at build.
     pub(crate) fn set_graph_identity(&mut self, digest: [u8; 32]) {
         self.graph_identity = digest;
+    }
+
+    /// The outputs this kernel's program re-exports without owning
+    /// them, sorted.
+    pub(crate) fn inherited_outputs(&self) -> &[String] {
+        &self.scope.inherited_outputs
+    }
+
+    /// Mark `names` as outputs the program re-exports without owning
+    /// them, before the program is shared.
+    pub(crate) fn set_inherited_outputs(&mut self, mut names: Vec<String>) {
+        names.sort();
+        names.dedup();
+        self.scope.inherited_outputs = names;
     }
 
     /// The broadcast cell for the output at `slot`, made on the first

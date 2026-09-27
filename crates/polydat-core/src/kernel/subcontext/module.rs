@@ -169,6 +169,10 @@ pub struct ScopeModule<M> {
     /// the same body for another engine.
     pub(crate) statements: Vec<Statement>,
     pub(crate) options: crate::dsl::compile::CompileOptions,
+    /// The outputs the body re-exports for descendants without owning
+    /// them: marked on this module's program on every engine, so each
+    /// engine's program has the same canonical hash.
+    pub(crate) inherited_outputs: Vec<String>,
     /// This module's program per engine, built on the first ask for
     /// that engine and shared by every instance after it — the same
     /// carrier a `for` body and a tile's projection body use
@@ -212,13 +216,19 @@ impl<M> ScopeModule<M> {
         if let Some(program) = programs.get(&engine) {
             return Ok(program.clone());
         }
-        let kernel = crate::dsl::compile::compile_template_with_engine(
+        let mut kernel = crate::dsl::compile::compile_template_with_engine(
             &crate::dsl::ast::PolydatFile {
                 statements: self.statements.clone(),
             },
             &self.options,
             engine,
         )?;
+        if !self.inherited_outputs.is_empty() {
+            crate::kernel::KernelInternals::set_inherited_outputs(
+                kernel.as_mut(),
+                self.inherited_outputs.clone(),
+            );
+        }
         let program = kernel.into_program();
         programs.insert(engine, program.clone());
         Ok(program)

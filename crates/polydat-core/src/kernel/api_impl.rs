@@ -340,8 +340,8 @@ impl crate::kernel::Kernel for PolydatKernel {
 }
 
 impl crate::kernel::KernelInternals for PolydatKernel {
-    fn set_graph_identity(&mut self, digest: [u8; 32]) {
-        PolydatKernel::set_graph_identity(self, digest);
+    fn set_inherited_outputs(&mut self, names: Vec<String>) {
+        PolydatKernel::mark_inherited_outputs(self, names);
     }
     fn set_write_throughs(&mut self, pairs: Vec<(String, String)>) {
         PolydatKernel::set_write_throughs(
