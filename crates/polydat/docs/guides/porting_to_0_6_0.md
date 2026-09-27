@@ -56,6 +56,7 @@ The release makes three things true that a host builds on:
 | New variants: `KernelError::ConstInit`, `AssemblyError::ConstInit`, `AssemblyError::NativeCone`, `WriteError::ConstSlot`, `WriteError::FromParent`, `ContractViolation::Bind`, `RuntimeError::ZipLengthMismatch`, `ValidationError::PredicateContextRequired`, `InputKind::Const` | an exhaustive `match` on any of these enums (E0004) | add the arm or a wildcard |
 | The node types `SessionStartMillis` and `ElapsedMillis` are removed | code that named them | a const capture; see the next table |
 | `polydat_grammar::PragmaSet` loses its `parent` field, `attach_to`, and `PragmaConflict` | code that chained pragma sets by hand | `PragmaSet::nested` builds a nested scope's set from its enclosing one ([polydat_grammar.md](../design/polydat_grammar.md) §14.1) |
+| `#[polydat_node]` refuses a signature that mixes a const list (`Const<Vec<C>>`) with a wire variadic (`&[T]`), and an unknown `from = (…)` setup source | a host node written that way, which the macro accepted before | split it into two nodes, or pass the constants as individual `Const` arguments ([library_catalog.md](../design/library_catalog.md), "Shapes") |
 
 A healing write becomes a conversion the host asks for:
 
@@ -342,6 +343,11 @@ a rule the specifications now state and every engine follows.
   tuples by position; `Strategy::select` and `Selection` give a
   strategy's order as positions; `cycle_length` gives a cycle zip's
   count.
+- **Source factories are specified.** `rewind_for_poll` restarts a
+  source between polling phases; the range source rewinds to its
+  start, and the extending range to its start and base chunk. A rewind
+  is safe while other threads read the source
+  ([cursor_partitions.md](../design/cursor_partitions.md) §8).
 
 ## Not breaking, though it looks it
 
@@ -358,6 +364,12 @@ a rule the specifications now state and every engine follows.
   a runtime type assertion would never fire; a program that sets the
   pragma compiles to the same graph as one that does not
   ([graph_compiler.md](../design/graph_compiler.md) §2.3).
+- **A wire type mismatch inside a node reads differently.** The panic
+  `Wire::extract` raises when a compiled wire's value does not have the
+  node's argument type now names both types
+  (`derive_support::extract_mismatch`), and the engine's failure report
+  names the node. The compiler's typing keeps it from firing; only the
+  text of a report changes.
 
 ## Known issues
 
@@ -382,7 +394,6 @@ when its change lands.
 - The resource accessor moves from a process global to the kernel tree.
 - `ScopedExpr::set` returns a `Result`.
 - Extern defaults are typed.
-- Rewinding a source is safe under concurrency.
 - Named generators are specified.
 
 ## Checklist
