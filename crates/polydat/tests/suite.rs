@@ -155,6 +155,8 @@ mod variadic_lowering;
 mod vector_set_ops;
 #[path = "vectordata_concurrency.rs"]
 mod vectordata_concurrency;
+#[path = "vectordata_fixture.rs"]
+mod vectordata_fixture;
 #[path = "vectordata_integration.rs"]
 mod vectordata_integration;
 #[path = "volatile_is_never_current.rs"]

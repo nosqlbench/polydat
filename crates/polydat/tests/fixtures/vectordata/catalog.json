@@ -1,0 +1,21 @@
+[
+  {
+    "name": "polydat-tiny",
+    "path": "tiny/dataset.yaml",
+    "dataset_type": "dataset.yaml",
+    "layout": {
+      "attributes": {
+        "distance_function": "L2"
+      },
+      "profiles": {
+        "default": {
+          "base_count": 6,
+          "base_vectors": "base_vectors.fvec",
+          "query_vectors": "query_vectors.fvec",
+          "metadata_content": "metadata_content.u8",
+          "metadata_predicates": "metadata_predicates.i32"
+        }
+      }
+    }
+  }
+]
