@@ -296,6 +296,9 @@ impl crate::kernel::Kernel for PolydatKernel {
     fn resources(&self) -> &crate::resource::ResourceScope {
         self.program().resources()
     }
+    fn canonical_hash(&self) -> [u8; 32] {
+        self.program().canonical_hash()
+    }
     fn coord_count(&self) -> usize {
         self.program().coord_count()
     }
@@ -337,6 +340,9 @@ impl crate::kernel::Kernel for PolydatKernel {
 }
 
 impl crate::kernel::KernelInternals for PolydatKernel {
+    fn set_graph_identity(&mut self, digest: [u8; 32]) {
+        PolydatKernel::set_graph_identity(self, digest);
+    }
     fn set_write_throughs(&mut self, pairs: Vec<(String, String)>) {
         PolydatKernel::set_write_throughs(
             self,
@@ -390,6 +396,9 @@ impl crate::kernel::KernelProgram for crate::kernel::PolydatProgram {
     }
     fn resources(&self) -> &crate::resource::ResourceScope {
         crate::kernel::PolydatProgram::resources(self)
+    }
+    fn canonical_hash(&self) -> [u8; 32] {
+        crate::kernel::PolydatProgram::canonical_hash(self)
     }
     fn program_id(&self) -> crate::kernel::ProgramId {
         crate::kernel::ProgramId(self as *const Self as *const () as usize)

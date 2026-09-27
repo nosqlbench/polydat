@@ -354,6 +354,11 @@ pub struct PolydatProgram {
     /// The resource scope of the tree this program belongs to: the
     /// root's, shared by every program of the tree.
     resources: crate::resource::ResourceScope,
+    /// The digest of the graph the compiler resolved, before the
+    /// interpreter folded or fused it: what makes this program's
+    /// canonical hash equal the compiled engines'. `None` for a program
+    /// built without the compiler, whose own graph is hashed instead.
+    graph_identity: Option<[u8; 32]>,
 }
 
 unsafe impl Send for PolydatProgram {}
@@ -417,6 +422,7 @@ impl PolydatProgram {
             ast: None,
             ledger,
             resources: crate::resource::ResourceScope::new(),
+            graph_identity: None,
         }
     }
 
@@ -1342,16 +1348,8 @@ impl PolydatProgram {
     /// (`build_workload_params_kernel`) whose `const` bindings
     /// land in const slots `canonical_hash` covers.
     pub fn instance_hash(&self, ancestors: &[&PolydatProgram]) -> [u8; 32] {
-        use sha2::{Digest, Sha256};
-        let mut h = Sha256::new();
-        h.update(b"PolydatProgram-instance-v1\n");
-        h.update(self.canonical_hash());
-        for a in ancestors {
-            h.update(a.canonical_hash());
-        }
-        let mut out = [0u8; 32];
-        out.copy_from_slice(&h.finalize());
-        out
+        let chain: Vec<[u8; 32]> = ancestors.iter().map(|a| a.canonical_hash()).collect();
+        instance_hash_of(self.canonical_hash(), &chain)
     }
 
     /// Names of the non-coordinate inputs (iteration externs and
@@ -1446,15 +1444,19 @@ impl PolydatProgram {
         unresolved.into_iter().collect()
     }
 
-    /// Canonical content-addressable hash of this program.
+    /// Canonical content-addressable hash of this program
+    /// (scope_model.md §8).
     ///
     /// SHA-256 over a deterministic byte sequence describing
     /// every node's kind + constant slots, every wiring edge,
-    /// and the named input / output declarations. Stable
-    /// across compilations of equivalent input — two programs
-    /// produced from identical source + identical workload-
-    /// scope state hash to the same value, and a change that
-    /// affects what the program actually computes (a renamed
+    /// and the named input / output declarations, taken over
+    /// the graph the compiler resolved before any engine folded
+    /// or fused it, so the same program on any engine hashes
+    /// alike ([`Kernel::canonical_hash`](crate::Kernel::canonical_hash)).
+    /// Stable across compilations of equivalent input — two
+    /// programs produced from identical source + identical
+    /// workload-scope state hash to the same value, and a change
+    /// that affects what the program actually computes (a renamed
     /// output, a new node, a const-slot value change, a
     /// re-routed wire) shifts the hash.
     ///
@@ -1488,34 +1490,151 @@ impl PolydatProgram {
     ///   NaNs are distinguishable from each other only by
     ///   their bit pattern (rare but consistent).
     pub fn canonical_hash(&self) -> [u8; 32] {
+        let graph = self
+            .graph_identity
+            .unwrap_or_else(|| self.identity_graph().digest());
+        program_identity(
+            graph,
+            self.inherited_outputs.iter(),
+            &self.cursor_schemas,
+            &self.traversals,
+        )
+    }
+
+    /// The graph this program's identity is computed over, as it stands.
+    fn identity_graph(&self) -> IdentityGraph<'_> {
+        IdentityGraph {
+            nodes: &self.nodes,
+            wiring: &self.wiring,
+            input_defs: &self.input_defs,
+            outputs: self
+                .output_list
+                .iter()
+                .map(|(n, ni, pi)| (n.as_str(), *ni, *pi))
+                .collect(),
+            output_modifiers: &self.output_modifiers,
+            const_outputs: &self.const_outputs,
+        }
+    }
+
+    /// Record the digest of the graph the compiler resolved, before any
+    /// engine transformed it, as this program's graph identity.
+    pub(crate) fn set_graph_identity(&mut self, digest: [u8; 32]) {
+        self.graph_identity = Some(digest);
+    }
+}
+
+/// The part of a program's graph its identity covers: nodes, wiring,
+/// inputs, outputs with their modifiers, and the `const` names. The
+/// compiler builds one over the graph it resolved, before an engine
+/// folds or fuses anything, so every engine starts from the same one
+/// (scope_model.md §8).
+pub(crate) struct IdentityGraph<'a> {
+    pub(crate) nodes: &'a [Box<dyn PolydatNode>],
+    pub(crate) wiring: &'a [Vec<WireSource>],
+    pub(crate) input_defs: &'a [InputDef],
+    /// `(name, node, port)` for every output.
+    pub(crate) outputs: Vec<(&'a str, usize, usize)>,
+    pub(crate) output_modifiers: &'a HashMap<String, crate::dsl::ast::BindingModifier>,
+    pub(crate) const_outputs: &'a std::collections::HashSet<String>,
+}
+
+/// The instance hash of a program whose canonical hash is `own`, under
+/// ancestors whose canonical hashes are `ancestors`, innermost first:
+/// SHA-256 over a versioned tag, `own`, and each ancestor's hash in
+/// order. [`PolydatProgram::instance_hash`] is this over interpreter
+/// programs; a host holding kernels of any engine passes each kernel's
+/// [`Kernel::canonical_hash`](crate::Kernel::canonical_hash) and gets
+/// the same value (scope_model.md §8).
+pub fn instance_hash_of(own: [u8; 32], ancestors: &[[u8; 32]]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(b"PolydatProgram-instance-v1\n");
+    h.update(own);
+    for a in ancestors {
+        h.update(a);
+    }
+    h.finalize().into()
+}
+
+/// A program's canonical hash from its graph digest
+/// ([`IdentityGraph::digest`]), its inherited-output names, its
+/// cursors, and its traversals: what [`PolydatProgram::canonical_hash`] and
+/// [`Kernel::canonical_hash`](crate::Kernel::canonical_hash) return.
+pub(crate) fn program_identity<'a>(
+    graph: [u8; 32],
+    inherited: impl Iterator<Item = &'a String>,
+    cursors: &[crate::iteration::source::SourceSchema],
+    traversals: &[crate::dsl::traversal::Traversal],
+) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(b"PolydatProgram-v2\n");
+    h.update(graph);
+    // Inherited-output set: names that pass through this scope
+    // without it owning them, which decides scope-coordinate
+    // attribution.
+    let mut inherited: Vec<&String> = inherited.collect();
+    inherited.sort();
+    for name in inherited {
+        h.update(b"inh:");
+        h.update(name.as_bytes());
+        h.update(b"\n");
+    }
+    // Cursor schemas: a different source bound is a different program.
+    for schema in cursors {
+        h.update(b"cursor:");
+        h.update(schema.name.as_bytes());
+        h.update(b":");
+        h.update(format!("{:?}", schema.extent).as_bytes());
+        h.update(b"\n");
+    }
+    // Traversals, in document order: the comprehension as written and
+    // the body program's own canonical hash, so a change inside a `for`
+    // body is a different program.
+    for t in traversals {
+        h.update(b"for:");
+        h.update((t.source_text.len() as u64).to_le_bytes().as_ref());
+        h.update(t.source_text.as_bytes());
+        h.update(b":");
+        h.update(t.program.canonical_hash());
+        h.update(b"\n");
+    }
+    h.finalize().into()
+}
+
+impl IdentityGraph<'_> {
+    /// SHA-256 over the graph in canonical form: the inputs by name,
+    /// then each output by name with the Merkle hash of the node
+    /// producing it and its modifier flags, then the `const` names.
+    pub(crate) fn digest(&self) -> [u8; 32] {
         use sha2::{Digest, Sha256};
         let mut h = Sha256::new();
-        h.update(b"PolydatProgram-v1\n");
+        h.update(b"PolydatGraph-v2\n");
 
-        // Inputs: emit name + kind + port type. Sorted by name
-        // for stability — input declaration order is set by
-        // the compiler's traversal of the source, which is
-        // stable for a given source but can drift across
-        // compiler revisions.
-        let mut inputs: Vec<(usize, &InputDef)> = self.input_defs.iter().enumerate().collect();
-        inputs.sort_by(|a, b| a.1.name.cmp(&b.1.name));
-        for (_, def) in &inputs {
+        // Inputs: name + port type + kind + declared default, sorted by
+        // name, since declaration order is the compiler's choice. The
+        // default is what the program computes from when nothing writes
+        // the input, and is where a host fixes a value before compiling
+        // (`transform::assign_values`).
+        let mut inputs: Vec<&InputDef> = self.input_defs.iter().collect();
+        inputs.sort_by(|a, b| a.name.cmp(&b.name));
+        for def in &inputs {
             h.update(b"in:");
             h.update(def.name.as_bytes());
             h.update(b":");
             h.update(format!("{:?}", def.port_type).as_bytes());
             h.update(b":");
             h.update(format!("{:?}", def.kind).as_bytes());
+            h.update(b":");
+            h.update(format!("{:?}", def.default).as_bytes());
             h.update(b"\n");
         }
 
-        // Outputs: alphabetical. For each output, walk the
-        // producing node and its input chain depth-first
-        // through `node_canonical_hash` (memoised). The
-        // stream of (output-name, node-hash) tuples is the
-        // canonical "what does this program produce?" form.
-        let mut outputs: Vec<&(String, usize, usize)> = self.output_list.iter().collect();
-        outputs.sort_by(|a, b| a.0.cmp(&b.0));
+        // Outputs, alphabetically: each with the memoised Merkle hash
+        // of the node and port producing it.
+        let mut outputs = self.outputs.clone();
+        outputs.sort_by(|a, b| a.0.cmp(b.0));
         let mut node_hashes: HashMap<usize, [u8; 32]> = HashMap::new();
         for (name, ni, pi) in &outputs {
             let (nh, pi_eff) = self.port_identity(*ni, *pi, &mut node_hashes);
@@ -1526,15 +1645,9 @@ impl PolydatProgram {
             h.update(b":");
             h.update(nh);
             h.update(b"\n");
-            // Output modifier flags (`final`, `shared`,
-            // `volatile`) — affect semantic identity. A
-            // `shared` slot reads differently than a `final`
-            // slot even with the same producing node; a
-            // `volatile` mark is part of the workload's
-            // identity-decision intent. Emitting individual
-            // flag bytes (not Debug-format) so the hash stays
-            // stable under struct-field reordering.
-            if let Some(m) = self.output_modifiers.get(name.as_str()) {
+            // Modifier flags as individual bytes, so the hash does not
+            // depend on the modifier type's layout.
+            if let Some(m) = self.output_modifiers.get(*name) {
                 h.update(b"  mod:");
                 h.update(if m.is_const() { b"F" } else { b"-" });
                 h.update(if m.is_shared() { b"S" } else { b"-" });
@@ -1543,41 +1656,13 @@ impl PolydatProgram {
             }
         }
 
-        // Inherited-output set: marks names that pass through
-        // this scope without "owning" them. Affects
-        // compute_own_coordinates → scope-coordinate
-        // attribution → potentially affects observable
-        // identity (e.g. label-set keys in metrics).
-        let mut inherited: Vec<&String> = self.inherited_outputs.iter().collect();
-        inherited.sort();
-        for name in inherited {
-            h.update(b"inh:");
-            h.update(name.as_bytes());
-            h.update(b"\n");
-        }
-
-        // Init-output set: every name whose producing node is
-        // expected to fold to a constant at scope-init time
-        // (the init contract, evaluation_model.md). A workload
-        // edit that promotes a binding from `final` to `init`
-        // (or vice versa) changes the eval-lifecycle of the
-        // node graph — distinct programs.
+        // The names declared `const`: moving a binding in or out of
+        // `const` changes when it is evaluated.
         let mut init_outs: Vec<&String> = self.const_outputs.iter().collect();
         init_outs.sort();
         for name in init_outs {
             h.update(b"init:");
             h.update(name.as_bytes());
-            h.update(b"\n");
-        }
-
-        // Cursor schemas: source declarations carry into the
-        // program's compile-time identity (different source
-        // bounds = different program).
-        for schema in &self.cursor_schemas {
-            h.update(b"cursor:");
-            h.update(schema.name.as_bytes());
-            h.update(b":");
-            h.update(format!("{:?}", schema.extent).as_bytes());
             h.update(b"\n");
         }
 
@@ -1747,7 +1832,9 @@ impl PolydatProgram {
         }
         h.finalize().into()
     }
+}
 
+impl PolydatProgram {
     /// Number of nodes in the program.
     pub fn node_count(&self) -> usize {
         self.nodes.len()
@@ -2328,10 +2415,10 @@ impl PolydatProgram {
 /// Hash one [`super::WireSource`] in canonical form. Inputs
 /// resolve to their *name* (stable identifier) rather than
 /// their positional index. Node-output references recurse via
-/// [`PolydatProgram::node_canonical_hash`].
+/// [`IdentityGraph::node_canonical_hash`].
 fn canonical_wire_source(
     src: &super::WireSource,
-    program: &PolydatProgram,
+    program: &IdentityGraph<'_>,
     memo: &mut HashMap<usize, [u8; 32]>,
     h: &mut sha2::Sha256,
 ) {

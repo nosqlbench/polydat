@@ -439,7 +439,7 @@ impl PolydatKernel {
     /// bearing materialization step.
     ///
     /// Used by the cache-and-rebind path the host drives
-    /// (scope_model.md §8): a phase scope compiles once, caches its
+    /// (scope_model.md §9): a phase scope compiles once, caches its
     /// program, and instantiates a fresh kernel per `run_phase` call
     /// against the cached program.
     pub(crate) fn from_program(program: Arc<PolydatProgram>) -> Self {
@@ -601,6 +601,14 @@ impl PolydatKernel {
         Arc::get_mut(&mut self.program)
             .expect("set_resources must be called before program is shared")
             .set_resources(resources);
+    }
+
+    /// Record the digest of the graph the compiler resolved as the
+    /// program's graph identity, before the program is shared.
+    pub(crate) fn set_graph_identity(&mut self, digest: [u8; 32]) {
+        Arc::get_mut(&mut self.program)
+            .expect("set_graph_identity must be called before program is shared")
+            .set_graph_identity(digest);
     }
 
     /// Record the const bindings, before the program is shared.

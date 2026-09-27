@@ -49,8 +49,8 @@ pub enum TokenKind {
     Extern,
     /// `shared` keyword
     Shared,
-    /// `volatile` keyword. Wire-coloring modifier excluding the
-    /// binding's value from `hash_const`.
+    /// `volatile` keyword: the modifier that makes a binding
+    /// re-evaluated on every pull and never constant-folded.
     Volatile,
     /// `cursor` keyword
     Cursor,

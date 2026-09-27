@@ -42,8 +42,10 @@ pub enum Statement {
     ///   instances in the same lineage. See
     ///   `crates/polydat/docs/design/scope_model.md` §6
     ///   "Shared mutable bindings".
-    /// - **`volatile`** — per-cycle, excluded from
-    ///   `hash_const`.
+    /// - **`volatile`** — re-evaluated on every pull and never
+    ///   constant-folded. The program's canonical hash
+    ///   (`scope_model.md` §8) covers the binding's expression
+    ///   and its `volatile` flag, never a value it produced.
     ///
     /// Surface forms:
     /// ```text
@@ -502,11 +504,11 @@ pub enum WireModifier {
     /// The runtime propagates iteration N's end state into
     /// iteration N+1's start state.
     Shared,
-    /// `volatile` — wire's value is excluded from `hash_const`
-    /// (the const-folded identity hash). Authors mark wires
-    /// whose value should NOT contribute to resume-identity
-    /// even when the source's structural detection would
-    /// otherwise allow folding.
+    /// `volatile` — the binding is re-evaluated on every pull and
+    /// never constant-folded, even where its inputs would allow a
+    /// fold. The program's canonical hash (`scope_model.md` §8)
+    /// covers the binding's expression and the `volatile` flag; no
+    /// value the binding produces is hashed.
     Volatile,
 }
 

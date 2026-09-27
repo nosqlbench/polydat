@@ -294,6 +294,25 @@ impl ResolvedDag {
             .map(|d| d.name.clone())
             .collect()
     }
+
+    /// The digest of this graph's identity (scope_model.md §8), taken
+    /// before any engine folds or fuses it, so every engine's kernel
+    /// reports the same canonical hash.
+    pub(crate) fn graph_identity(&self) -> [u8; 32] {
+        crate::kernel::IdentityGraph {
+            nodes: &self.nodes,
+            wiring: &self.wiring,
+            input_defs: &self.input_defs,
+            outputs: self
+                .output_map
+                .iter()
+                .map(|(n, &(ni, pi))| (n.as_str(), ni, pi))
+                .collect(),
+            output_modifiers: &self.output_modifiers,
+            const_outputs: &self.const_outputs,
+        }
+        .digest()
+    }
 }
 
 /// Per-port slot layout for compiled kernels
@@ -1221,6 +1240,7 @@ impl PolydatAssembler {
         let template = self.template;
         let mut resolved = self.resolve_with_log(log.as_deref_mut())?;
         let (node_total, output_total) = (resolved.nodes.len(), resolved.output_order.len());
+        let identity = resolved.graph_identity();
         crate::compile::cone::extract_jit_cones(&mut resolved, jit_mode)?;
         let _coord_names = resolved.input_names();
         let modifiers = resolved.output_modifiers.clone();
@@ -1241,6 +1261,7 @@ impl PolydatAssembler {
             resolved.ledger.clone(),
         )?;
         kernel.set_resources(resolved.resources.clone());
+        kernel.set_graph_identity(identity);
         if !cursors.is_empty() {
             kernel.set_cursor_schemas(cursors);
         }
@@ -3340,7 +3361,9 @@ impl PolydatAssembler {
                 let folded = log.is_some().then(|| Self::constant_sites(&resolved));
                 let (node_total, output_total) =
                     (resolved.nodes.len(), resolved.output_order.len());
-                let kernel = Self::closures_from(resolved, prov).map_err(asked)?;
+                let identity = resolved.graph_identity();
+                let mut kernel = Self::closures_from(resolved, prov).map_err(asked)?;
+                kernel.set_graph_identity(identity);
                 Self::log_folded(kernel.as_ref(), folded, log.as_deref_mut());
                 Self::log_summary(log, node_total, output_total);
                 Ok(kernel)
@@ -3377,8 +3400,9 @@ impl PolydatAssembler {
                         ));
                     }
                     let prov = Self::provenance_for(prov, &resolved);
+                    let identity = resolved.graph_identity();
                     let kernel = Self::hybrid_from(resolved).map_err(asked)?;
-                    let kernel: Box<dyn crate::compile::SlotKernel> = match prov {
+                    let mut kernel: Box<dyn crate::compile::SlotKernel> = match prov {
                         Provenance::Raw => Box::new(kernel.into_raw()),
                         Provenance::Pull => Box::new(kernel.into_pull()),
                         // `provenance_for` resolves `Auto` to `Raw`,
@@ -3391,6 +3415,7 @@ impl PolydatAssembler {
                             return Err(refused("native code has no push-only kernel".into()));
                         }
                     };
+                    kernel.set_graph_identity(identity);
                     Self::log_folded(kernel.as_ref(), folded, log.as_deref_mut());
                     Self::log_summary(log, node_total, output_total);
                     Ok(kernel)
@@ -3428,10 +3453,12 @@ impl PolydatAssembler {
                             )));
                         }
                     };
-                    let kernel: Box<dyn crate::compile::SlotKernel> = match prov {
+                    let identity = resolved.graph_identity();
+                    let mut kernel: Box<dyn crate::compile::SlotKernel> = match prov {
                         Provenance::Raw => Box::new(Self::jit_raw_from(resolved).map_err(asked)?),
                         _ => Box::new(Self::jit_push_pull_from(resolved).map_err(asked)?),
                     };
+                    kernel.set_graph_identity(identity);
                     Self::log_folded(kernel.as_ref(), folded, log.as_deref_mut());
                     Self::log_summary(log, node_total, output_total);
                     Ok(kernel)

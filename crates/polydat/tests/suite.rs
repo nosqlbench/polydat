@@ -115,6 +115,8 @@ mod polydat_examples_test;
 mod polydat_files_test;
 #[path = "predicate_analyzer_soundness.rs"]
 mod predicate_analyzer_soundness;
+#[path = "program_identity.rs"]
+mod program_identity;
 #[path = "resource_bounds_verification.rs"]
 mod resource_bounds_verification;
 #[path = "rustdoc_examples.rs"]

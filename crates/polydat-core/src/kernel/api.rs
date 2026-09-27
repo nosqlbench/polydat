@@ -659,6 +659,13 @@ pub trait Kernel: Send + Sync + internals::KernelInternals {
     /// under it, and its traversal bodies share the scope.
     fn resources(&self) -> &crate::resource::ResourceScope;
 
+    /// The canonical hash of this kernel's program (scope_model.md §8):
+    /// equal for one program built on any of the four engines, and for
+    /// every kernel created from or forked off it, and a function of
+    /// what the program computes rather than of its source text. What a
+    /// host keys a checkpoint on.
+    fn canonical_hash(&self) -> [u8; 32];
+
     // ── The per-cycle scope-tree surface (native_scope_trees.md §3) ──
     //
     // Index arguments are positions in `input_names`, coordinates
@@ -790,6 +797,11 @@ pub(crate) mod internals {
         /// nothing.
         fn reset_to_program(&mut self) {}
 
+        /// Record the digest of the graph the compiler resolved for this
+        /// kernel's program, before its engine lowered it: the graph part
+        /// of the program's canonical hash (scope_model.md §8).
+        fn set_graph_identity(&mut self, digest: [u8; 32]);
+
         /// Record the Rule 2 write-throughs this kernel commits, as
         /// `(export_name, source_output)` pairs: what a scope module
         /// hands the kernels it instantiates.
@@ -848,6 +860,11 @@ pub trait KernelProgram: Send + Sync {
     /// from it.
     fn resources(&self) -> &crate::resource::ResourceScope;
 
+    /// The canonical hash of this program, the one
+    /// [`Kernel::canonical_hash`] reports for every kernel created from
+    /// it.
+    fn canonical_hash(&self) -> [u8; 32];
+
     /// This program's identity, equal to [`Kernel::program_id`] of every
     /// kernel created from it.
     fn program_id(&self) -> ProgramId;
@@ -876,6 +893,9 @@ impl<K: Kernel + Clone + Send + Sync + 'static> KernelProgram for SharedKernel<K
     }
     fn resources(&self) -> &crate::resource::ResourceScope {
         self.0.resources()
+    }
+    fn canonical_hash(&self) -> [u8; 32] {
+        self.0.canonical_hash()
     }
     fn program_id(&self) -> ProgramId {
         self.0.program_id()

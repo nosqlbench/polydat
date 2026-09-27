@@ -224,6 +224,10 @@ pub(crate) struct Externs {
     /// The resource scope of the tree this kernel's program belongs to,
     /// shared by every clone.
     resources: crate::resource::ResourceScope,
+    /// The digest of the graph the compiler resolved for this kernel's
+    /// program, before the engine lowered it: the graph part of the
+    /// program's canonical hash.
+    graph_identity: [u8; 32],
 }
 
 /// Everything a clone carries but the broadcast cells, which it does
@@ -264,6 +268,7 @@ impl Clone for Externs {
             changed: self.changed.clone(),
             ledger: self.ledger.clone(),
             resources: self.resources.clone(),
+            graph_identity: self.graph_identity,
         }
     }
 }
@@ -330,6 +335,7 @@ impl Externs {
             changed: Vec::new(),
             ledger,
             resources: crate::resource::ResourceScope::new(),
+            graph_identity: [0; 32],
         };
         externs.scope.origins = input_defs.iter().map(|d| d.type_origin).collect();
         for name in shared {
@@ -378,6 +384,16 @@ impl Externs {
     /// belongs to, once, at build.
     pub(crate) fn set_resources(&mut self, resources: crate::resource::ResourceScope) {
         self.resources = resources;
+    }
+
+    /// The graph digest of this kernel's program.
+    pub(crate) fn graph_identity(&self) -> [u8; 32] {
+        self.graph_identity
+    }
+
+    /// Record the graph digest of this kernel's program, once, at build.
+    pub(crate) fn set_graph_identity(&mut self, digest: [u8; 32]) {
+        self.graph_identity = digest;
     }
 
     /// The broadcast cell for the output at `slot`, made on the first

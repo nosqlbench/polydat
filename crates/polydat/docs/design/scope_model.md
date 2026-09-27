@@ -293,7 +293,114 @@ path only after iteration and parent bindings are installed, so every
 initialized kernel exposes a complete path without requiring a caller to walk
 the scope tree.
 
-## 8. Program reuse and kernel creation
+## 8. Program identity and host queries
+
+A host asks a compiled program two kinds of question: whether it is the
+program the host saw before, and which of its inputs reach an output.
+Both are answered from the program alone, never from a kernel's current
+values.
+
+### 8.1 Canonical hash
+
+The **canonical hash** of a program is a SHA-256 digest of what the
+program computes. `Kernel::canonical_hash()` and
+`KernelProgram::canonical_hash()` return it on every engine, and
+`PolydatProgram::canonical_hash()` on the interpreter's program. It is
+computed over the graph the compiler resolved, before any engine folds
+constants or fuses nodes, so **one program built on the interpreter, the
+closure tier, native, or pure native code has one canonical hash**, and
+every kernel created from or forked off it reports the same one.
+
+The hash covers:
+
+- every input: its name, port type, kind (coordinate, extern, const),
+  and declared default;
+- every output, by name: the port that produces it and the Merkle hash of
+  the producing node, which is the node's function name, its output ports
+  (name and type), and each input slot in order, a wire slot by its
+  source (a graph input by name, an upstream node by its own Merkle hash
+  and port) and a constant slot by its value (a float by its bit pattern,
+  a string or list with its length);
+- each output's `const`, `shared`, and `volatile` flags;
+- the names declared `const`;
+- the names a subscope builder marked inherited on the interpreter's
+  program;
+- every cursor's name and extent; and
+- every `for` traversal in document order: its comprehension as written
+  and its body program's canonical hash.
+
+The hash excludes the source text, comments, whitespace, the order of
+declarations, the diagnostic context label, the engine, the tree's compile ledger and
+resource scope, and every value a kernel holds at run time: coordinates,
+extern writes, cell contents, and the values `const` bindings take at
+initialization. A `const` whose expression reads an extern is covered by
+its expression and by the extern's default, not by the value it takes.
+
+The hash is therefore a sound checkpoint key: a host that saved a
+phase's status under the canonical hash of the phase's program may skip
+the phase when a fresh compile yields the same hash, and an edit that
+changes what the program computes, such as a changed literal, extern
+default, `for` body, or comprehension, yields a different one.
+
+```rust
+let k = compile_polydat_with(src, Engine::Closures(Provenance::Auto))?;
+let i = compile_polydat_with(src, Engine::Interpreter(JitMode::Off))?;
+assert_eq!(k.canonical_hash(), i.canonical_hash());
+```
+
+### 8.2 Instance hash
+
+The canonical hash is local to one program. A scope whose inputs come
+from its ancestors needs an identity that changes when an ancestor
+changes, and the **instance hash** is that identity: SHA-256 over a
+versioned tag, the program's canonical hash, and each ancestor's
+canonical hash, innermost ancestor first.
+`PolydatProgram::instance_hash(&ancestors)` computes it over
+interpreter programs; `polydat::kernel::instance_hash_of(own,
+&ancestor_hashes)` computes it over canonical hashes from any engine and
+yields the same value. The chain is order-sensitive, and polydat does not
+walk it: the host supplies the ancestors it binds the scope under.
+
+### 8.3 Equivalence and subset
+
+`PolydatProgram::is_equivalent_to(other)` is true when the two programs'
+canonical hashes are equal, and so means what §8.1 means by the same
+program.
+
+`PolydatProgram::is_subset_of(parent)` answers whether a scope adds
+nothing its parent does not already supply. It is true when the program
+is equivalent to `parent`, or when it declares no output and every input
+it declares is also declared by `parent`. The check is structural and
+conservative: a program whose outputs are bindings identical to the
+parent's is not recognized as a subset, so a host that flattens on this
+answer flattens less than it could, never more.
+
+### 8.4 Extern closures
+
+Each of these answers from the program's input provenance, the per-node
+record of which graph inputs reach it, and returns names sorted and
+without duplicates.
+
+- `extern_closure(outputs)` returns the non-coordinate inputs, externs and
+  consts supplied from outside, that transitively feed the named outputs.
+  A name the program does not output is ignored.
+- `owned_extern_closure()` is `extern_closure` over the outputs the
+  program owns, leaving out the outputs a subscope builder marked
+  inherited, which a scope re-exports for its descendants without reading
+  them.
+- `PolydatProgram::resolve_externs_through(seed, &ancestors)` walks a
+  chain of enclosing programs, innermost first. Each name in the working
+  set that an ancestor outputs is replaced by that output's own extern
+  closure in the ancestor; a name no ancestor outputs stays. The result is
+  the set of names the outermost scope must supply, which a host
+  intersects with its declared parameters to find the parameters a scope
+  consumes.
+
+These queries are on the interpreter's program (`Kernel::as_interpreter`
+and `KernelProgram::as_interpreter` reach it); a compiled engine keeps no
+provenance record to answer them from.
+
+## 9. Program reuse and kernel creation
 
 A scope's program is compiled once and instantiated many times. A kernel
 becomes a shareable program through `Kernel::into_program`, and
@@ -304,7 +411,7 @@ too; the spawn binder and the traversal binder (§4) each start from one.
 Shared-cell handles are shared only by an explicit attach; ordinary buffers
 and currency are fresh.
 
-## 9. Composition modes
+## 10. Composition modes
 
 Polydat has two distinct composition operations:
 
@@ -318,7 +425,7 @@ required when a distinct activation lifetime, iteration coordinate stratum,
 shared-cell boundary, child registry entry, or scope-local constant state must
 remain observable.
 
-## 10. Invariants and exclusions
+## 11. Invariants and exclusions
 
 1. Every live child is constructed under its parent; no public path binds two
    independently constructed kernels as parent and child. The only post-hoc
