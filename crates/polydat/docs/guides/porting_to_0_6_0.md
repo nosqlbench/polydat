@@ -359,6 +359,15 @@ a rule the specifications now state and every engine follows.
   program or loaded from a library; a tile body follows the pragmas of
   the scope it is written in, as a `for` body does
   ([module_system.md](../design/module_system.md) §7).
+- **The type round-trip lint follows the same scopes.** Whether a lossy
+  round trip is an error or a warning is decided by the pragmas of the
+  scope the converting node is written in, not by the program's set, so
+  a strict module in a lax host reports errors in the module only
+  ([graph_compiler.md](../design/graph_compiler.md) §2.3).
+- **Tile bodies loaded from text share one tree.** `TileProgram::from_json`
+  compiles every body it loads under one fresh resource scope and one
+  ledger, where each body had its own
+  ([polytile.md](../design/polytile.md) §7.1).
 
 ### Program identity
 
@@ -417,6 +426,10 @@ a rule the specifications now state and every engine follows.
   An argument error now names the argument as `generator.parameter`,
   as `fib.n` in `fib.n: expected non-negative integer, got '-1'`, and a
   wrong argument count says `arguments` for every generator.
+- **`TileProgram::from_json_for(json, &dyn Kernel)`** loads a tile
+  skeleton into a kernel's tree: its bodies see the resources installed
+  on that tree and record their compile events on its ledger
+  ([polytile.md](../design/polytile.md) §7.1).
 
 ## Not breaking, though it looks it
 
