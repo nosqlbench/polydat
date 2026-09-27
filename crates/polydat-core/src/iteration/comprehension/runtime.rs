@@ -54,7 +54,9 @@
 //! selects positions from that shape and the tuple count. An order
 //! over a filter selects through `Strategy::select_surviving`, ranking
 //! the survivors by their positions in the filter's input (§5 V5). V4
-//! fires again at this site, against the evaluated shape.
+//! fires again at this site, against the evaluated shape. An order's
+//! own output is addressed through its selection, one axis as long as
+//! the selection (§3.6), so an order over an order selects from it.
 //!
 //! ## What this does NOT own
 //!
@@ -74,7 +76,7 @@ use crate::iteration::comprehension::measure::AxisMeasure;
 use crate::iteration::comprehension::metadata::{IndexFn, cycle_length};
 use crate::iteration::comprehension::predicate::CompiledPredicate;
 use crate::iteration::comprehension::source::Source;
-use crate::iteration::comprehension::strategies::{Selection, shape_input};
+use crate::iteration::comprehension::strategies::{Selection, ranked_filter, shape_input};
 use crate::iteration::comprehension::strategy::StrategyName;
 #[cfg(test)]
 use crate::kernel::PolydatKernel;
@@ -97,8 +99,8 @@ pub type RuntimeTuple = Vec<(String, Value)>;
 /// axis varies slowest in cartesian, sequential in union,
 /// lockstep in zip). `index_fn` is the addressing scheme the
 /// stream satisfies; `None` when the stream is non-addressable
-/// (a filter's output, a dependent cartesian whose axes vary, an
-/// order other than an untruncated `Lex`).
+/// (a filter's output, a dependent cartesian whose axes vary, a
+/// truncated `Lex` order over either).
 struct EvaluatedNode {
     tuples: Vec<RuntimeTuple>,
     index_fn: Option<IndexFn>,
@@ -569,13 +571,16 @@ impl EvalState<'_> {
                 // position and continuous axes through their measures
                 // (comprehension_forms.md §10.2 R2).
                 if has_continuous_axis(child) {
-                    return self.sample_space(child, prefix, *strategy, *truncation, *seed);
+                    let sampled =
+                        self.sample_space(child, prefix, *strategy, *truncation, *seed)?;
+                    return Ok(EvaluatedNode {
+                        index_fn: Some(selected(sampled.tuples.len() as u64)),
+                        tuples: sampled.tuples,
+                    });
                 }
                 // A non-`Lex` order over a filter ranks the survivors by
                 // their positions in the filter's input (§5 V5).
-                if let (Comprehension::Filter { child, predicate }, false) =
-                    (child, *strategy == StrategyName::Lex)
-                {
+                if let Some((child, predicate)) = ranked_filter(child, *strategy) {
                     let inner = self.evaluate_node(child, prefix)?;
                     let predicate = CompiledPredicate::new(predicate);
                     let mut survivors = Vec::new();
@@ -597,7 +602,7 @@ impl EvalState<'_> {
                             .iter()
                             .map(|p| inner.tuples[p as usize].clone())
                             .collect(),
-                        index_fn: None,
+                        index_fn: Some(selected(selection.len())),
                     });
                 }
                 let inner = self.evaluate_node(child, prefix)?;
@@ -1081,20 +1086,35 @@ impl EvalState<'_> {
             .collect();
         Ok(EvaluatedNode {
             tuples: out,
-            index_fn: passed_through(strategy, truncation, input.index_fn),
+            index_fn: order_output(strategy, truncation, input.index_fn, selection.len()),
         })
     }
 }
 
-/// The addressing an order's output keeps: an untruncated `Lex` passes
-/// its input through, positions and all, and any other order leaves
-/// its output with none, as the metadata algebra says (§10.7.2).
-fn passed_through(
+/// An order's output addressed through its selection of `len` positions:
+/// position `i` is the input's tuple at the `i`-th selected position, one
+/// axis as long as the selection (comprehension_forms.md §3.6).
+fn selected(len: u64) -> IndexFn {
+    IndexFn::Lattice {
+        axis_sizes: vec![len],
+    }
+}
+
+/// The addressing an order's output has, as the metadata algebra says
+/// (§10.7.2): an untruncated `Lex` passes its input's through, a
+/// truncated `Lex` selects a prefix of an addressable input's positions,
+/// and any other order is addressed through its selection.
+fn order_output(
     strategy: StrategyName,
     truncation: Option<u64>,
     input: Option<IndexFn>,
+    len: u64,
 ) -> Option<IndexFn> {
-    input.filter(|_| strategy == StrategyName::Lex && truncation.is_none())
+    match (strategy, truncation) {
+        (StrategyName::Lex, None) => input,
+        (StrategyName::Lex, Some(_)) => input.map(|_| selected(len)),
+        _ => Some(selected(len)),
+    }
 }
 
 /// The index-addressed evaluator ([`evaluate_indexed`]). Each node
@@ -1138,15 +1158,14 @@ impl EvalState<'_> {
                 if has_continuous_axis(child) {
                     let sampled =
                         self.sample_space(child, prefix, *strategy, *truncation, *seed)?;
-                    return Ok((Indexed::Tuples(sampled.tuples), sampled.index_fn));
+                    let len = sampled.tuples.len() as u64;
+                    return Ok((Indexed::Tuples(sampled.tuples), Some(selected(len))));
                 }
                 // A non-`Lex` order over a filter holds the filter's
                 // input and the survivors' positions in it, which the
                 // strategy ranks by those positions (§5 V5): a barrier
                 // sized by the survivors.
-                if let (Comprehension::Filter { child, predicate }, false) =
-                    (child, *strategy == StrategyName::Lex)
-                {
+                if let Some((child, predicate)) = ranked_filter(child, *strategy) {
                     let (inner, index_fn) = self.index_node(child, prefix)?;
                     let predicate = CompiledPredicate::new(predicate);
                     let mut survivors = Vec::new();
@@ -1166,12 +1185,13 @@ impl EvalState<'_> {
                         *seed,
                         &survivors,
                     )?;
+                    let len = selection.len();
                     return Ok((
                         Indexed::Select {
                             child: Box::new(inner),
                             selection,
                         },
-                        None,
+                        Some(selected(len)),
                     ));
                 }
                 let (inner, index_fn) = self.index_node(child, prefix)?;
@@ -1182,12 +1202,13 @@ impl EvalState<'_> {
                     *truncation,
                     *seed,
                 )?;
+                let len = selection.len();
                 Ok((
                     Indexed::Select {
                         child: Box::new(inner),
                         selection,
                     },
-                    passed_through(*strategy, *truncation, index_fn),
+                    order_output(*strategy, *truncation, index_fn, len),
                 ))
             }
         }
@@ -1419,9 +1440,9 @@ fn collect_clause_names(c: &Comprehension, out: &mut std::collections::BTreeSet<
 /// The positions `strategy` selects over an input of `cardinality`
 /// tuples addressed by `index_fn`, after V4 (comprehension_forms.md
 /// §10.7.8). An input the walker could not address (a dependent
-/// cartesian, a truncated order) is ordered as a one-axis lattice of
-/// its tuples: V4 admits only `Lex` over one, and `Lex` reads nothing
-/// but the count. A non-`Lex` order over a filter selects through
+/// cartesian, a filter) is ordered as a one-axis lattice of its
+/// tuples: V4 admits only `Lex` over one, and `Lex` reads nothing but
+/// the count. A non-`Lex` order over a filter selects through
 /// [`surviving_selection`] instead.
 fn order_selection(
     strategy: StrategyName,

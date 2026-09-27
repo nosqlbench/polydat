@@ -551,7 +551,25 @@ an `EvaluatedInput { tuples, cardinality, index_fn }` that already
 holds its tuples (each source's own `EvaluatedSource` is §10.7.6).
 A zip and a union are one axis for every strategy: the strategy
 selects positions `0..|input|` of the zip's or union's own
-enumeration. Because the shape is *always* known by the time
+enumeration.
+
+**An order's output is index-addressable.** Its selection is a list of
+positions into its input, so position `i` of the output is the input's
+tuple at the `i`-th selected position. An order's `IndexFn` is therefore
+a one-axis `Lattice` as long as its selection, sized by the order's
+cardinality (its bound when the count is at most one), and every
+strategy accepts it (§7.4 O2). The two `Lex` cases differ: an
+untruncated `Lex` passes its input's `IndexFn` through (I5), and a
+truncated `Lex` selects a prefix of an addressable input's positions,
+while over an input with no `IndexFn` (a filter's output, a dependent
+cartesian) it counts tuples as they stream and has none. An order over a
+continuous space addresses the tuples it sampled the same way, as does a
+non-`Lex` order over a filter, whose selection is positions into the
+filter's input (V5). An order over an order holds only its own
+selection over the inner one, so its working set is that selection, not
+the inner order's tuples (§6.2).
+
+Because the shape is *always* known by the time
 `select` runs, V4 is enforceable at strategy-invocation time
 however the source was authored (literal, range, context-free
 generator, or workload-param).
@@ -656,13 +674,45 @@ union output by name; allowing variable shapes would break the
 consumer's ability to write one expression that handles all
 sub-spaces.
 
-**Axiom V3 (filter name closure).** Every name referenced by a
-filter predicate must be present in the filtered comprehension's
-tuple shape OR in the enclosing parent scope's coordinate set.
-*Reason:* a predicate that names something neither bound nor
-inherited can never evaluate. The check happens at parse time
-(static names from the AST) plus at link time (parent-scope
-names from the binding context).
+**Axiom V3 (name closure).** Every name a clause source or a filter
+predicate reads is bound by the comprehension where it is read, or
+supplied by the surface the comprehension is evaluated on. *Reason:* a
+name neither bound nor supplied can never evaluate.
+
+What the comprehension binds where a name is read:
+
+- A clause's source reads with the names of the clauses before it in
+  every enclosing `cartesian` bound, the dependent product of §3.2. A
+  `zip`'s and a `union`'s operands bind nothing for each other.
+- A filter's predicate reads each tuple of its input, so its `{name}`
+  elements are bound by the names that input binds. A bare word in a
+  predicate is a name (§10.9.1) that nothing binds or supplies: a
+  predicate reads its scope only through `{name}`.
+
+What each surface supplies (§9.5):
+
+- A coordinate stream and a scoped-kernel stream supply no name.
+- A `for` traversal supplies the names of the scope it opens in, which
+  it captures when it opens ([The `for` Construct](for_traversal.md)
+  §5.2).
+
+V3 is checked on the tree as written when the surface compiles it
+(`validate::check_names`, with the surface's `Surface`). The `for`
+lowering checks every traversal and every producer binding against the
+names of the program it is compiled in, and the stream compile
+(`CompiledComprehension::from_ast`) checks against no name. A violation
+is `ValidationError::V3UnresolvedNames`, which names each unresolved
+name and where it is read, a clause's source or a predicate.
+
+A name the stream cannot see is not always resolved nowhere. A producer
+wire's comprehension is bound in a scope (`StreamerValue::outer` holds
+the names it reads from there), and a host that compiles a comprehension
+bound in a scope passes that scope's names
+(`CompiledComprehension::from_ast_in`). A name only that scope has is
+one a traversal resolves and a stream cannot: the stream compile refuses
+a source that reads one with `ValidationError::ContextRequired` and a
+predicate that reads one with `ValidationError::PredicateContextRequired`
+(§9.5.2). A name that scope does not have either is V3.
 
 **Axiom V4 (strategy input-shape contract).** Each named
 ordering strategy declares its accepted input `IndexFn` shape in
@@ -683,11 +733,12 @@ The §3.6 table is the per-strategy reference. The summary:
   over the input's natural enumeration).
 - Every other named strategy requires the input's `IndexFn` to
   be non-`None` — i.e. the input must be a `cartesian`, a `zip`
-  (any mode), a `union` of index-addressable children, or a
-  `clause` (which is a 1-axis `Lattice`).
-- An untruncated `Lex` order passes its input's `IndexFn` through;
-  a truncated one keeps a prefix, which has none, and so does every
-  other order's output.
+  (any mode), a `union` of index-addressable children, a
+  `clause` (which is a 1-axis `Lattice`), or an `order`.
+- An untruncated `Lex` order passes its input's `IndexFn` through.
+  Every other order's output is a one-axis `Lattice` of its selection
+  (§3.6), except a truncated `Lex` over an input with none, which
+  streams and has none.
 - A strategy that selects from the shape reads through the
   untruncated orders directly under it (§7.4 O1), so
   `order(order(c, shuffle), halton, 4)` is judged as
@@ -1200,7 +1251,12 @@ Which kind a strategy is belongs to the strategy
 validator's V4 check and both evaluators read through the untruncated
 orders under a strategy that selects from the shape, so the left
 side is accepted wherever the right side is, and the optimizer folds
-it (R7).
+it (R7). Over a filter (§5 V5) such a strategy reads through the
+untruncated orders under the filter as well, ranking the survivors by
+their positions beneath them, so `order(filter(order(c, shuffle), p),
+halton, 4)` ≡ `order(filter(c, p), halton, 4)`, and with `p` = `true`,
+which R0a drops, the two sides of O1 meet
+(`strategies::ranked_filter`).
 
 **O2 — outer order over truncated inner is NOT redundant:**
 `order(order(c, s1, Some(n)), s2, t)` is meaningful: the inner
@@ -1208,6 +1264,15 @@ truncates to n in `s1` order; the outer reorders those n
 survivors by `s2` and possibly re-truncates. The two-stage form
 is the canonical way to express "the first n in this order, then
 permuted that way."
+
+The outer strategy selects from the inner order's output, which is one
+axis as long as the inner selection (§3.6): its position `i` is the
+tuple the inner order selected `i`-th. Every strategy accepts that
+input, so `order(order(c, halton, 50), shuffle)` shuffles the 50 Halton
+points, and `order(order(c, lex, 5), reverse_lex)` reverses the first
+five tuples of `c`. A strategy that selects from the sequence over an
+untruncated inner order selects over the same axis, and a strategy that
+selects from the shape over one reads through it (O1).
 
 **O3 — order does NOT distribute over union.** Reordering the
 concatenation is a different operation than reordering each
@@ -1685,17 +1750,23 @@ parent. A `StreamerValue`, the value on a producer wire, exposes
 `compiled()` and `coordinate_stream()` over the same factories
 ([The `for` Construct](for_traversal.md) §3.1); both return a
 `Result`, failing when the comprehension does not compile. These
-surfaces bind no names: a comprehension with a context-required
-source (§10.7.0: a source that references a coordinate, parameter,
-or wire) has no coordinate stream, and `compile` / `from_ast`
-refuse it with an error naming the clause and the names it needs
-(`ValidationError::ContextRequired`). A filter whose predicate names
-what its tuples do not bind, as `{k} > {limit}` over a comprehension
-that binds only `k`, needs a scope the same way, and the compile
-refuses it with `ValidationError::PredicateContextRequired`, naming
-the predicate and those names. Those names are resolved on the
-traversal surface below. A `StreamerValue` holds the same
-comprehension in either case.
+surfaces supply no names (§5 V3): a comprehension that reads a name it
+does not bind compiles to no stream. `compile` / `from_ast` compile
+with no enclosing scope, so such a name is resolved nowhere and the
+compile refuses it with `ValidationError::V3UnresolvedNames`.
+`from_ast_in`, and `StreamerValue::compiled` for a producer wire, whose
+comprehension reads the names of the scope the wire is bound in, tell
+the names that scope has apart: a context-required source (§10.7.0: a
+source that references a coordinate, parameter, or wire of that scope,
+or an earlier axis of a dependent product) has no coordinate stream,
+and the compile refuses it with an error naming the clause and the
+names it needs (`ValidationError::ContextRequired`). A filter whose
+predicate names what its tuples do not bind, as `{k} > {limit}` over a
+comprehension that binds only `k` in a scope that has `limit`, needs a
+scope the same way, and the compile refuses it with
+`ValidationError::PredicateContextRequired`, naming the predicate and
+those names. Those names are resolved on the traversal surface below. A
+`StreamerValue` holds the same comprehension in either case.
 
 The following diagram shows the consumption surfaces and what each
 one produces.
@@ -2540,15 +2611,15 @@ construction, not in a guard predicate.
 
 `order(c, Lex, t)`:
 - cardinality: per §6.1
-- index_addressable: inherited from `c` when `t` is `None` (Lex doesn't reshape the index space); `None` under a truncation, since a prefix of an index space is not one
+- index_addressable: inherited from `c` when `t` is `None` (Lex doesn't reshape the index space); under a truncation, `Some(Lattice { axis_sizes: [m] })` for `m` the order's count or bound when `c` is addressable, since the prefix is a selection of `c`'s positions (§3.6), and `None` otherwise
 - natural_order: `Lex`
 - materialization: `c.materialization` (counter wrapper at most)
 
 `order(c, strategy, t)` with strategy ≠ Lex:
 - cardinality: per §6.1 — note that `order(Continuous, sampling-strategy, Some(n))` produces `Bounded(n)` (V8's discharge mechanism: sampling materializes a continuous measure into n discrete points)
-- index_addressable: **`None`** at the AST level. R2 (§10.2) rewrites this node into an `indexed_order` IR opcode that *is* index-addressable through the strategy's draw function, but the AST-level metadata stops here. If a parent operator chains over this output, it sees `None` and falls back to streaming consumption.
+- index_addressable: `Some(Lattice { axis_sizes: [m] })` for `m` the order's count, or its bound when the count is at most `m`: the output is addressed through the order's selection, position `i` being the input's tuple at the `i`-th selected position (§3.6). A parent order selects from that one axis, and a parent cartesian, zip, or union addresses it as any other operand.
 - natural_order: `Strategy(strategy_name)`
-- materialization: over an addressable input, `BoundedBarrier { working_set_size: strategy.working_set_for(c.index_addressable, t) }` per §6.3's strategy-specific sizing: `n` for Halton, Sobol, Shuffle, ReverseLex, Diagonal, and Antidiagonal; `n · dim` for Lhs; the whole index space for Extrema and Shells, which rank it while selecting. For Continuous input + sampling strategy + `Some(n)`, the working set is O(n) — the n drawn sample points, not the (uncountable) input measure. Over an input with no `IndexFn` the order buffers its input: `BoundedBarrier { working_set_size: |c| }` when `c` has a bound, else `UnboundedBarrier`. Over a filter that bound is the filter's, the most survivors there can be (§5 V5).
+- materialization: over an addressable input, `BoundedBarrier { working_set_size: strategy.working_set_for(c.index_addressable, t) }` per §6.3's strategy-specific sizing: `n` for Halton, Sobol, Shuffle, ReverseLex, Diagonal, and Antidiagonal; `n · dim` for Lhs; the whole index space for Extrema and Shells, which rank it while selecting. Over an inner order, the addressable input is the inner order's one axis, so the outer order holds its own selection over it. For Continuous input + sampling strategy + `Some(n)`, the working set is O(n) — the n drawn sample points, not the (uncountable) input measure. Over an input with no `IndexFn` the order buffers its input: `BoundedBarrier { working_set_size: |c| }` when `c` has a bound, else `UnboundedBarrier`. Over a filter that bound is the filter's, the most survivors there can be (§5 V5).
 
 **Counting by kind.** A count is one of three kinds: **exact**
 (`Bounded(n)`), **at most** (`BoundedAtMost(n)`), or **unknown**
@@ -2878,16 +2949,20 @@ same way (`predicate::CompiledPredicate`), per tuple:
 
 - **Elements.** `{name}` is the value the tuple binds to `name`. A
   name the tuple does not bind resolves in the scope the traversal
-  opens in; a scope-less stream has none and refuses such a predicate
-  when it compiles (`ValidationError::PredicateContextRequired`,
-  §9.5.2).
+  opens in, which captures it when it opens; a stream has none and
+  refuses such a predicate when it compiles (§5 V3,
+  `ValidationError::PredicateContextRequired`, §9.5.2).
 - **Literals.** Integers, floats, `true`, `false`, and quoted strings,
   `"us-east"` or `'us-east'`. A bare word is a name, never a string,
   as everywhere in the language (§3.1.4). A predicate has no names
-  beside its elements, so a bare word fails to resolve, and when the
-  expression that fails reads as words joined by hyphens, the error
-  shows it quoted: `{region} == us-east` fails with "`us-east` is a
-  name, not a string: a string in a predicate is quoted, as in
+  beside its elements, so a bare word is resolved nowhere, and every
+  surface refuses it when it compiles (§5 V3): `{region} == us-east`
+  reads the names `us` and `east`, and the error says a string in a
+  predicate is quoted, as in `"us"`. A predicate evaluated without that
+  check, through `runtime::evaluate_indexed` directly, fails where it
+  evaluates the word, and when the expression that fails reads as words
+  joined by hyphens, the error shows it quoted: "`us-east` is a name,
+  not a string: a string in a predicate is quoted, as in
   `"us-east"`".
 - **Connectives.** `&&` and `||` evaluate their operands left to
   right and stop at the first that decides the result; `!` negates.

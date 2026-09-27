@@ -165,17 +165,23 @@ call `streamer` with comprehension text directly. No contract in this
 document needs a dedicated port-type variant; the reflected type name is
 the wire-level tag.
 
-A producer's sources may reference wires of the enclosing scope through
-the comprehension grammar's reference form, `{name}`, as in
-`partitions("*/4", {total})`. The reference is resolved against the
-enclosing kernel's current values when the traversal is opened, so a
-host can change an extern and re-open the traversal without recompiling.
-Every wire a source references is read at that moment, whatever its
-provenance: a coordinate input as much as an extern, taken from the
-enclosing kernel's values when the traversal opens, even where the body
-declares the same name. The tuple set is materialized at open, so a later
-change to a referenced wire does not affect a traversal that is already
-open; the next open reads the new values.
+A producer's sources and predicates may reference wires of the enclosing
+scope through the comprehension grammar's reference form, `{name}`, as in
+`partitions("*/4", {total})` or `where {k} < {limit}`. The reference is
+resolved against the enclosing kernel's current values when the
+traversal is opened, so a host can change an extern and re-open the
+traversal without recompiling. Every wire a source or predicate reads
+is read at that moment, whatever its provenance: a coordinate input as
+much as an extern, taken from the enclosing kernel's values when the
+traversal opens, even where the body declares the same name. The tuple
+set is materialized at open, so a later change to a referenced wire does
+not affect a traversal that is already open; the next open reads the new
+values. A name the enclosing scope has no wire for, and the
+comprehension does not bind, is a compile error
+([Comprehension Forms](comprehension_forms.md) §5 V3). The producer's
+`StreamerValue` records the enclosing names its comprehension reads
+(`outer`); a stream has none of them, so `coordinate_stream` refuses the
+comprehension, naming them.
 
 ### 3.2 Traversal
 
@@ -453,11 +459,14 @@ body once per tuple and once per cycle.
   index with no traversal is an error that states how many the program
   declares. Opening works from the values the kernel holds at that
   moment. First it takes a **snapshot**, a copy of the current value of
-  every cascaded wire and every wire a source references, read through
-  the trait (`pull` for a wire the parent computes, `input_value` for an
-  input or extern). Then it evaluates the comprehension against that
-  snapshot alone, through the evaluator's `Lookup` view: the captured
-  source references first, then the cascaded wires, over an empty scope
+  every cascaded wire and every wire a source or predicate reads and
+  the comprehension does not bind, read through the trait (`pull` for a
+  wire the parent computes, `input_value` for an input or extern); the
+  compile refused any such name the parent has no wire for
+  ([Comprehension Forms](comprehension_forms.md) §5 V3). Then it
+  evaluates the comprehension against that snapshot alone, through the
+  evaluator's `Lookup` view: the captured names first, then the
+  cascaded wires, over an empty scope
   (`NoScope`) charged to the body program's ledger, with a tuple's own
   elements resolved first as the tuple is built (`Layered` in
   `polydat-core/src/kernel/interp.rs`). Opening builds no kernel state

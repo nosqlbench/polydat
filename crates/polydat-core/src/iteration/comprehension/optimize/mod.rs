@@ -147,6 +147,12 @@ enum Place {
 impl Place {
     /// The place of a child of `node`, which sits at `self`.
     fn of_child(self, node: &Comprehension) -> Place {
+        // The input of a ranked filter keeps its shape too: an order
+        // that selects from the shape ranks the survivors by their
+        // positions beneath the untruncated orders there.
+        if let (Comprehension::Filter { .. }, Place::Ranked { through_orders }) = (node, self) {
+            return Place::Ranked { through_orders };
+        }
         let Comprehension::Order {
             strategy,
             truncation,

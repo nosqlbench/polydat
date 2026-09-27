@@ -259,7 +259,7 @@ pub fn strip_for_forms(
                     resolve_source_with(source, &producers, mode, scope)?;
                 events.extend(warning_events(source, &warnings));
                 let name = b.targets.join(",");
-                let value = StreamerValue::new(source.to_text(), comprehension.clone());
+                let value = StreamerValue::in_scope(source.to_text(), comprehension.clone());
                 parent.push(Statement::Binding(Binding {
                     targets: b.targets.clone(),
                     value: Expr::Call(CallExpr {

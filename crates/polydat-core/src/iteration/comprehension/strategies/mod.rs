@@ -393,6 +393,30 @@ pub fn shape_input(child: &Comprehension, strategy: StrategyName) -> &Comprehens
     input
 }
 
+/// The filter a non-`Lex` order under `strategy` ranks the survivors of
+/// (comprehension_forms.md §5 V5), given its operand `child`: its
+/// predicate and the input the survivors' positions are taken in. The
+/// order selects from [`shape_input`]; when that is a filter, the
+/// survivors are ranked by their positions in the filter's input, which a
+/// strategy that selects from the shape reads through the untruncated
+/// orders of, as it does above the filter (§7.4 O1): such an order only
+/// permutes the tuples the predicate tests. `None` when the order ranks
+/// no filter.
+pub fn ranked_filter(
+    child: &Comprehension,
+    strategy: StrategyName,
+) -> Option<(&Comprehension, &str)> {
+    if strategy == StrategyName::Lex {
+        return None;
+    }
+    match shape_input(child, strategy) {
+        Comprehension::Filter { child, predicate } => {
+            Some((shape_input(child, strategy), predicate.as_str()))
+        }
+        _ => None,
+    }
+}
+
 /// Resolve a [`MultiIndex`] to a flat position in the
 /// input's tuple list, given the input's [`IndexFn`].
 ///

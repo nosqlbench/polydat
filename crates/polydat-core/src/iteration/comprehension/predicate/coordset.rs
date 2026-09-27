@@ -145,17 +145,24 @@ impl Default for CoordSet {
 fn classify_axes(idx: Option<&IndexFn>, expected_count: usize) -> Vec<CoordKind> {
     match idx {
         None => vec![CoordKind::Discrete; expected_count],
-        Some(IndexFn::Lattice { axis_sizes }) => {
-            vec![CoordKind::Discrete; axis_sizes.len()]
-        }
-        Some(IndexFn::Lockstep { .. }) | Some(IndexFn::Modular { .. }) => {
-            vec![CoordKind::Discrete; expected_count]
-        }
-        Some(IndexFn::Concatenation { .. }) => {
-            vec![CoordKind::Discrete; expected_count]
-        }
+        // Every axis of a lattice is discrete, and an axis may bind
+        // several names: an order's output is one axis of its tuples.
+        Some(IndexFn::Lattice { .. })
+        | Some(IndexFn::Lockstep { .. })
+        | Some(IndexFn::Modular { .. })
+        | Some(IndexFn::Concatenation { .. }) => vec![CoordKind::Discrete; expected_count],
         Some(IndexFn::Continuous { intervals, .. }) => {
             vec![CoordKind::Continuous; intervals.len()]
+        }
+        // A discrete axis binding several names (an order's output)
+        // leaves the names unmatched to the axes: every one is treated as
+        // continuous, which the analyzer reads as opaque.
+        Some(IndexFn::Hybrid {
+            discrete_axes,
+            continuous_axes,
+            ..
+        }) if discrete_axes.len() + continuous_axes.len() != expected_count => {
+            vec![CoordKind::Continuous; expected_count]
         }
         Some(IndexFn::Hybrid {
             discrete_axes,
@@ -204,6 +211,17 @@ mod tests {
         let s = CoordSet::from_metadata(&["k".to_string(), "limit".to_string()], &m);
         assert_eq!(s.len(), 2);
         assert!(!s.is_continuous("k"));
+        assert!(!s.is_continuous("limit"));
+    }
+
+    /// An order's output is one axis binding every name of its tuples.
+    #[test]
+    fn from_metadata_one_axis_of_several_names_keeps_every_name() {
+        let m = dummy_metadata(Some(IndexFn::Lattice {
+            axis_sizes: vec![6],
+        }));
+        let s = CoordSet::from_metadata(&["k".to_string(), "limit".to_string()], &m);
+        assert_eq!(s.len(), 2);
         assert!(!s.is_continuous("limit"));
     }
 

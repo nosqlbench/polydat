@@ -18,8 +18,8 @@ use crate::ast::{ReflectedValue, Value};
 use crate::iteration::comprehension::ast::Comprehension;
 use crate::iteration::comprehension::cardinality::CardinalityClass;
 use crate::iteration::comprehension::metadata::Metadata;
-use crate::iteration::comprehension::surfaces::{CompiledComprehension, CoordinateStream, compile};
-use crate::iteration::comprehension::validate::ValidationError;
+use crate::iteration::comprehension::surfaces::{CompiledComprehension, CoordinateStream};
+use crate::iteration::comprehension::validate::{Mode, ValidationError};
 
 /// A comprehension bound as a value.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -29,14 +29,39 @@ pub struct StreamerValue {
     pub text: String,
     /// The comprehension, with any derivation already applied.
     pub ast: Comprehension,
+    /// The names the comprehension reads from the scope its wire is
+    /// bound in: each is a name of that scope, which a traversal
+    /// captures when it opens and a stream has none of. Empty for a
+    /// streamer built from text alone.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outer: Vec<String>,
 }
 
 impl StreamerValue {
-    /// A streamer over `ast` with its source text.
+    /// A streamer over `ast` with its source text, bound in no scope.
     pub fn new(text: impl Into<String>, ast: Comprehension) -> Self {
         Self {
             text: text.into(),
             ast,
+            outer: Vec::new(),
+        }
+    }
+
+    /// A streamer over `ast` bound to a wire of a scope that has every
+    /// name the comprehension reads and does not bind, as the compile of
+    /// a producer binding establishes (comprehension_forms.md §5 V3).
+    pub fn in_scope(text: impl Into<String>, ast: Comprehension) -> Self {
+        let mut outer: Vec<String> = crate::iteration::comprehension::validate::outer_reads(&ast)
+            .into_iter()
+            .filter(|r| !r.bare)
+            .map(|r| r.name)
+            .collect();
+        outer.sort();
+        outer.dedup();
+        Self {
+            text: text.into(),
+            ast,
+            outer,
         }
     }
 
@@ -59,11 +84,16 @@ impl StreamerValue {
     /// Compile to the shared IR: validation, optimization, then the
     /// AST → IR pass. Each call is independent. A comprehension the
     /// `for` lowering resolved was validated then and fails here only
-    /// when a source needs a scope, which this surface has none of
-    /// (comprehension_forms.md §9.5.2);
-    /// one built programmatically is validated here.
+    /// when it reads a name of the scope its wire is bound in
+    /// ([`Self::outer`]), which this surface has none of
+    /// (`ContextRequired`, `PredicateContextRequired`,
+    /// comprehension_forms.md §9.5.2); one built programmatically is
+    /// validated here.
     pub fn compiled(&self) -> Result<CompiledComprehension, ValidationError> {
-        compile(&self.ast)
+        CompiledComprehension::from_ast_in(&self.ast, Mode::Permissive, &|name| {
+            self.outer.iter().any(|n| n == name)
+        })
+        .map(|(compiled, _)| compiled)
     }
 
     /// A fresh coordinate stream with its own dispense cursor.

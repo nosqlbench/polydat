@@ -398,16 +398,24 @@ pub fn open_traversal(
         prefix: &cascade,
         inner: &base,
     };
-    // The sources' own references are captured from the parent here,
-    // whatever their provenance (a coordinate input as much as an
-    // extern) and even where the body declares the same name, as every
-    // body declares `cycle`: a source belongs to the enclosing scope,
-    // and a traversal reads that frame once, when it opens
-    // (for_traversal.md §3.1). A name the parent has no wire for is a
-    // coordinate of the comprehension itself, layered in as the tuple
-    // is built, or an error the evaluator reports.
+    // The names the sources and predicates read and the comprehension
+    // does not bind are captured from the parent here, whatever their
+    // provenance (a coordinate input as much as an extern) and even
+    // where the body declares the same name, as every body declares
+    // `cycle`: a source or predicate belongs to the enclosing scope, and
+    // a traversal reads that frame once, when it opens
+    // (for_traversal.md §3.1). The compile refused a name the parent
+    // has no wire for (comprehension_forms.md §5 V3).
     let mut captured: Vec<(String, Value)> = Vec::new();
-    for name in traversal.comprehension.referenced_source_names() {
+    let mut outer: Vec<String> =
+        crate::iteration::comprehension::validate::outer_reads(&traversal.comprehension)
+            .into_iter()
+            .filter(|r| !r.bare)
+            .map(|r| r.name)
+            .collect();
+    outer.sort();
+    outer.dedup();
+    for name in outer {
         let value = if parent.output_type(&name).is_some() {
             parent.pull(&name)
         } else if let Some(value) = parent.input_value(&name) {

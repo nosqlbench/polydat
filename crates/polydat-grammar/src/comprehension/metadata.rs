@@ -49,8 +49,10 @@ pub struct Metadata {
     /// Closed-form bijection from `0..|c|` to the node's
     /// dispensed tuples. `None` when the node has no
     /// addressable index space (raw filter output, dependent
-    /// cartesian, the output of a truncated `Lex` or any non-`Lex`
-    /// order).
+    /// cartesian, a truncated `Lex` order over either). An order
+    /// other than an untruncated `Lex` is a one-axis `Lattice` of its
+    /// selection: position `i` is the input's tuple at the `i`-th
+    /// selected position.
     pub index_addressable: Option<IndexFn>,
 
     /// How this node enumerates by default.
@@ -477,13 +479,28 @@ fn order_metadata(
     let child_meta = child.metadata();
     let cardinality = order_cardinality(child, &child_meta.cardinality, strategy, truncation);
 
+    // An order's output is addressed through its selection: position `i`
+    // is the input's tuple at the `i`-th selected position, so the
+    // output is one axis as long as the selection (comprehension_forms.md
+    // §3.6). The axis is sized by the order's count, or its bound.
+    let selected = || match &cardinality {
+        CardinalityClass::Bounded(n) | CardinalityClass::BoundedAtMost(n) => {
+            Some(IndexFn::Lattice {
+                axis_sizes: vec![*n],
+            })
+        }
+        _ => None,
+    };
     let (index_addressable, natural_order, materialization) = match strategy {
         StrategyName::Lex => (
             // An untruncated `Lex` passes its input through, positions
-            // and all; a prefix of an index space is not one.
-            child_meta
-                .index_addressable
-                .filter(|_| truncation.is_none()),
+            // and all. A truncated one selects a prefix of an addressable
+            // input's positions; over any other input it counts the
+            // tuples as they stream and addresses nothing.
+            match truncation {
+                None => child_meta.index_addressable,
+                Some(_) => child_meta.index_addressable.and_then(|_| selected()),
+            },
             NaturalOrder::Lex,
             child_meta.materialization, // counter wrapper at most
         ),
@@ -508,7 +525,7 @@ fn order_metadata(
                     _ => Materialization::UnboundedBarrier,
                 },
             };
-            (None, NaturalOrder::Strategy(non_lex), materialization)
+            (selected(), NaturalOrder::Strategy(non_lex), materialization)
         }
     };
 
@@ -1588,31 +1605,70 @@ mod tests {
     }
 
     /// An untruncated `Lex` order passes its input's addressing through;
-    /// a truncated one keeps a prefix, which is no lattice.
+    /// a truncated one selects a prefix of its input's positions, one
+    /// axis as long as the prefix, and over a filter it addresses
+    /// nothing.
     #[test]
     fn lex_order_inherits_addressability_untruncated() {
         let inner =
             Comprehension::cartesian(vec![clause("k", &[1, 2]), clause("limit", &[10, 20])]);
         let whole = Comprehension::order(inner.clone(), StrategyName::Lex, None).metadata();
         assert_eq!(whole.cardinality, CardinalityClass::Bounded(4));
-        assert!(matches!(
+        assert_eq!(
             whole.index_addressable,
-            Some(IndexFn::Lattice { .. })
-        ));
+            Some(IndexFn::Lattice {
+                axis_sizes: vec![2, 2]
+            })
+        );
         assert_eq!(whole.natural_order, NaturalOrder::Lex);
-        let prefix = Comprehension::order(inner, StrategyName::Lex, Some(2)).metadata();
-        assert_eq!(prefix.cardinality, CardinalityClass::Bounded(2));
-        assert_eq!(prefix.index_addressable, None);
+        let prefix = Comprehension::order(inner.clone(), StrategyName::Lex, Some(3)).metadata();
+        assert_eq!(prefix.cardinality, CardinalityClass::Bounded(3));
+        assert_eq!(
+            prefix.index_addressable,
+            Some(IndexFn::Lattice {
+                axis_sizes: vec![3]
+            })
+        );
         assert_eq!(prefix.natural_order, NaturalOrder::Lex);
+        let streamed = Comprehension::order(
+            Comprehension::filter(inner, "{k} > 1"),
+            StrategyName::Lex,
+            Some(3),
+        )
+        .metadata();
+        assert_eq!(streamed.index_addressable, None);
     }
 
+    /// Any other order addresses its output through its selection: one
+    /// axis as long as the selection, over which the next order holds
+    /// only its own selection.
     #[test]
-    fn non_lex_order_drops_ast_level_addressability() {
+    fn non_lex_order_addresses_its_selection() {
         let inner =
             Comprehension::cartesian(vec![clause("k", &[1, 2]), clause("limit", &[10, 20])]);
         let ordered = Comprehension::order(inner, StrategyName::Halton, Some(2));
         let m = ordered.metadata();
-        assert!(m.index_addressable.is_none());
+        assert_eq!(
+            m.index_addressable,
+            Some(IndexFn::Lattice {
+                axis_sizes: vec![2]
+            })
+        );
+        let reordered = Comprehension::order(ordered.clone(), StrategyName::Shuffle, None);
+        let r = reordered.metadata();
+        assert_eq!(r.cardinality, CardinalityClass::Bounded(2));
+        assert_eq!(
+            r.index_addressable,
+            Some(IndexFn::Lattice {
+                axis_sizes: vec![2]
+            })
+        );
+        assert_eq!(
+            r.materialization,
+            Materialization::BoundedBarrier {
+                working_set_size: 2
+            }
+        );
         match m.natural_order {
             NaturalOrder::Strategy(StrategyName::Halton) => {}
             other => panic!("expected Strategy(Halton), got {other:?}"),

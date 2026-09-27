@@ -20,7 +20,7 @@ use crate::iteration::comprehension::ir::{Program, compile as compile_to_ir};
 use crate::iteration::comprehension::optimize::optimize;
 use crate::iteration::comprehension::predicate::recognizers::extract_coord_refs;
 use crate::iteration::comprehension::validate::{
-    Mode, ValidationError, ValidationReport, validate,
+    Mode, Surface, ValidationError, ValidationReport, check_names, validate,
 };
 
 use crate::kernel::interp::NoScope;
@@ -62,11 +62,40 @@ impl CompiledComprehension {
     /// (§10.7.0): a generator that references no name is evaluated
     /// here, in the empty scope, and validated as the literal of its
     /// values.
+    ///
+    /// The comprehension is compiled with no enclosing scope, so a name
+    /// it reads and does not bind is resolved nowhere: V3
+    /// (`ValidationError::V3UnresolvedNames`). [`from_ast_in`](Self::from_ast_in)
+    /// compiles one bound in a scope.
     pub fn from_ast_with(
         ast: &Comprehension,
         mode: Mode,
     ) -> Result<(Self, ValidationReport), ValidationError> {
+        Self::from_ast_in(ast, mode, &|_| false)
+    }
+
+    /// [`from_ast_with`](Self::from_ast_with) for a comprehension bound in
+    /// an enclosing scope, which has the names `in_scope` answers true
+    /// for, as a producer wire's comprehension is (comprehension_forms.md
+    /// §5 V3, §9.5.2).
+    ///
+    /// These surfaces supply no name, so every name the comprehension
+    /// reads where it does not bind it is refused. A name the enclosing
+    /// scope does not have either is resolved nowhere: V3. A name only
+    /// that scope has is one a `for` traversal captures when it opens and
+    /// a stream cannot see: a source reading one is
+    /// `ValidationError::ContextRequired`, as is a source reading an
+    /// earlier axis, which only a traversal evaluates, and a predicate
+    /// reading one is `ValidationError::PredicateContextRequired`.
+    pub fn from_ast_in(
+        ast: &Comprehension,
+        mode: Mode,
+        in_scope: &dyn Fn(&str) -> bool,
+    ) -> Result<(Self, ValidationReport), ValidationError> {
         let ast = flatten_static_sources(ast, &NoScope::new());
+        // Resolved nowhere: neither bound nor a name a traversal of it in
+        // the enclosing scope would capture.
+        check_names(&ast, Surface::Traversal(in_scope))?;
         if let Some((name, references)) = first_context_required(&ast) {
             return Err(ValidationError::ContextRequired { name, references });
         }
@@ -329,9 +358,10 @@ mod tests {
     }
 
     /// A context-required source has no coordinate stream
-    /// (comprehension_forms.md §9.5.2, §10.7.0): the scope-less
-    /// compile refuses it by name, with the names it needs, instead
-    /// of dispensing nothing.
+    /// (comprehension_forms.md §9.5.2, §10.7.0): compiled in a scope
+    /// that has the names it reads, the compile refuses it by name, with
+    /// the names it needs, instead of dispensing nothing. With no scope
+    /// those names resolve nowhere (V3).
     #[test]
     fn from_ast_refuses_a_context_required_source_by_name() {
         let ast = Comprehension::cartesian(vec![
@@ -344,7 +374,8 @@ mod tests {
                 },
             ),
         ]);
-        let err = CompiledComprehension::from_ast(&ast).unwrap_err();
+        let err =
+            CompiledComprehension::from_ast_in(&ast, Mode::Permissive, &|n| n == "n").unwrap_err();
         assert!(
             matches!(
                 err,
@@ -354,15 +385,22 @@ mod tests {
             "{err}"
         );
         assert!(err.to_string().contains("traverse it with `for`"), "{err}");
+        let err = CompiledComprehension::from_ast(&ast).unwrap_err();
+        assert!(
+            matches!(err, ValidationError::V3UnresolvedNames { ref reads } if reads.len() == 1),
+            "{err}"
+        );
     }
 
     /// A predicate naming what its tuples do not bind has no scope to
-    /// resolve in on a coordinate stream: the compile refuses it by
-    /// name.
+    /// resolve in on a coordinate stream: compiled in a scope that has
+    /// the name, the compile refuses it by name; with no scope the name
+    /// resolves nowhere (V3).
     #[test]
     fn from_ast_refuses_a_predicate_that_needs_a_scope() {
         let ast = Comprehension::filter(clause("k", &[1, 2, 3]), "{k} > {limit} || {k} == 1");
-        let err = CompiledComprehension::from_ast(&ast).unwrap_err();
+        let err = CompiledComprehension::from_ast_in(&ast, Mode::Permissive, &|n| n == "limit")
+            .unwrap_err();
         assert!(
             matches!(
                 err,
@@ -372,6 +410,11 @@ mod tests {
             "{err}"
         );
         assert!(err.to_string().contains("traverse it with `for`"), "{err}");
+        let err = CompiledComprehension::from_ast(&ast).unwrap_err();
+        assert!(
+            matches!(err, ValidationError::V3UnresolvedNames { .. }),
+            "{err}"
+        );
         let bound = Comprehension::filter(clause("k", &[1, 2, 3]), "{k} > 1");
         assert!(CompiledComprehension::from_ast(&bound).is_ok());
     }

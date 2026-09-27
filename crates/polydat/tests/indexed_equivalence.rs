@@ -36,10 +36,17 @@ use polydat::iteration::comprehension::runtime::{
 use polydat::iteration::comprehension::source::{LiteralValue, Source};
 use polydat::iteration::comprehension::strategies::Tuple;
 use polydat::iteration::comprehension::strategy::{StrategyName, ZipMode};
-use polydat::iteration::comprehension::validate::{Mode, validate};
+use polydat::iteration::comprehension::validate::{
+    Mode, Surface, ValidationError, check_names, validate,
+};
 
 fn scope() -> polydat::kernel::PolydatKernel {
     polydat::dsl::compile_polydat_interpreter("input cycle: u64\n").unwrap()
+}
+
+/// The names [`scope`] has.
+fn in_scope(name: &str) -> bool {
+    name == "cycle"
 }
 
 /// Assert the two evaluators agree on `ast`, and the streaming surface
@@ -113,6 +120,23 @@ fn compare(ast: &Comprehension, scope: &polydat::kernel::PolydatKernel) -> Compa
         ast,
         &polydat::kernel::interp::NoScope::new(),
     );
+    // V3 (§5): a stream supplies no name and a traversal the names of
+    // its scope, so the stream refuses every shape the traversal's check
+    // refuses, and a shape reading a name it does not bind compiles to no
+    // stream, with V3.
+    let traversal_names = check_names(&flat, Surface::Traversal(&in_scope));
+    if check_names(&flat, Surface::Stream).is_err() {
+        assert!(
+            matches!(
+                polydat::iteration::comprehension::surfaces::compile(ast),
+                Err(ValidationError::V3UnresolvedNames { .. })
+            ),
+            "the stream compiles {ast:?}, which reads a name it does not bind"
+        );
+    }
+    if traversal_names.is_err() {
+        assert!(streamed(ast).is_none(), "{ast:?}");
+    }
     if validate(&flat, Mode::Permissive).is_ok() {
         let rewritten = polydat::iteration::comprehension::optimize::optimize(flat.clone());
         if let Err(e) = validate(&rewritten, Mode::Permissive) {
@@ -962,6 +986,8 @@ struct Shapes {
     sampled: u64,
     /// Filters whose predicate calls a function.
     called: u64,
+    /// Filters whose predicate reads a name its input does not bind.
+    outer: u64,
 }
 
 impl Shapes {
@@ -1102,6 +1128,13 @@ impl Shapes {
                     (Some(n), 6) if names.len() > 1 => {
                         format!("{{{n}}} != \"s1\" && {{{}}} != 2", names[1])
                     }
+                    // A name of the traversal's scope, or one nothing
+                    // binds (§5 V3).
+                    (Some(n), 7) if self.rng.coin(40) => {
+                        self.outer += 1;
+                        let outer = if self.rng.coin(50) { "cycle" } else { "zz" };
+                        format!("{{{n}}} != {{{outer}}}")
+                    }
                     _ => if self.rng.coin(50) { "true" } else { "false" }.to_string(),
                 };
                 Comprehension::filter(child, predicate)
@@ -1153,6 +1186,7 @@ fn generated_shapes_index_as_they_materialize() {
         .unwrap_or(1500);
     let (mut compared, mut tuples, mut emptied, mut mismatched) = (0u64, 0usize, 0u64, 0u64);
     let (mut streamed_tuples, mut sampled, mut called) = (0usize, 0u64, 0u64);
+    let (mut outer, mut chained) = (0u64, 0u64);
     for case in 0..cases {
         let mut shapes = Shapes {
             rng: Rng(0x5EED_0000 + case),
@@ -1160,6 +1194,7 @@ fn generated_shapes_index_as_they_materialize() {
             emptied: 0,
             sampled: 0,
             called: 0,
+            outer: 0,
         };
         let shape = shapes.shape(3, &[]);
         if bound(&shape) > 4000 {
@@ -1171,6 +1206,10 @@ fn generated_shapes_index_as_they_materialize() {
         emptied += shapes.emptied;
         sampled += shapes.sampled;
         called += shapes.called;
+        outer += shapes.outer;
+        if found.tuples > 0 && order_chains(&shape) > 0 {
+            chained += 1;
+        }
         if found.streamed {
             streamed_tuples += found.tuples;
             // Strict zips over operands of random lengths often end
@@ -1182,7 +1221,10 @@ fn generated_shapes_index_as_they_materialize() {
             }
         }
     }
-    eprintln!("{compared} shapes compared, {tuples} tuples, {streamed_tuples} through streams");
+    eprintln!(
+        "{compared} shapes compared, {tuples} tuples, {streamed_tuples} through streams, \
+         {chained} yielding through order chains, {outer} predicates reading outer names"
+    );
     assert!(compared > cases / 2, "only {compared} of {cases} compared");
     assert!(tuples > 0, "no generated shape produced a tuple");
     assert!(
@@ -1205,6 +1247,30 @@ fn generated_shapes_index_as_they_materialize() {
         called >= cases / 50,
         "only {called} compared filters called a function"
     );
+    assert!(
+        outer >= cases / 100,
+        "only {outer} compared filters read a name their input does not bind"
+    );
+    assert!(
+        chained >= cases / 50,
+        "only {chained} compared shapes yielded through an order over an order"
+    );
+}
+
+/// How many orders in `c` order another order's output, directly or
+/// through one filter.
+fn order_chains(c: &Comprehension) -> usize {
+    let own = match c {
+        Comprehension::Order { child, .. } => match child.as_ref() {
+            Comprehension::Order { .. } => 1,
+            Comprehension::Filter { child, .. } => {
+                usize::from(matches!(child.as_ref(), Comprehension::Order { .. }))
+            }
+            _ => 0,
+        },
+        _ => 0,
+    };
+    own + c.children().map(order_chains).sum::<usize>()
 }
 
 /// A predicate groups by the language's one precedence table on every
@@ -1313,23 +1379,36 @@ fn acceptance_is_decided_on_the_tree_as_written() {
             Comprehension::zip(vec![operand, ints("z", &[1, 2])], ZipMode::Strict),
         ]));
     }
-    // V4: a truncated `Lex` order keeps a prefix, which has no index
-    // space for another strategy to rank, whether or not a filter sits
-    // between the two; the traversal refuses it at the strategy.
-    for input in [
-        Comprehension::order(range("a", 0, 5, 1), StrategyName::Lex, Some(3)),
-        Comprehension::filter(
-            Comprehension::order(range("a", 0, 5, 1), StrategyName::Lex, Some(3)),
-            "{a} > 0",
-        ),
-    ] {
+    // A truncated `Lex` order selects a prefix of its input's positions,
+    // which another strategy ranks as one axis, directly or through one
+    // filter (§3.6, §5 V5); over a filter it counts tuples as they stream
+    // and has no positions, and a strategy over it is refused (V4).
+    let prefix = || Comprehension::order(range("a", 0, 5, 1), StrategyName::Lex, Some(3));
+    for input in [prefix(), Comprehension::filter(prefix(), "{a} > 0")] {
         let shape = Comprehension::order(input, StrategyName::ReverseLex, None);
-        refused(&shape);
-        assert!(matches!(
-            evaluate_indexed(&shape, &scope),
-            Err(RuntimeError::StrategyRejectsInput { .. })
-        ));
+        validate(&shape, Mode::Permissive).unwrap();
+        assert!(streamed(&shape).is_some(), "{shape:?}");
+        assert!(assert_equivalent(&shape, &scope) > 0);
     }
+    let rows = |c: &Comprehension| evaluate_indexed(c, &scope).unwrap().to_vec();
+    let reversed = Comprehension::order(prefix(), StrategyName::ReverseLex, None);
+    let mut expected = rows(&prefix());
+    expected.reverse();
+    assert_eq!(rows(&reversed), expected);
+    let streaming = Comprehension::order(
+        Comprehension::order(
+            Comprehension::filter(range("a", 0, 5, 1), "{a} > 0"),
+            StrategyName::Lex,
+            Some(3),
+        ),
+        StrategyName::ReverseLex,
+        None,
+    );
+    refused(&streaming);
+    assert!(matches!(
+        evaluate_indexed(&streaming, &scope),
+        Err(RuntimeError::StrategyRejectsInput { .. })
+    ));
     // An untruncated `Lex` order passes its input's positions through,
     // so a strategy over it is accepted on every path.
     let through = Comprehension::order(
@@ -1599,6 +1678,357 @@ fn an_order_chain_folds_only_under_a_shape_strategy() {
             .collect::<Vec<_>>()
     );
     assert_equivalent(&chain, &scope);
+}
+
+/// An order's output is addressed through its selection (§3.6): position
+/// `i` is its input's tuple at the `i`-th selected position, one axis as
+/// long as the selection. Every strategy orders every strategy's output,
+/// with and without truncation and seed: a strategy that selects from the
+/// shape reads through an untruncated inner order (§7.4 O1), as it does
+/// through an untruncated `Lex`, and otherwise the outer strategy's
+/// selection over that one axis picks from the inner order's tuples. The
+/// validator accepts every chain, both evaluators and the stream agree,
+/// and the metadata counts the tuples and holds the outer selection.
+#[test]
+fn every_strategy_orders_every_order() {
+    use polydat::iteration::comprehension::metadata::{IndexFn, Materialization};
+    use polydat::iteration::comprehension::strategies::for_name;
+    let scope = scope();
+    let product = || Comprehension::cartesian(vec![range("a", 0, 4, 1), ints("b", &[5, 6, 7])]);
+    let rows = |c: &Comprehension| evaluate_indexed(c, &scope).unwrap().to_vec();
+    let seeded = |s: StrategyName| matches!(s, StrategyName::Shuffle | StrategyName::Lhs);
+    let mut chains = 0;
+    for inner in STRATEGIES {
+        for inner_cut in [None, Some(5)] {
+            for inner_seed in [None, Some(11)]
+                .into_iter()
+                .filter(|s| s.is_none() || seeded(inner))
+            {
+                let first = || Comprehension::order_seeded(product(), inner, inner_cut, inner_seed);
+                let selected = rows(&first());
+                let inner_bound = match first().metadata().cardinality {
+                    polydat::iteration::comprehension::CardinalityClass::Bounded(n)
+                    | polydat::iteration::comprehension::CardinalityClass::BoundedAtMost(n) => n,
+                    other => panic!("{other:?}"),
+                };
+                for outer in STRATEGIES {
+                    for outer_cut in [None, Some(3)] {
+                        for outer_seed in [None, Some(29)]
+                            .into_iter()
+                            .filter(|s| s.is_none() || seeded(outer))
+                        {
+                            let chain =
+                                Comprehension::order_seeded(first(), outer, outer_cut, outer_seed);
+                            validate(&chain, Mode::Permissive).unwrap_or_else(|e| {
+                                panic!("{outer:?} over {inner:?}/{inner_cut:?}: {e}")
+                            });
+                            let reads_through = inner_cut.is_none()
+                                && (inner == StrategyName::Lex
+                                    || for_name(outer).selects_from_shape());
+                            let expected = if reads_through {
+                                rows(&Comprehension::order_seeded(
+                                    product(),
+                                    outer,
+                                    outer_cut,
+                                    outer_seed,
+                                ))
+                            } else {
+                                let len = selected.len() as u64;
+                                let axis = IndexFn::Lattice {
+                                    axis_sizes: vec![len],
+                                };
+                                for_name(outer)
+                                    .select(&axis, len, outer_cut, outer_seed)
+                                    .iter()
+                                    .map(|p| selected[p as usize].clone())
+                                    .collect()
+                            };
+                            assert_eq!(
+                                rows(&chain),
+                                expected,
+                                "{outer:?}/{outer_cut:?} over {inner:?}/{inner_cut:?}"
+                            );
+                            assert_eq!(assert_equivalent(&chain, &scope), expected.len());
+                            assert!(streamed(&chain).is_some(), "{chain:?}");
+                            if !reads_through {
+                                use polydat::iteration::comprehension::CardinalityClass;
+                                let m = chain.metadata();
+                                let (CardinalityClass::Bounded(bound)
+                                | CardinalityClass::BoundedAtMost(bound)) = m.cardinality
+                                else {
+                                    panic!("{chain:?}: {:?}", m.cardinality)
+                                };
+                                assert_eq!(
+                                    m.index_addressable,
+                                    Some(IndexFn::Lattice {
+                                        axis_sizes: vec![bound]
+                                    }),
+                                    "{chain:?}"
+                                );
+                                assert!(
+                                    matches!(
+                                        m.materialization,
+                                        Materialization::BoundedBarrier { working_set_size }
+                                            if working_set_size <= inner_bound
+                                    ) || outer == StrategyName::Lex,
+                                    "{chain:?}: {:?}",
+                                    m.materialization
+                                );
+                            }
+                            chains += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(chains > 400, "{chains}");
+
+    // The 50 Halton points of a continuous square, shuffled: the same
+    // points in the shuffle's order of the 50 positions.
+    let square = || Comprehension::cartesian(vec![unit("u"), unit("v")]);
+    let points = Comprehension::order(square(), StrategyName::Halton, Some(50));
+    let shuffled =
+        Comprehension::order_seeded(points.clone(), StrategyName::Shuffle, None, Some(3));
+    validate(&shuffled, Mode::Permissive).unwrap();
+    let drawn = rows(&points);
+    let order = for_name(StrategyName::Shuffle).select(
+        &IndexFn::Lattice {
+            axis_sizes: vec![50],
+        },
+        50,
+        None,
+        Some(3),
+    );
+    let expected: Vec<_> = order.iter().map(|p| drawn[p as usize].clone()).collect();
+    assert_eq!(rows(&shuffled), expected);
+    assert_ne!(rows(&shuffled), drawn);
+    assert_eq!(assert_equivalent(&shuffled, &scope), 50);
+    let m = shuffled.metadata();
+    assert_eq!(
+        m.cardinality,
+        polydat::iteration::comprehension::CardinalityClass::Bounded(50)
+    );
+    assert_eq!(
+        m.index_addressable,
+        Some(IndexFn::Lattice {
+            axis_sizes: vec![50]
+        })
+    );
+    assert_eq!(
+        m.materialization,
+        Materialization::BoundedBarrier {
+            working_set_size: 50
+        }
+    );
+
+    // Through a filter, a strategy that selects from the shape ranks the
+    // survivors by their positions beneath an untruncated order (§5 V5,
+    // §7.4 O1), so the filter `true`, which R0a drops, changes nothing.
+    for predicate in ["true", "{b} != 6"] {
+        for outer in [
+            StrategyName::Halton,
+            StrategyName::Lhs,
+            StrategyName::Extrema,
+        ] {
+            let through = Comprehension::order(
+                Comprehension::filter(
+                    Comprehension::order_seeded(product(), StrategyName::Shuffle, None, Some(5)),
+                    predicate,
+                ),
+                outer,
+                Some(3),
+            );
+            let direct =
+                Comprehension::order(Comprehension::filter(product(), predicate), outer, Some(3));
+            assert_eq!(rows(&through), rows(&direct), "{outer:?} {predicate}");
+            assert_equivalent(&through, &scope);
+        }
+    }
+
+    // The same in the language: a derivation shuffles a producer's
+    // Halton points, and a traversal over it yields each point once.
+    let src = "input cycle: u64\nsweep := for u in 0.0..1.0 order halton/50\n\
+               mixed := for sweep order shuffle\nfor mixed {\n    x := hash(cycle)\n}\n";
+    let mut kernel = polydat::dsl::compile_polydat_interpreter(src).unwrap();
+    kernel.set_inputs(&[0]);
+    let mut points = |wire: &str| -> Vec<u64> {
+        let value = kernel.pull_ref(wire).clone();
+        let mut us: Vec<u64> = value
+            .as_streamer()
+            .unwrap()
+            .coordinate_stream()
+            .unwrap()
+            .map(|t| match &t.unwrap().bindings[0].1 {
+                polydat::iteration::comprehension::strategies::TupleValue::F64(f) => f.to_bits(),
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        us.sort_unstable();
+        us
+    };
+    assert_eq!(points("mixed").len(), 50);
+    assert_eq!(points("mixed"), points("sweep"));
+    assert_eq!(kernel.traverse(0).unwrap().len(), 50);
+
+    // Orders over orders inside a cartesian and a cycle zip, which read
+    // the ordered operand by position on the stream.
+    for shape in [
+        Comprehension::cartesian(vec![
+            Comprehension::order(
+                Comprehension::order(product(), StrategyName::Sobol, Some(4)),
+                StrategyName::ReverseLex,
+                None,
+            ),
+            ints("c", &[1, 2]),
+        ]),
+        Comprehension::zip(
+            vec![
+                Comprehension::order_seeded(
+                    Comprehension::order(product(), StrategyName::Halton, Some(5)),
+                    StrategyName::Shuffle,
+                    Some(3),
+                    Some(1),
+                ),
+                range("k", 0, 7, 1),
+            ],
+            ZipMode::Cycle,
+        ),
+        Comprehension::order(
+            Comprehension::cartesian(vec![
+                Comprehension::order(unit("u"), StrategyName::Sobol, Some(3)),
+                ints("c", &[1, 2]),
+            ]),
+            StrategyName::Extrema,
+            Some(1),
+        ),
+    ] {
+        validate(&shape, Mode::Permissive).unwrap();
+        assert!(streamed(&shape).is_some(), "{shape:?}");
+        assert!(assert_equivalent(&shape, &scope) > 0, "{shape:?}");
+    }
+}
+
+/// V3 (§5): every name a source or predicate reads is bound by the
+/// comprehension where it is read or supplied by the surface. A stream
+/// supplies nothing; a `for` traversal supplies the names of the scope it
+/// opens in, and captures them when it opens. A name resolved nowhere is
+/// V3 on both; a name only the enclosing scope has is the stream's
+/// `ContextRequired` for a source and `PredicateContextRequired` for a
+/// predicate.
+#[test]
+fn names_resolve_in_the_comprehension_or_the_surface() {
+    use polydat::iteration::comprehension::surfaces::compile;
+    let scope = scope();
+    let compile_program = |text: &str| {
+        polydat::dsl::compile_polydat_interpreter(&format!(
+            "input cycle: u64\nsweep := for {text}\nfor {text} {{\n    s := u64_add(k, 1)\n}}\n"
+        ))
+    };
+    let compile_traversal = |text: &str| {
+        polydat::dsl::compile_polydat_interpreter(&format!(
+            "input cycle: u64\nfor {text} {{\n    s := u64_add(k, 1)\n}}\n"
+        ))
+    };
+    let parse = |text: &str| {
+        polydat::iteration::comprehension::spec::parse_comprehension_algebra(text).unwrap()
+    };
+
+    // Resolved nowhere: V3 on every surface, naming the name and where
+    // it is read.
+    for (text, name, site) in [
+        ("k in 1..5 where {k} > {zz}", "zz", "predicate `{k} > {zz}`"),
+        ("k in pow2({zz})", "zz", "clause 'k'"),
+        ("k in zz_values", "zz_values", "clause 'k'"),
+        ("k in 1..5 where {k} != s1", "s1", "predicate `{k} != s1`"),
+        ("k in 1..5, j in pow2({m}), m in 1..3", "m", "clause 'j'"),
+    ] {
+        let ast = parse(text);
+        for err in [
+            check_names(&ast, Surface::Stream).unwrap_err(),
+            check_names(&ast, Surface::Traversal(&in_scope)).unwrap_err(),
+            compile(&ast).unwrap_err(),
+        ] {
+            assert!(
+                matches!(&err, ValidationError::V3UnresolvedNames { reads }
+                    if reads.iter().any(|r| r.name == name)),
+                "{text}: {err}"
+            );
+            assert!(err.to_string().contains(site), "{text}: {err}");
+        }
+        for program in [compile_traversal(text), compile_program(text)] {
+            let Err(err) = program else {
+                panic!("{text} compiles")
+            };
+            let err = err.to_string();
+            assert!(err.contains("V3:"), "{text}: {err}");
+            assert!(err.contains(&format!("`{name}`")), "{text}: {err}");
+        }
+    }
+
+    // Resolved in the scope: the traversal captures the name when it
+    // opens; a stream of the producer's wire refuses it, and the same
+    // comprehension compiled with no scope resolves it nowhere.
+    for (text, body, expected, predicate) in [
+        (
+            "k in 1..6 where {k} > {cycle}",
+            "s := u64_add(k, 1)",
+            vec![4, 5, 6],
+            true,
+        ),
+        (
+            "p in partitions(\"*/2\", {cycle})",
+            "s := cardinality(p)",
+            vec![1, 1],
+            false,
+        ),
+    ] {
+        let ast = parse(text);
+        check_names(&ast, Surface::Traversal(&in_scope)).unwrap();
+        assert!(matches!(
+            compile(&ast),
+            Err(ValidationError::V3UnresolvedNames { .. })
+        ));
+        let mut kernel = polydat::dsl::compile_polydat_interpreter(&format!(
+            "input cycle: u64\nsweep := for {text}\nfor {text} {{\n    {body}\n}}\n"
+        ))
+        .unwrap_or_else(|e| panic!("{text}: {e}"));
+        kernel.set_inputs(&[2]);
+        let mut stream = kernel.traverse(0).unwrap();
+        let mut values = Vec::new();
+        while let Some(mut activation) = stream.advance().unwrap() {
+            values.push(activation.cycle(0).pull("s").as_u64());
+        }
+        assert_eq!(values, expected, "{text}");
+        let sweep = kernel.pull_ref("sweep").clone();
+        let Err(err) = sweep.as_streamer().unwrap().coordinate_stream() else {
+            panic!("{text} streams")
+        };
+        if predicate {
+            assert!(
+                matches!(err, ValidationError::PredicateContextRequired { ref references, .. }
+                    if references == &["cycle".to_string()]),
+                "{text}: {err}"
+            );
+        } else {
+            assert!(
+                matches!(err, ValidationError::ContextRequired { ref references, .. }
+                    if references == &["cycle".to_string()]),
+                "{text}: {err}"
+            );
+        }
+    }
+
+    // Bound by the comprehension: an earlier axis for a source, the
+    // tuple for a predicate. The traversal accepts both; the stream
+    // evaluates no dependent source.
+    let dependent = parse("k in 1..4, j in pow2({k}) where {j} < {k}");
+    check_names(&dependent, Surface::Stream).unwrap();
+    assert!(matches!(
+        compile(&dependent),
+        Err(ValidationError::ContextRequired { .. })
+    ));
+    assert_eq!(assert_equivalent(&dependent, &scope), 3);
 }
 
 /// A shape whose count the metadata bounds but does not know reports

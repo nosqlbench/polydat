@@ -1952,6 +1952,20 @@ impl Compiler {
             )?;
             self.pending_events
                 .extend(warning_events(&f.source, &warnings));
+            // V3 (comprehension_forms.md §5): the traversal supplies the
+            // names of the scope it opens in, this program's.
+            crate::iteration::comprehension::check_names(
+                &comprehension,
+                crate::iteration::comprehension::Surface::Traversal(&|n| type_of(n).is_some()),
+            )
+            .map_err(|e| {
+                format!(
+                    "`for {}` at line {}, col {}: {e}",
+                    f.source.to_text(),
+                    f.span.line,
+                    f.span.col
+                )
+            })?;
             let mut probe = |expr: &str| self.probe_element_type(expr);
             let elements = element_types(&comprehension, &mut probe).map_err(|e| {
                 format!(
@@ -2698,6 +2712,21 @@ fn compile_file_with<K: Built>(
                     })
             })
         };
+        // V3 (comprehension_forms.md §5): a producer's comprehension reads
+        // the names of the scope its wire is bound in, which a traversal
+        // over it captures when it opens.
+        for p in &producers {
+            crate::iteration::comprehension::check_names(
+                &p.comprehension,
+                crate::iteration::comprehension::Surface::Traversal(&|n| type_of(n).is_some()),
+            )
+            .map_err(|e| {
+                KernelError::Source(format!(
+                    "`{} := for {}` at line {}, col {}: {e}",
+                    p.name, p.source_text, p.span.line, p.span.col
+                ))
+            })?;
+        }
         let traversals = compiler
             .compile_traversals(&for_stmts, &producers, &type_of)
             .map_err(KernelError::Source)?;

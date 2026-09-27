@@ -80,21 +80,12 @@ pub enum ValidationError {
         actual: Vec<String>,
     },
 
-    /// V3 — filter predicate references a name neither in the
-    /// child's coordinates nor in the parent scope. Parser-time
-    /// validation only — link-time (parent scope) check lives
-    /// in the consumer.
-    ///
-    /// `coords` is the wrapped comprehension's coordinate set;
-    /// the predicate may also reference names from the parent
-    /// scope which this layer doesn't see.
+    /// V3 — a clause source or a filter predicate reads a name that
+    /// neither the comprehension binds where it is read nor the surface
+    /// it is evaluated on supplies ([`check_names`]).
     V3UnresolvedNames {
-        /// The predicate text.
-        predicate: String,
-        /// The coordinates the comprehension binds.
-        coords: Vec<String>,
-        /// The names the predicate references that are neither coordinates nor known here.
-        unresolved: Vec<String>,
+        /// Each such name, with where it is read, in tree order.
+        reads: Vec<NameRead>,
     },
 
     /// V4 — strategy applied to an input whose metadata-derived
@@ -191,16 +182,29 @@ impl std::fmt::Display for ValidationError {
                 actual.join(", "),
                 expected.join(", ")
             ),
-            Self::V3UnresolvedNames {
-                predicate,
-                coords,
-                unresolved,
-            } => write!(
-                f,
-                "V3: predicate `{predicate}` names {} not bound by the tuple ({})",
-                unresolved.join(", "),
-                coords.join(", ")
-            ),
+            Self::V3UnresolvedNames { reads } => {
+                let each: Vec<String> = reads
+                    .iter()
+                    .map(|r| format!("`{}` read by {}", r.name, r.site))
+                    .collect();
+                write!(
+                    f,
+                    "V3: {} {} bound neither by the comprehension nor by the scope it is \
+                     evaluated in",
+                    each.join(", "),
+                    if reads.len() == 1 { "is" } else { "are" }
+                )?;
+                if let Some(bare) = reads.iter().find(|r| r.bare) {
+                    write!(
+                        f,
+                        "; a bare word in a predicate is a name, which nothing supplies: a \
+                         string in a predicate is quoted, as in `\"{}\"`, and a scope's \
+                         name is read as `{{{}}}`",
+                        bare.name, bare.name
+                    )?;
+                }
+                Ok(())
+            }
             Self::V4InputShape { strategy, reason } => {
                 write!(
                     f,
@@ -336,7 +340,161 @@ impl std::fmt::Display for ValidationWarning {
     }
 }
 
+/// Where a comprehension reads a name (comprehension_forms.md §5 V3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReadSite {
+    /// A clause's source.
+    Source {
+        /// The clause's element name.
+        clause: String,
+        /// The source's text.
+        source: String,
+    },
+    /// A filter's predicate.
+    Predicate {
+        /// The predicate's text.
+        predicate: String,
+    },
+}
+
+impl std::fmt::Display for ReadSite {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Source { clause, source } => write!(f, "clause '{clause}' in `{source}`"),
+            Self::Predicate { predicate } => write!(f, "predicate `{predicate}`"),
+        }
+    }
+}
+
+/// A name a comprehension reads where it does not bind it
+/// ([`outer_reads`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NameRead {
+    /// The name.
+    pub name: String,
+    /// Where it is read.
+    pub site: ReadSite,
+    /// Whether it is a bare word in a predicate. A predicate reads a
+    /// scope only through `{name}`, so no surface supplies a bare word.
+    pub bare: bool,
+}
+
+/// What a consumption surface supplies to the names a comprehension's
+/// sources and predicates read (comprehension_forms.md §5 V3, §9.5).
+#[derive(Clone, Copy)]
+pub enum Surface<'a> {
+    /// A coordinate stream or a scoped-kernel stream: no name.
+    Stream,
+    /// A `for` traversal: the names of the scope it opens in, which it
+    /// captures when it opens. The function answers whether that scope
+    /// has a name.
+    Traversal(&'a dyn Fn(&str) -> bool),
+}
+
+impl Surface<'_> {
+    /// Whether the surface supplies `name`.
+    pub fn supplies(&self, name: &str) -> bool {
+        match self {
+            Surface::Stream => false,
+            Surface::Traversal(has) => has(name),
+        }
+    }
+}
+
+/// Every name `c` reads where it does not bind it, in tree order, once
+/// per place it is read (comprehension_forms.md §5 V3).
+///
+/// A clause's source reads with the names the clauses before it in every
+/// enclosing cartesian bind in front of it, the dependent product of
+/// §3.2; a zip's and a union's operands see only what their enclosing
+/// cartesians bind. A filter's predicate reads each tuple of its input,
+/// so its `{name}` elements are bound by the names that input binds, and
+/// a bare word in it is never bound. What remains is what the scope the
+/// comprehension is evaluated in must supply.
+pub fn outer_reads(c: &Comprehension) -> Vec<NameRead> {
+    let mut out = Vec::new();
+    collect_outer_reads(c, &mut Vec::new(), &mut out);
+    out
+}
+
+fn collect_outer_reads(c: &Comprehension, before: &mut Vec<String>, out: &mut Vec<NameRead>) {
+    match c {
+        Comprehension::Clause { name, source } => {
+            for read in source.referenced_names() {
+                if !before.contains(&read) {
+                    out.push(NameRead {
+                        name: read,
+                        site: ReadSite::Source {
+                            clause: name.clone(),
+                            source: source.to_text().unwrap_or_else(|| "<source>".into()),
+                        },
+                        bare: false,
+                    });
+                }
+            }
+        }
+        Comprehension::Cartesian { children } => {
+            let depth = before.len();
+            for child in children {
+                collect_outer_reads(child, before, out);
+                before.extend(child.coordinate_names());
+            }
+            before.truncate(depth);
+        }
+        Comprehension::Zip { children, .. } | Comprehension::Union { children } => {
+            for child in children {
+                collect_outer_reads(child, before, out);
+            }
+        }
+        Comprehension::Filter { child, predicate } => {
+            collect_outer_reads(child, before, out);
+            let bound = child.coordinate_names();
+            let reads = polydat_grammar::comprehension::predicate::predicate_reads(predicate);
+            let site = || ReadSite::Predicate {
+                predicate: predicate.clone(),
+            };
+            for name in reads.elements {
+                if !bound.contains(&name) {
+                    out.push(NameRead {
+                        name,
+                        site: site(),
+                        bare: false,
+                    });
+                }
+            }
+            for name in reads.bare {
+                out.push(NameRead {
+                    name,
+                    site: site(),
+                    bare: true,
+                });
+            }
+        }
+        Comprehension::Order { child, .. } => collect_outer_reads(child, before, out),
+    }
+}
+
+/// V3 (comprehension_forms.md §5): every name a clause source or a
+/// filter predicate of `c` reads is bound by the comprehension where it
+/// is read, or supplied by `surface`. The error names each name that is
+/// neither, with where it is read.
+pub fn check_names(c: &Comprehension, surface: Surface<'_>) -> Result<(), ValidationError> {
+    let reads: Vec<NameRead> = outer_reads(c)
+        .into_iter()
+        .filter(|r| r.bare || !surface.supplies(&r.name))
+        .collect();
+    if reads.is_empty() {
+        Ok(())
+    } else {
+        Err(ValidationError::V3UnresolvedNames { reads })
+    }
+}
+
 /// Validate a comprehension AST as written (comprehension_forms.md §5).
+///
+/// V3 depends on the surface the comprehension is evaluated on, so it is
+/// [`check_names`], which each surface's compile calls with what that
+/// surface supplies; this function judges every other axiom.
 ///
 /// In `Permissive` mode, V1-V9 errors abort with a typed
 /// [`ValidationError`] and degenerate-composition warnings
@@ -369,7 +527,7 @@ fn visit(c: &Comprehension, report: &mut ValidationReport) -> Result<(), Validat
         Comprehension::Cartesian { children } => visit_cartesian(children, report),
         Comprehension::Zip { children, mode } => visit_zip(children, *mode, report),
         Comprehension::Union { children } => visit_union(children, report),
-        Comprehension::Filter { child, predicate } => visit_filter(child, predicate, report),
+        Comprehension::Filter { predicate, .. } => visit_filter(predicate, report),
         Comprehension::Order {
             child,
             strategy,
@@ -524,25 +682,9 @@ fn visit_union(
     Ok(())
 }
 
-fn visit_filter(
-    child: &Comprehension,
-    predicate: &str,
-    report: &mut ValidationReport,
-) -> Result<(), ValidationError> {
-    // V3: name closure — every `{name}` reference in the
-    // predicate must be in the child's coords OR resolved by
-    // the parent scope. A name the tuple does not bind may be the
-    // scope's, which this layer does not see, so the validator
-    // raises no error for it: the traversal resolves it in the
-    // scope it opens in, and the scope-less surfaces refuse it
-    // (`PredicateContextRequired`, comprehension_forms.md §9.5.2).
-    let coords = child.coordinate_names();
-    let referenced = extract_interpolated_names(predicate);
-    let unresolved: Vec<String> = referenced
-        .into_iter()
-        .filter(|n| !coords.contains(n))
-        .collect();
-    let _ = unresolved;
+fn visit_filter(predicate: &str, report: &mut ValidationReport) -> Result<(), ValidationError> {
+    // V3, the predicate's names against its input's tuples and the
+    // surface's scope, is `check_names`.
 
     // §5.8 warnings for trivially-true / trivially-false
     // predicates: the literal texts "true" and "false" are the
@@ -556,7 +698,6 @@ fn visit_filter(
             .push(ValidationWarning::TriviallyFalseFilter);
     }
 
-    let _ = child;
     Ok(())
 }
 
@@ -570,9 +711,9 @@ fn visit_order(
     // algebra. A strategy that selects from the shape reads through
     // the untruncated orders under it (§7.4 O1), and V5 looks through
     // one filter layer: the metadata is computed against what remains.
-    let metadata_target = match super::strategies::shape_input(child, strategy) {
-        Comprehension::Filter { child: inner, .. } => inner.as_ref(),
-        other => other,
+    let metadata_target = match super::strategies::ranked_filter(child, strategy) {
+        Some((input, _)) => input,
+        None => super::strategies::shape_input(child, strategy),
     };
 
     // V5 looks through one filter layer only: nested filters under a
@@ -636,6 +777,9 @@ fn visit_order(
 /// algebra's `IndexFn` variants. Implements the per-strategy
 /// table from comprehension_forms.md §3.6:
 ///
+/// An order's output is a one-axis `Lattice` of its selection, so every
+/// row below accepts it.
+///
 /// | Strategy | Accepted IndexFn |
 /// |---|---|
 /// | Lex | any (incl. None) |
@@ -661,7 +805,7 @@ fn check_strategy_input_shape(
                 strategy,
                 reason: "input has no closed-form index function \
                          (a filter's output, a dependent cartesian, or \
-                         an order other than an untruncated Lex)"
+                         a truncated Lex order over one)"
                     .to_string(),
             });
         }
@@ -800,30 +944,6 @@ fn contains_continuous_source(c: &Comprehension) -> bool {
             contains_continuous_source(child)
         }
     }
-}
-
-/// Extract `{name}` interpolation references from a predicate
-/// string. Handles only the simple `{name}` form; nested
-/// expressions and escapes are out of scope for V3's parse-time
-/// check (the consumer handles richer Polydat expression analysis).
-fn extract_interpolated_names(predicate: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let bytes = predicate.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'{'
-            && let Some(close) = predicate[i + 1..].find('}')
-        {
-            let name = predicate[i + 1..i + 1 + close].trim();
-            if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_') {
-                out.push(name.to_string());
-            }
-            i += close + 2;
-            continue;
-        }
-        i += 1;
-    }
-    out
 }
 
 #[cfg(test)]
@@ -1113,16 +1233,112 @@ mod tests {
         );
     }
 
+    fn generator(name: &str, expr: &str) -> Comprehension {
+        Comprehension::clause(
+            name,
+            Source::Generator {
+                expr: expr.into(),
+                cardinality_hint: None,
+            },
+        )
+    }
+
+    fn unresolved(c: &Comprehension, surface: Surface<'_>) -> Vec<(String, bool)> {
+        match check_names(c, surface) {
+            Ok(()) => Vec::new(),
+            Err(ValidationError::V3UnresolvedNames { reads }) => {
+                reads.into_iter().map(|r| (r.name, r.bare)).collect()
+            }
+            Err(other) => panic!("expected V3, got {other}"),
+        }
+    }
+
+    /// A source reads with the clauses before it in its cartesian bound,
+    /// and a predicate with its input's tuple bound; a stream supplies
+    /// nothing else.
     #[test]
-    fn name_extraction_handles_simple_predicates() {
-        assert_eq!(extract_interpolated_names("{k} > 0"), vec!["k"]);
+    fn v3_binds_earlier_axes_for_sources_and_the_tuple_for_predicates() {
+        let dependent = Comprehension::cartesian(vec![
+            clause("a", &[1, 2]),
+            generator("b", "0..{a}"),
+            generator("c", "0..{b}"),
+        ]);
+        assert!(check_names(&dependent, Surface::Stream).is_ok());
+        let filtered = Comprehension::filter(dependent.clone(), "{a} < {c}");
+        assert!(check_names(&filtered, Surface::Stream).is_ok());
+        // A later axis is not bound before it, and a zip's operands do
+        // not bind for each other.
+        let later = Comprehension::cartesian(vec![generator("b", "0..{a}"), clause("a", &[1])]);
         assert_eq!(
-            extract_interpolated_names("{k} * {limit} <= 1000"),
-            vec!["k", "limit"]
+            unresolved(&later, Surface::Stream),
+            [("a".to_string(), false)]
+        );
+        let zipped = Comprehension::zip(
+            vec![clause("a", &[1]), generator("b", "0..{a}")],
+            ZipMode::Truncate,
         );
         assert_eq!(
-            extract_interpolated_names("no refs here"),
-            Vec::<String>::new()
+            unresolved(&zipped, Surface::Stream),
+            [("a".to_string(), false)]
+        );
+        // A predicate over one axis of a cartesian reads that axis only.
+        let inner = Comprehension::cartesian(vec![
+            clause("a", &[1, 2]),
+            Comprehension::filter(clause("b", &[1, 2]), "{b} < {a}"),
+        ]);
+        assert_eq!(
+            unresolved(&inner, Surface::Stream),
+            [("a".to_string(), false)]
+        );
+    }
+
+    /// A traversal supplies the names of the scope it opens in; a bare
+    /// word in a predicate is a name no surface supplies.
+    #[test]
+    fn v3_closes_names_over_the_surface() {
+        let c = Comprehension::filter(
+            Comprehension::cartesian(vec![clause("k", &[1, 2]), generator("j", "0..{n}")]),
+            "{k} < {limit} && {k} != s1",
+        );
+        assert_eq!(
+            unresolved(&c, Surface::Stream),
+            [
+                ("n".to_string(), false),
+                ("limit".to_string(), false),
+                ("s1".to_string(), true)
+            ]
+        );
+        let scope = |n: &str| n == "n" || n == "limit" || n == "s1";
+        assert_eq!(
+            unresolved(&c, Surface::Traversal(&scope)),
+            [("s1".to_string(), true)]
+        );
+        let quoted = Comprehension::filter(
+            Comprehension::cartesian(vec![clause("k", &[1, 2]), generator("j", "0..{n}")]),
+            "{k} < {limit} && {k} != \"s1\"",
+        );
+        assert!(check_names(&quoted, Surface::Traversal(&scope)).is_ok());
+        let err = check_names(&c, Surface::Stream).unwrap_err().to_string();
+        assert!(err.starts_with("V3:"), "{err}");
+        assert!(err.contains("`n` read by clause 'j' in `0..{n}`"), "{err}");
+        assert!(
+            err.contains("`limit` read by predicate `{k} < {limit} && {k} != s1`"),
+            "{err}"
+        );
+        assert!(err.contains("as in `\"s1\"`"), "{err}");
+    }
+
+    /// A call's callee, a cast's type, and `true` are not names; a
+    /// callee's arguments are.
+    #[test]
+    fn v3_reads_opaque_expressions_as_the_language_does() {
+        let c = Comprehension::filter(
+            clause("k", &[1, 2]),
+            "u64_add({k}, width) > 1 && {k} as f64 > 0.5 && true",
+        );
+        assert_eq!(
+            unresolved(&c, Surface::Stream),
+            [("width".to_string(), true)]
         );
     }
 }

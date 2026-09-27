@@ -94,7 +94,10 @@ pub use runtime::{
 };
 pub use source::Source;
 pub use strategy::{StrategyName, ZipMode};
-pub use validate::{Mode, ValidationError, ValidationReport, ValidationWarning, validate};
+pub use validate::{
+    Mode, NameRead, ReadSite, Surface, ValidationError, ValidationReport, ValidationWarning,
+    check_names, outer_reads, validate,
+};
 
 // --- Parse-pipeline support re-exports. These are evaluator
 // utilities used by the algebra runtime evaluator and the

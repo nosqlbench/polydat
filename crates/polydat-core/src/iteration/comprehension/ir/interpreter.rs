@@ -17,7 +17,8 @@
 //!
 //! A stream over an index-addressable subtree (clauses over literal
 //! lists and ranges, combined by cartesian, zip, union, and `Lex`
-//! order) also answers the tuple at a position without pulling. A
+//! order, and any non-`Lex` order, through its selection) also answers
+//! the tuple at a position without pulling. A
 //! cartesian over such children computes each tuple from its
 //! position instead of caching its tail axes, a cycle zip reads such
 //! an operand at `i mod |operand|` instead of buffering it, and a
@@ -29,6 +30,8 @@
 //! them, in the empty scope: a filter through [`CompiledPredicate`],
 //! and an order through [`evaluate_indexed`] over its input, so a
 //! stream and a traversal of one comprehension yield the same tuples.
+
+use std::cell::OnceCell;
 
 use crate::ast::Value;
 use crate::iteration::comprehension::ast::Comprehension;
@@ -261,14 +264,15 @@ fn literal_to_tuple_value(lv: &LiteralValue) -> TupleValue {
 /// its children's tuples at the mixed-radix digits of `i`, and the
 /// stream holds nothing but its position. Otherwise the first advance
 /// pulls child 0 once and children 1..N to exhaustion, caching them,
-/// and later advances iterate over the cached cross product.
+/// and later advances iterate over the cached cross product. Whether
+/// the children are addressable is asked when the stream is first
+/// pulled or addressed, since an order child knows only once it has
+/// selected.
 struct CartesianStream {
     children: Vec<BoxedStream>,
-    /// Every child's tuple count, when every child is addressable and
-    /// the product fits.
-    lens: Option<Vec<u64>>,
-    /// The product of `lens`.
-    total: u64,
+    /// Every child's tuple count and their product, when every child is
+    /// addressable and the product fits; decided on first use.
+    shape: OnceCell<Option<(Vec<u64>, u64)>>,
     /// The dispense position, when addressable.
     pos: u64,
     /// Cached values for axes 1..N (axis 0 streams).
@@ -289,18 +293,9 @@ struct CartesianStream {
 impl CartesianStream {
     fn new(children: Vec<BoxedStream>) -> Self {
         let n = children.len();
-        let lens: Option<Vec<u64>> = if children.is_empty() {
-            None
-        } else {
-            children.iter().map(|c| c.indexed_len()).collect()
-        };
-        let total = lens
-            .as_ref()
-            .and_then(|l| l.iter().try_fold(1u64, |acc, n| acc.checked_mul(*n)));
         Self {
             children,
-            lens: total.and(lens),
-            total: total.unwrap_or(0),
+            shape: OnceCell::new(),
             pos: 0,
             cached: Vec::with_capacity(n.saturating_sub(1)),
             current_a0: None,
@@ -309,6 +304,25 @@ impl CartesianStream {
             pull_a0: true,
             done: false,
         }
+    }
+
+    /// Every child's tuple count and their product, when every child is
+    /// addressable and the product fits.
+    fn shape(&self) -> Option<&(Vec<u64>, u64)> {
+        self.shape
+            .get_or_init(|| {
+                if self.children.is_empty() {
+                    return None;
+                }
+                let lens: Vec<u64> = self
+                    .children
+                    .iter()
+                    .map(|c| c.indexed_len())
+                    .collect::<Option<_>>()?;
+                let total = lens.iter().try_fold(1u64, |acc, n| acc.checked_mul(*n))?;
+                Some((lens, total))
+            })
+            .as_ref()
     }
 
     /// Cache children 1..N to exhaustion, in order, stopping at the
@@ -333,12 +347,12 @@ impl CartesianStream {
 
 impl TupleStream for CartesianStream {
     fn indexed_len(&self) -> Option<u64> {
-        self.lens.as_ref().map(|_| self.total)
+        self.shape().map(|(_, total)| *total)
     }
 
     fn tuple_at(&self, i: u64) -> Option<Tuple> {
-        let lens = self.lens.as_ref()?;
-        if i >= self.total {
+        let (lens, total) = self.shape()?;
+        if i >= *total {
             return None;
         }
         // Mixed-radix digits of `i`, the last axis least significant.
@@ -357,7 +371,7 @@ impl TupleStream for CartesianStream {
 
     fn rewind(&mut self) {
         self.pos = 0;
-        if self.lens.is_some() || !self.initialized || self.children.is_empty() {
+        if self.shape().is_some() || !self.initialized || self.children.is_empty() {
             return;
         }
         self.children[0].rewind();
@@ -368,7 +382,7 @@ impl TupleStream for CartesianStream {
     }
 
     fn advance(&mut self) -> Result<Option<Tuple>, RuntimeError> {
-        if self.lens.is_some() {
+        if self.shape().is_some() {
             let t = self.tuple_at(self.pos);
             if t.is_some() {
                 self.pos += 1;
@@ -918,61 +932,61 @@ impl TupleStream for OrderStreamingStream {
 /// Over an addressable input (R2) the stream holds only the selection
 /// and computes each selected tuple as it is emitted; over any other
 /// input it holds the input's tuples, and over a continuous axis the
-/// samples, as the traversal does.
+/// samples, as the traversal does. Once evaluated, its tuples are
+/// addressed through the selection (comprehension_forms.md §3.6), so an
+/// enclosing cartesian or cycle zip reads them by position.
 struct OrderMaterializeStream {
     order: Comprehension,
-    state: Selected,
+    /// The selected tuples addressed by position, or the error the
+    /// evaluation ended with, returned on every pull; evaluated on the
+    /// first pull or address.
+    selected: OnceCell<Result<IndexedTuples, RuntimeError>>,
     pos: u64,
-}
-
-/// What an order stream holds.
-enum Selected {
-    /// Not evaluated yet.
-    Pending,
-    /// The selected tuples, addressed by position.
-    Ready(IndexedTuples),
-    /// The error the evaluation ended with, returned on every pull.
-    Failed(RuntimeError),
 }
 
 impl OrderMaterializeStream {
     fn new(order: Comprehension) -> Self {
         Self {
             order,
-            state: Selected::Pending,
+            selected: OnceCell::new(),
             pos: 0,
         }
+    }
+
+    fn selected(&self) -> &Result<IndexedTuples, RuntimeError> {
+        self.selected
+            .get_or_init(|| evaluate_indexed(&self.order, &NoScope::new()))
     }
 }
 
 impl TupleStream for OrderMaterializeStream {
     fn advance(&mut self) -> Result<Option<Tuple>, RuntimeError> {
-        if matches!(self.state, Selected::Pending) {
-            self.state = match evaluate_indexed(&self.order, &NoScope::new()) {
-                Ok(tuples) => Selected::Ready(tuples),
-                Err(error) => Selected::Failed(error),
-            };
+        if let Err(error) = self.selected() {
+            return Err(error.clone());
         }
-        match &self.state {
-            Selected::Ready(tuples) => {
-                let tuple = tuples.get(self.pos).map(|bindings| Tuple {
-                    bindings: bindings
-                        .iter()
-                        .map(|(name, value)| (name.clone(), stream_value(value)))
-                        .collect(),
-                });
-                if tuple.is_some() {
-                    self.pos += 1;
-                }
-                Ok(tuple)
-            }
-            Selected::Failed(error) => Err(error.clone()),
-            Selected::Pending => unreachable!("evaluated above"),
+        let tuple = self.tuple_at(self.pos);
+        if tuple.is_some() {
+            self.pos += 1;
         }
+        Ok(tuple)
     }
 
     fn rewind(&mut self) {
         self.pos = 0;
+    }
+
+    fn indexed_len(&self) -> Option<u64> {
+        self.selected().as_ref().ok().map(IndexedTuples::len)
+    }
+
+    fn tuple_at(&self, i: u64) -> Option<Tuple> {
+        let bindings = self.selected().as_ref().ok()?.get(i)?;
+        Some(Tuple {
+            bindings: bindings
+                .iter()
+                .map(|(name, value)| (name.clone(), stream_value(value)))
+                .collect(),
+        })
     }
 }
 

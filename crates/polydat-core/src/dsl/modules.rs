@@ -372,7 +372,7 @@ impl Compiler {
                     self.pending_events
                         .extend(super::traversal::warning_events(&rewritten, &warnings));
                     let name = format!("{prefix}{}", b.targets.join(","));
-                    let value = crate::iteration::comprehension::StreamerValue::new(
+                    let value = crate::iteration::comprehension::StreamerValue::in_scope(
                         rewritten.to_text(),
                         comprehension.clone(),
                     );

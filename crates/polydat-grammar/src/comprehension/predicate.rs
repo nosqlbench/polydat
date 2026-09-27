@@ -26,6 +26,7 @@
 //! fail. Every node carries the byte range of its text in the
 //! predicate, enclosing parentheses included.
 
+use std::collections::BTreeSet;
 use std::ops::Range;
 
 use crate::ast::BinOpKind;
@@ -142,6 +143,84 @@ pub fn parse_predicate(text: &str) -> Result<Predicate, String> {
             &text[token.span.clone()]
         )),
     }
+}
+
+/// The names a predicate reads (comprehension_forms.md §5 V3).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PredicateReads {
+    /// Every `{name}` element: a name the tuple binds, or one the scope
+    /// the predicate is evaluated in supplies.
+    pub elements: BTreeSet<String>,
+    /// Every bare word the predicate reads as a name. A predicate reads
+    /// a scope only through `{name}`, so no scope supplies one.
+    pub bare: BTreeSet<String>,
+}
+
+/// The names `text` reads, as the runtime evaluates it: the elements and
+/// literals of its tree directly, and each opaque expression as the
+/// language's expression it is once its elements are interpolated, so a
+/// callee, a cast's type, and `true` and `false` are not names. A
+/// predicate that does not parse is read whole as one expression.
+pub fn predicate_reads(text: &str) -> PredicateReads {
+    let mut reads = PredicateReads::default();
+    match parse_predicate(text) {
+        Ok(tree) => collect_reads(&tree, text, &mut reads),
+        Err(_) => expression_reads(text, &mut reads),
+    }
+    reads
+}
+
+fn collect_reads(node: &Predicate, text: &str, reads: &mut PredicateReads) {
+    match &node.kind {
+        PredicateKind::Or(parts) | PredicateKind::And(parts) => {
+            for part in parts {
+                collect_reads(part, text, reads);
+            }
+        }
+        PredicateKind::Not(inner) => collect_reads(inner, text, reads),
+        PredicateKind::Compare(_, a, b) | PredicateKind::Arith(_, a, b) => {
+            collect_reads(a, text, reads);
+            collect_reads(b, text, reads);
+        }
+        PredicateKind::In(needle, items) => {
+            collect_reads(needle, text, reads);
+            for item in items {
+                collect_reads(item, text, reads);
+            }
+        }
+        PredicateKind::Element(name) => {
+            reads.elements.insert(name.clone());
+        }
+        PredicateKind::Literal(_) => {}
+        PredicateKind::Expr => expression_reads(node.text(text), reads),
+    }
+}
+
+/// An opaque expression's reads. The runtime interpolates every
+/// `{name}` in its text, inside a quoted string too, before it
+/// evaluates the rest as an expression; each of those is an element,
+/// and each name the rest references is a bare word.
+fn expression_reads(text: &str, reads: &mut PredicateReads) {
+    let mut interpolated = BTreeSet::new();
+    crate::refs::collect_string_interpolation_refs(text, &mut interpolated);
+    let mut plain = String::with_capacity(text.len());
+    let mut at = 0;
+    if let Ok(tokens) = tokenize(text) {
+        for token in tokens {
+            if let Tok::Element(_) = token.tok {
+                plain.push_str(&text[at..token.span.start]);
+                plain.push('0');
+                at = token.span.end;
+            }
+        }
+    }
+    plain.push_str(&text[at..]);
+    reads.bare.extend(
+        crate::refs::referenced_names(&plain)
+            .into_iter()
+            .filter(|name| !interpolated.contains(name)),
+    );
+    reads.elements.extend(interpolated);
 }
 
 #[derive(Debug, Clone)]

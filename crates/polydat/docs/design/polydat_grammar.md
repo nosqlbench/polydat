@@ -1131,9 +1131,16 @@ comprehension_forms.md §10.9.1 specifies the evaluation in full.
 A string in a predicate is quoted, as everywhere in the language:
 `{region} == "us-east"` or `{region} == 'us-east'`. A bare word is a
 name, never a string, and a predicate has no names beside its elements,
-so `{region} == us-east` fails at the first tuple it tests, reading
-`us - east` as a subtraction of two names; the error shows the word
+so `{region} == us-east` reads `us - east` as a subtraction of two names
+that nothing supplies, and the compile refuses it, saying a string is
 quoted.
+
+Every name a source or a predicate reads is bound by the comprehension
+or is a name of the scope the traversal opens in: a source reads the
+elements of the clauses before it, a predicate its tuple's elements, and
+both read the enclosing scope's wires, which the traversal captures when
+it opens. The compile refuses a name that is neither, naming it and
+where it is read (comprehension_forms.md §5 V3).
 
 ```polydat compile
 input cycle: u64
@@ -1154,7 +1161,11 @@ the set and says so, and there is no form that names a function of the
 author's own. An order after a `where` ranks only the tuples that pass,
 by their positions in the unfiltered space, and keeps its truncation's
 worth of them: `where {k} != 5 order extrema/1` is the most extreme
-stratum any passing tuple is in (comprehension_forms.md §5 V5).
+stratum any passing tuple is in (comprehension_forms.md §5 V5). An
+order over a producer's order, `for sweep order shuffle` over `sweep :=
+for u in 0.0..1.0 order halton/50`, orders that order's output: its
+tuples as one axis in the order it selected them, so this shuffles the
+50 points (comprehension_forms.md §3.6, §7.4).
 
 <a id="sec-for-elements"></a>
 ### 16.3 Element types
