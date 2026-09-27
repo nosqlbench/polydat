@@ -51,66 +51,6 @@ impl Metadata for PolydatKernel {
 }
 
 impl Dataflow for PolydatKernel {
-    fn set_wire_idx(
-        &mut self,
-        idx: usize,
-        value: Value,
-    ) -> Result<(), crate::kernel::api::WriteError> {
-        use crate::kernel::api::WriteError;
-
-        // Look up the slot's declared port type. An out-of-range
-        // index is an unknown-wire error rather than a panic —
-        // the typed boundary surfaces the diagnostic uniformly
-        // for callers who computed the index from external
-        // metadata.
-        let slot_type = match self.program().input_port_type_by_idx(idx) {
-            Some(t) => t,
-            None => {
-                return Err(WriteError::UnknownWire {
-                    key: format!("wire[{idx}]"),
-                    known: Vec::new(),
-                });
-            }
-        };
-
-        let slot_name = self
-            .program()
-            .input_name_by_idx(idx)
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| format!("wire[{idx}]"));
-
-        // Per S4 / T2: try direct write, fall back to the
-        // boundary auto-adapter, then report a TypeMismatch
-        // diagnostic if no adapter healed the mismatch. The
-        // `adapt_boundary_value` helper currently passes
-        // unhealable mismatches through with a warning; here we
-        // detect that case by checking whether the adapted value
-        // still has the wrong port type, and surface a typed
-        // error instead of letting silent corruption propagate
-        // to downstream readers.
-        let got = value.port_type();
-        let adapted = crate::kernel::state::adapt_boundary_value(&slot_name, slot_type, value);
-        // `Value::None` is the absent sentinel — always permitted
-        // regardless of slot type (per none_semantics.md / SRD-74
-        // Rule 1). For non-None values, the residual check uses
-        // the bit-stuffing equivalence helper
-        // (`Value::satisfies_slot`) so a narrowing adapter that
-        // outputs `Value::U64` for a U32 slot — the runtime
-        // bit-stuffed form per type_system.md §1 — passes
-        // validation. The pre-adapter check in
-        // `adapt_boundary_value` remains strict, so an unadapted
-        // Value::U64 cannot silently truncate into a U32 slot.
-        if !adapted.satisfies_slot(slot_type) {
-            return Err(WriteError::TypeMismatch {
-                slot: slot_name,
-                expected: slot_type,
-                got,
-            });
-        }
-        self.state().set_input(idx, adapted);
-        Ok(())
-    }
-
     #[inline]
     fn get_wire_idx(&self, idx: usize) -> Value {
         self.state_ref().get_input(idx)
@@ -437,18 +377,16 @@ impl crate::kernel::KernelProgram for crate::kernel::PolydatProgram {
 }
 
 #[cfg(test)]
-// These tests exercise the deprecated `Dataflow` writes themselves.
-#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::dsl::compile::compile_polydat_interpreter;
 
-    /// Indexed wire access works.
+    /// Indexed wire access reads what the coordinates were set to.
     #[test]
-    fn dataflow_indexed_set_get() {
+    fn dataflow_indexed_get() {
         let mut k = compile_polydat_interpreter("input cycle: u64\nconst x := 7\n").unwrap();
         // cycle is index 0
-        k.set_wire(0_usize, Value::U64(42)).expect("typed write");
+        k.set_inputs(&[42]);
         assert_eq!(k.get_wire(0_usize), Some(Value::U64(42)));
     }
 
@@ -456,7 +394,7 @@ mod tests {
     #[test]
     fn dataflow_named_set_get() {
         let mut k = compile_polydat_interpreter("input cycle: u64\nextern n: u64\n").unwrap();
-        k.set_wire("n", Value::U64(5)).expect("typed write");
+        k.set_input("n", Value::U64(5)).expect("typed write");
         match k.get_wire("n") {
             Some(Value::U64(5)) => {}
             other => panic!("expected U64(5), got {other:?}"),
@@ -468,7 +406,8 @@ mod tests {
     fn dataflow_string_key() {
         let mut k = compile_polydat_interpreter("input cycle: u64\nextern n: u64\n").unwrap();
         let name = String::from("n");
-        k.set_wire(&name, Value::U64(99)).expect("typed write");
+        k.set_input(&name, Value::U64(99)).expect("typed write");
+        assert_eq!(k.get_wire(&name), Some(Value::U64(99)));
         assert_eq!(k.get_wire(name.clone()), Some(Value::U64(99)));
     }
 
@@ -476,7 +415,7 @@ mod tests {
     #[test]
     fn dataflow_unknown_name_safe() {
         let mut k = compile_polydat_interpreter("input cycle: u64\n").unwrap();
-        let err = k.set_wire("nonexistent", Value::U64(1)).unwrap_err();
+        let err = k.set_input("nonexistent", Value::U64(1)).unwrap_err();
         assert!(matches!(
             err,
             crate::kernel::api::WriteError::UnknownWire { .. }
@@ -485,18 +424,12 @@ mod tests {
     }
 
     /// S4 type-check: writing the wrong Value variant to a typed
-    /// slot returns Err(TypeMismatch) when no boundary adapter
-    /// can heal the mismatch.
-    ///
-    /// `VecF32 → U64` is intentionally absent from the polyfill
-    /// matrix (type_system.md §3 — collection → scalar requires
-    /// explicit choice), so it is a stable "no adapter exists"
-    /// pair for testing the diagnostic.
+    /// slot returns Err(TypeMismatch).
     #[test]
     fn dataflow_type_mismatch_rejected() {
         let mut k = compile_polydat_interpreter("input cycle: u64\nextern n: u64\n").unwrap();
         let err = k
-            .set_wire(
+            .set_input(
                 "n",
                 Value::VecF32(crate::ast::SliceArc::from_vec(vec![1.0_f32, 2.0])),
             )
@@ -534,18 +467,21 @@ mod tests {
         assert!(msg.contains("vec_dot"), "missing vec_dot hint: {msg}");
     }
 
-    /// S4 type-adapt: a healable mismatch (u64 → f64) routes
-    /// through the boundary auto-adapter rather than rejecting.
+    /// A write is never converted: a `u64` into an `f64` extern is
+    /// refused, and the host converts it first with `convert::to_port`.
     #[test]
-    fn dataflow_healable_mismatch_adapts() {
+    fn typed_write_converts_through_to_port() {
         let mut k = compile_polydat_interpreter("input cycle: u64\nextern x: f64\n").unwrap();
-        // u64 → f64 has an auto-adapter (lossless widening); the
-        // typed-write API should accept this transparently.
-        k.set_wire("x", Value::U64(42))
-            .expect("u64→f64 boundary adapter");
+        assert!(matches!(
+            k.set_input("x", Value::U64(42)),
+            Err(crate::kernel::api::WriteError::TypeMismatch { .. })
+        ));
+        let converted =
+            crate::convert::to_port(Value::U64(42), PortType::F64).expect("u64 converts to f64");
+        k.set_input("x", converted).expect("converted value");
         match k.get_wire("x") {
             Some(Value::F64(42.0)) => {}
-            other => panic!("expected adapted F64(42.0), got {other:?}"),
+            other => panic!("expected converted F64(42.0), got {other:?}"),
         }
     }
 
@@ -555,7 +491,8 @@ mod tests {
     #[test]
     fn dataflow_none_passes_through_any_slot() {
         let mut k = compile_polydat_interpreter("input cycle: u64\nextern n: u64\n").unwrap();
-        k.set_wire("n", Value::None).expect("None always permitted");
+        k.set_input("n", Value::None)
+            .expect("None always permitted");
     }
 
     /// Metadata trait surfaces names + types.
@@ -629,7 +566,7 @@ mod tests {
             .expect("matter build");
         let mut root =
             <PolydatKernel as Construction>::root(matter).expect("root from program matter");
-        root.set_wire("n", Value::U64(13)).expect("set_wire");
+        root.set_input("n", Value::U64(13)).expect("set_input");
         assert_eq!(root.get_wire("n"), Some(Value::U64(13)));
     }
 

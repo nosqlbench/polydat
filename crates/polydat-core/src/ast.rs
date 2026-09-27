@@ -692,13 +692,10 @@ impl Value {
     /// - `Value::None` is acceptable for every slot type
     ///   (SRD-74 absent sentinel).
     ///
-    /// Used at the typed-write residual check
-    /// (`Dataflow::set_wire_idx`) AFTER the boundary adapter has
-    /// already converted/validated the value — see
-    /// `kernel/api_impl.rs`. The pre-adapter check in
-    /// `adapt_boundary_value` stays strict (`port_type ==
-    /// slot_type`) so an unadapted Value::U64 can never silently
-    /// truncate into a narrower slot.
+    /// Every typed input write checks a value with it. The check in
+    /// `adapt_boundary_value` stays strict (`port_type == slot_type`)
+    /// so an unadapted Value::U64 can never silently truncate into a
+    /// narrower slot.
     #[inline]
     pub fn satisfies_slot(&self, slot_type: PortType) -> bool {
         // A `Dyn` slot takes any value as written; its converter node

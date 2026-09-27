@@ -274,3 +274,41 @@ fn a_scope_s_synthesized_result_extern_converts_under_warn() {
         assert_eq!(k.pull("total"), Value::U64(42), "{engine}");
     }
 }
+
+/// A binder's copy from the parent into a child input the child
+/// declared with another type is refused, on every engine: building the
+/// child fails naming the input, the parent's type, and the child's
+/// (input_variance.md §7).
+#[test]
+fn a_binder_copy_into_a_declared_input_of_another_type_is_refused() {
+    for engine in engines() {
+        let parent = polydat::dsl::compile::compile_polydat_with(
+            "input cycle: u64\nextern region: str = \"eu\"\n",
+            engine,
+        )
+        .unwrap_or_else(|e| panic!("{engine}: {e}"));
+        let child = polydat::dsl::compile::compile_polydat_with(
+            "input cycle: u64\nextern region: u64 = 1\nout := u64_add(region, 1)\n",
+            engine,
+        )
+        .unwrap_or_else(|e| panic!("{engine}: {e}"));
+        let err = match polydat::kernel::bind_under(parent.as_ref(), child.into_program(), &[]) {
+            Ok(_) => panic!("{engine}: a str copied into a declared u64 input must be refused"),
+            Err(e) => e,
+        };
+        match &err {
+            KernelError::Write(polydat::kernel::WriteError::FromParent {
+                slot,
+                expected,
+                got,
+            }) => {
+                assert_eq!(slot, "region", "{engine}");
+                assert_eq!(*expected, PortType::U64, "{engine}");
+                assert_eq!(*got, PortType::Str, "{engine}");
+            }
+            other => panic!("{engine}: expected FromParent, got {other:?}"),
+        }
+        let text = err.to_string();
+        assert!(text.contains("parent") && text.contains("region"), "{text}");
+    }
+}

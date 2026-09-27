@@ -34,19 +34,6 @@ use super::spec::{ExportSpec, ImportSpec};
 /// fans the value through the parent's `SharedCell`.
 const WRITE_THROUGH_PREFIX: &str = "__write_";
 
-fn port_type_keyword(pt: PortType) -> &'static str {
-    match pt {
-        PortType::U64 | PortType::U32 => "u64",
-        PortType::I64 | PortType::I32 => "i64",
-        PortType::F64 | PortType::F32 => "f64",
-        PortType::Bool => "bool",
-        // Everything that isn't a numeric / bool maps to the
-        // string keyword — matches the existing synthesiser
-        // convention used by `build_do_loop_scope_kernel`.
-        _ => "String",
-    }
-}
-
 /// Optional compile-time configuration passed through to
 /// [`compile_ast_interpreter_with_options`](crate::dsl::compile::compile_ast_interpreter_with_options) when finalize compiles the body. When
 /// every field is at its default, finalize falls back to the
@@ -620,9 +607,10 @@ impl<P> SubcontextBuilder<P> {
 
             // Inject `extern <name>: <type>` declarations for
             // every write-through that the child body doesn't
-            // already extern. Prepend them so the input slot is
-            // present before the compiler sees the renamed
-            // binding.
+            // already extern, typed exactly as the parent's cell,
+            // so the cell attaches with no conversion. Prepend them
+            // so the input slot is present before the compiler sees
+            // the renamed binding.
             let mut prepended: Vec<Statement> = Vec::new();
             for (name, pt) in &write_through_specs {
                 if already_extern.contains(name) {
@@ -631,7 +619,7 @@ impl<P> SubcontextBuilder<P> {
                 synthesized.push(name.clone());
                 prepended.push(Statement::ExternPort(ExternPort {
                     name: name.clone(),
-                    typ: port_type_keyword(*pt).to_string(),
+                    typ: pt.to_keyword().to_string(),
                     default: None,
                     span: span0,
                 }));

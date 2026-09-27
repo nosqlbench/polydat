@@ -135,6 +135,39 @@ pub(crate) fn adapt_boundary_value(
     }
 }
 
+/// Write a value the binder copied from the parent into the child's
+/// input `index` (input_variance.md §7). A declared input takes the
+/// value as it is or refuses it; an input whose type the compiler
+/// inferred takes a value the boundary adapter catalog converts into
+/// its type. A refused copy is an error naming the input, both types,
+/// and the parent as the value's source.
+fn copy_from_parent(
+    child: &mut dyn crate::kernel::Kernel,
+    index: usize,
+    name: &str,
+    slot_type: crate::ast::PortType,
+    value: Value,
+) -> Result<(), crate::KernelError> {
+    use crate::kernel::WriteError;
+    let got = value.port_type();
+    let value = match child.input_type_origin(name) {
+        Some(crate::kernel::TypeOrigin::Inferred) if !value.satisfies_slot(slot_type) => {
+            adapt_boundary_value(name, slot_type, value)
+        }
+        _ => value,
+    };
+    child.set_input_at(index, value).map_err(|e| {
+        crate::KernelError::Write(match e {
+            WriteError::TypeMismatch { slot, expected, .. } => WriteError::FromParent {
+                slot,
+                expected,
+                got,
+            },
+            other => other,
+        })
+    })
+}
+
 /// A compiled Polydat Kernel: an `Arc<PolydatProgram>` plus one `PolydatState`.
 ///
 /// ## Invariants
@@ -491,8 +524,8 @@ impl PolydatKernel {
     /// write on the next read.
     ///
     /// TYPE-STABLE (scope_model.md §"Type stability"): a cell keeps
-    /// ONE type for life. Each pending value passes the same typed
-    /// boundary the named-write path (`set_wire`) already enforces —
+    /// ONE type for life. Each pending value passes a typed
+    /// boundary —
     /// matching types pass, a catalog adapter heals (e.g. the lossless
     /// U64→F64 widening), and an UNHEALABLE mismatch (narrowing, kind
     /// change) is an `Err` at THIS write site naming the cell, its
@@ -1238,28 +1271,29 @@ impl PolydatKernel {
             let inner_slot_type = child
                 .input_port_type(&name)
                 .expect("input index resolved but no declared port type");
+            // A coordinate is positioned with `set_inputs`, never copied.
+            if inner_idx < child.coord_count() {
+                continue;
+            }
             if outer_has_slot || outer_is_const {
                 // Both conditions force the chain-walking value-copy
                 // path (see the const rationale above; an outer input
                 // slot likewise reads through outer.lookup so the
                 // grandparent fall-through applies).
                 if let Some(value) = outer_scope.lookup(&name) {
-                    let adapted = adapt_boundary_value(&name, inner_slot_type, value);
-                    let _ = child.set_input_at(inner_idx, adapted);
+                    copy_from_parent(child, inner_idx, &name, inner_slot_type, value)?;
                 }
             } else if let Some(cell) = outer.output_cell(&name) {
                 child.bind_input_cell(&name, cell);
                 attached_names.insert(name.to_string());
             } else if let Some(value) = outer_scope.lookup(&name) {
-                let adapted = adapt_boundary_value(&name, inner_slot_type, value);
-                let _ = child.set_input_at(inner_idx, adapted);
+                copy_from_parent(child, inner_idx, &name, inner_slot_type, value)?;
             } else if let Some(value) =
                 crate::dsl::factories::resolve_extern(&name, inner_slot_type)
             {
                 // γ-8 virtual-wire resolver: outer chain has no
                 // binding; a host-registered resolver provides one.
-                let adapted = adapt_boundary_value(&name, inner_slot_type, value);
-                let _ = child.set_input_at(inner_idx, adapted);
+                copy_from_parent(child, inner_idx, &name, inner_slot_type, value)?;
             }
         }
 
