@@ -179,9 +179,8 @@ trait Engine {
 
 struct Interpreter(polydat::kernel::PolydatKernel);
 
-/// Every compiled tier, driven identically. Before `SlotKernel` this
-/// was three newtypes over three kernel types with three byte-identical
-/// `run` bodies; the tier is now the label it always was.
+/// Every compiled tier, driven identically through `SlotKernel`; the
+/// tier is only a label.
 struct Compiled(&'static str, Box<dyn polydat::SlotKernel>);
 
 fn caught<T>(f: impl FnOnce() -> T) -> Result<T, String> {

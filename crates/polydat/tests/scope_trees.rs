@@ -78,7 +78,7 @@ const ITER: &str = "extern mode: String\nextern i: u64\nrow := \"{mode}-{i}\"\n"
 
 /// params root → `set:` scope → phase → fork → iteration child, the
 /// shape nmbrs builds, with a const in the `set:` scope that shadows a
-/// parameter (the 2026-09-24 const-shadow case), a parameter carried by
+/// parameter, a parameter carried by
 /// `propagate_inputs`, a reset, and an iteration binding.
 #[test]
 fn a_scope_tree_answers_alike_on_every_engine_pair() {

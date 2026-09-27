@@ -14,7 +14,7 @@ use super::common;
 // ---------------------------------------------------------------------------
 // Helper functions
 //
-// SRD-105 differential harness: every coverage expression compiles
+// Differential harness (engines.md §7): every coverage expression compiles
 // TWICE — once on the interpreter (jit=off) and once with forced
 // cone extraction (jit=force) — and every pull is asserted
 // bit-identical across the two. This makes the whole function
@@ -792,7 +792,7 @@ fn cycle_walk_bounded() {
 
 #[test]
 fn shuffle_bounded() {
-    // SRD-80b Phase E — `shuffle` now takes `(input, feedback, size, min)`.
+    // `shuffle` takes `(input, feedback, size, min)`.
     // feedback=0x41 is the bank-0 polynomial for width 7 (size=100 needs
     // 7 LFSR bits; see polydat-core/src/numeric/metashift_banks.inc).
     let mut k = polydat("out := shuffle(cycle, 0x41, 100, 0)");
@@ -804,7 +804,7 @@ fn shuffle_bounded() {
 
 #[test]
 fn shuffle_bijective() {
-    // SRD-80b Phase E — `shuffle` now takes `(input, feedback, size, min)`.
+    // `shuffle` takes `(input, feedback, size, min)`.
     let mut k = polydat("out := shuffle(cycle, 0x41, 100, 0)");
     let mut seen = std::collections::HashSet::new();
     for cycle in 0..100 {

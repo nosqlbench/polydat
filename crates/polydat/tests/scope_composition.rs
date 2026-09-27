@@ -362,7 +362,7 @@ fn const_literal_constant_folds() {
 }
 
 // =========================================================================
-// Extern inputs used as wire arguments (compiler fix)
+// Extern inputs used as wire arguments
 // =========================================================================
 
 #[test]
@@ -968,7 +968,7 @@ fn extern_default_bool_false_works() {
 // `shared X := <literal>` compiles to a SharedCell-backed slot
 // =========================================================================
 //
-// Per SRD-16 §"Mutability Rules: Shared Mutable", a literal-init
+// Per scope_model.md §6, a literal-init
 // `shared` binding gives outer scope a real input slot AND a
 // passthrough output. Outer's construction auto-creates a
 // SharedCell on the slot; inner `materialize_wiring_from_outer` shares the
@@ -1187,36 +1187,37 @@ fn shared_computed_start_is_taken_at_init() {
 }
 
 // =========================================================================
-// None propagation through string interpolation (SRD-73 follow-up)
+// None propagation through string interpolation
+// (none_semantics.md, "Interaction with `set:` and the grammar invariant")
 // =========================================================================
 //
 // `set: { X: "{Y}" }` desugars to `const X := "{Y}"`. With None-
 // propagating string interpolation, when `Y` resolves to None
 // (because it wasn't bound by the outer scope), the printf-backed
 // interpolation yields Value::None for X, and `get_constant`'s
-// existing None filter (polydatkernel.rs:458-462) elides X from the
-// scope's outputs. Inner `lookup("X")` then falls through to the
-// outer scope's binding for X — exactly the shadow-semantics
-// behavior the set: sugar promises.
+// None filter (kernel/state.rs) elides X from the scope's outputs.
+// Inner `lookup("X")` then falls through to the outer scope's
+// binding for X — exactly the shadow-semantics behavior the set:
+// sugar promises.
 //
-// Before the fix: printf rendered Value::None as the literal
-// "None" via the catch-all `_ => format!("{val:?}")` arm. That
-// shadowed any outer binding with `Str("None")` and corrupted
-// wire-protocol bytes downstream (e.g. CQL CREATE INDEX seeing
-// `'source_model': 'None'` instead of the workload-param default).
+// Rendering Value::None as the literal "None" would shadow any
+// outer binding with `Str("None")` and corrupt wire-protocol bytes
+// downstream (e.g. CQL CREATE INDEX seeing `'source_model': 'None'`
+// instead of the workload-param default).
 
 #[test]
 fn const_with_unbound_interpolation_falls_through_to_outer() {
-    // Full SRD-74 conditional-shadow chain in one test:
+    // Full conditional-shadow chain (none_semantics.md,
+    // "Conditional-shadow semantics for `const`") in one test:
     //
     // 1. Rule 1 (Printf::eval None-propagation): the
     //    interpolation `"{Y}"` with Y unbound yields
     //    `Value::None` instead of `Str("None")`.
-    // 2. `get_constant("X")` filter (polydatkernel.rs:458-462):
+    // 2. `get_constant("X")` filter (kernel/state.rs):
     //    None-valued output is elided from the scope.
-    // 3. SRD-74 P2 (auto-extern for `const X := <expr>` with
-    //    name references in RHS): the compiler adds an
-    //    implicit input slot for X.
+    // 3. Auto-extern for `const X := <expr>` with name
+    //    references in RHS: the compiler adds an implicit
+    //    input slot for X.
     // 4. `materialize_wiring_from_outer` wires that slot from
     //    outer's `const X := "DEFAULT"`.
     // 5. `lookup("X")` two-tier read: get_constant returns
@@ -1225,8 +1226,8 @@ fn const_with_unbound_interpolation_falls_through_to_outer() {
     //
     // Net behavior: inner's `const X := "{Y}"` is a CONDITIONAL
     // shadow. Real value → shadow wins. None → outer's
-    // "DEFAULT" passes through. The `set:` desugar from SRD-73
-    // works correctly without any change to the desugar itself.
+    // "DEFAULT" passes through. The `set:` desugar works
+    // without any special handling of its own.
     let outer = compile_polydat_interpreter(
         r#"
         input cycle: u64
@@ -1267,7 +1268,7 @@ fn const_with_unbound_interpolation_falls_through_to_outer() {
 
 #[test]
 fn three_scope_chain_transitive_fall_through() {
-    // SRD-74 P2 + wiring fix: a None-valued conditional shadow
+    // A None-valued conditional shadow
     // in a MIDDLE scope must be transparent — descendants see
     // the workload-scope default, not the middle's None.
     //
@@ -1354,14 +1355,12 @@ fn three_scope_chain_transitive_fall_through() {
 
 #[test]
 fn pure_literal_const_does_not_auto_extern() {
-    // SRD-74 P2 only auto-externs consts whose RHS references
-    // at least one name. Pure-literal consts (e.g. the
-    // SRD-13f Gate 2 iter-var emission, `const x := 1`) MUST
-    // NOT get an input slot — they always fold to a real value
-    // and there's nothing for the chain to fall through to.
-    // The Gate 2 invariant in
-    // comprehension::synthesis::tests::iter_var_as_final_const
-    // is the canonical assertion for this case.
+    // Only consts whose RHS references at least one name are
+    // auto-externed (none_semantics.md, "Conditional-shadow
+    // semantics for `const`"). Pure-literal consts such as
+    // `const x := 1` MUST NOT get an input slot — they always
+    // fold to a real value and there's nothing for the chain to
+    // fall through to.
     let kernel = compile_polydat_interpreter(
         r#"
         input cycle: u64
@@ -1379,7 +1378,7 @@ fn pure_literal_const_does_not_auto_extern() {
 
 #[test]
 fn const_with_bound_interpolation_shadows_outer() {
-    // Regression guard for the happy path: when the interpolation
+    // The happy path: when the interpolation
     // input IS bound, the const shadows the outer binding as
     // expected. None propagation must not break the normal case.
     let outer = compile_polydat_interpreter(
@@ -1426,14 +1425,13 @@ fn const_with_bound_interpolation_shadows_outer() {
 
 /// A cross-kernel cell write must invalidate EVERY memoized node
 /// between the cell-bound slot and a pulled output — not only the
-/// pull root. Regression: `check_cell_clean` updated `last_seen`
-/// (consuming the dirty signal) at the first node that checked,
-/// then the root's re-evaluation recursed into upstream nodes whose
-/// own checks now read the consumed signal as clean and returned
-/// stale buffers — the root recomputed its pre-write value forever.
-/// A single-comparison predicate hides this (the root reads the
-/// slot directly); the multi-node tree below is the smallest shape
-/// that exposed it (a phase-poll predicate memoized at its
+/// pull root. A check that consumed the dirty signal at the first
+/// node to look would leave the upstream nodes the root's
+/// re-evaluation recurses into reading it as clean and returning
+/// stale buffers, so the root would recompute its pre-write value
+/// forever. A single-comparison predicate hides this (the root reads
+/// the slot directly); the multi-node tree below is the smallest
+/// shape that shows it (a phase-poll predicate memoized at its
 /// pre-write value across every re-pull).
 #[test]
 fn cross_kernel_cell_write_invalidates_full_memoized_chain() {

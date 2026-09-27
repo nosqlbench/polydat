@@ -160,9 +160,9 @@ fn every_engine_emits_the_same_rows() {
     ]);
     assert!(ok, "{stderr}");
     assert_eq!(rows(&stdout), want);
-    // And with every eligible node fused. The cone mode is `--cones`
-    // alone now; the engine flag no longer carries it, so this is the
-    // only spelling that reaches it.
+    // And with every eligible node fused. Only `--cones` sets the cone
+    // mode; the engine flag does not carry it, so this is the only
+    // spelling that reaches it.
     let (ok, stdout, stderr) = run_binary(&[
         "run",
         path.to_str().unwrap(),

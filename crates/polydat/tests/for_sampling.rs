@@ -444,10 +444,8 @@ fn a_count_too_large_to_hold_is_refused_not_aborted() {
 }
 
 /// A producer over a context-free generator that fails is refused when
-/// its stream opens, with the generator's own message. The failure
-/// used to disappear: the compile's evaluation failed, the clause was
-/// kept for a traversal that a coordinate stream never has, and the
-/// stream dispensed nothing, which reads the same as a generator with
+/// its stream opens, with the generator's own message, rather than
+/// dispensing nothing, which would read the same as a generator with
 /// no values.
 #[test]
 fn a_producer_over_a_failing_generator_says_why() {

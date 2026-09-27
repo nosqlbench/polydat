@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Fuzz coverage for the `for` construct (SRD 113 step 1).
+//! Fuzz coverage for the `for` construct (for_traversal.md §2).
 //!
 //! Two generators feed the front end:
 //!

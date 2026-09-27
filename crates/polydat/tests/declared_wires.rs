@@ -5,10 +5,9 @@
 //! does, from the source instead of from a compiled program (F-H7).
 //!
 //! `run --emit` needs the names of a scope's wires before the program
-//! is compiled, because the emit binding it appends names them. It
-//! used to get them by compiling the program once as a probe, reading
-//! a kernel, and compiling the transformed program again — so the run
-//! paid for two compiles and reported their sum as its compile time.
+//! is compiled, because the emit binding it appends names them. Reading
+//! them from the source spares the run a probe compile, so it pays for
+//! one compile and reports that one as its compile time.
 //!
 //! A second reading of "what does this scope bind" is only safe if it
 //! agrees with the first. This checks that it does, over the example

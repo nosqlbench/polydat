@@ -256,7 +256,7 @@ fn error_arity_mismatch() {
     assert!(result.is_err());
 }
 
-/// Larger DAG resembling the time-series workload from the SRD.
+/// Larger DAG resembling a multi-tenant time-series workload.
 #[test]
 fn timeseries_workload_sketch() {
     let mut asm = PolydatAssembler::new(vec!["cycle".into()]);

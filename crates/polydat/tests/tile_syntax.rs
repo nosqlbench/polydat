@@ -1,10 +1,10 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! SRD 114 step 1: the `tile` statement parses in every body form, the
+//! The `tile` statement parses in every body form (polytile.md §2), the
 //! template grammar yields the expected pieces under default and custom
-//! delimiters, the printer round trips, and the compiler declines with a
-//! pointer to the SRD until step 4 lands.
+//! delimiters, the printer round trips, and the compiler lowers a tile
+//! to a wire.
 
 use polydat::dsl::ast::{Expr, PolydatFile, Statement, TileBodyKind, TileDef, TilePiece};
 use polydat::dsl::pprint::pp_file;

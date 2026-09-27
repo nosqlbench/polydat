@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! SRD 114: tiles compile to wires and render byte-exactly. Holes encode
+//! Tiles compile to wires and render byte-exactly (polytile.md §5). Holes encode
 //! by type and position, formats apply first, branches select,
 //! projections repeat over comprehensions with element and outer wires,
 //! and splices inline earlier tiles.

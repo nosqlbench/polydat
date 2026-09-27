@@ -6,15 +6,13 @@
 // `approx_constant` for this test-only crate.
 #![allow(clippy::approx_constant)]
 
-//! SRD-80 PR B.1 — proc-macro `#[polydat_node]` validation
-//! tests. Defines a few pilot nodes inline using the macro and
-//! verifies their generated struct + NodeMeta + eval round-
-//! trip correctly.
-//!
-//! These tests exercise the SIMPLE case only: primitive
-//! scalar arguments and return types, no state, no JIT, no
-//! const args. The pilot is what proves the boxing/unboxing
-//! path works end-to-end before any library migration begins.
+//! Proc-macro `#[polydat_node]` validation tests
+//! (library_catalog.md, "Registration"). Defines pilot nodes
+//! inline using the macro and verifies their generated struct +
+//! NodeMeta + eval round-trip correctly, for every argument
+//! shape the macro accepts: scalars, const args and defaults,
+//! setup state, narrow widths, vectors, wrapper types,
+//! multi-output, variadics, `Value` args, and the compiled kits.
 
 use polydat::ast::{PolydatNode, PortType, Slot, SlotType, Value};
 
@@ -126,15 +124,14 @@ fn macro_eval_round_trips_through_value_boxing_for_bool() {
 
 #[test]
 fn macro_slot_type_is_wire_for_every_generated_input() {
-    // Catches any future drift where the macro might emit a
-    // ConstU64 / ConstStr slot by mistake (Phase B.1 only
-    // supports wire inputs).
+    // Catches the macro emitting a ConstU64 / ConstStr slot for
+    // an argument declared as a plain wire.
     for slot in MacroPilotStrEq::new().meta().ins.iter() {
         assert!(matches!(slot.slot_type(), SlotType::Wire));
     }
 }
 
-// ── PR B.2 — link-time FuncSig registration via NodeRegistration ──
+// ── Link-time FuncSig registration via NodeRegistration ──
 
 #[test]
 fn macro_registered_node_appears_in_runtime_registry() {
@@ -198,7 +195,7 @@ fn macro_registered_funcsig_params_match_function_signature() {
     assert_eq!(sig.outputs, 1);
 }
 
-// ── PR B.5 — Const<T> args + #[poly_default(VAL)] ──
+// ── Const<T> args + #[poly_default(VAL)] ──
 
 // Pilot 5 — single Const<u64> with no default. Wire u64 input
 // gets shifted by the captured const offset.
@@ -405,7 +402,7 @@ fn macro_mixed_const_types_evaluate_correctly() {
     panic!("macro_pilot_scale_or_zero not found in inventory");
 }
 
-// ── PR B.6 — Setup<T> via #[poly_const(...)] ──
+// ── Setup<T> via #[poly_const(...)] ──
 
 #[derive(Debug)]
 pub struct PrecomputedScale {
@@ -434,7 +431,7 @@ fn macro_pilot_setup(
     input * scaled.factor
 }
 
-// ── PR B.14 — Narrow integer + f32 widths ──
+// ── Narrow integer + f32 widths ──
 
 #[polydat::polydat_node(category = Conversions)]
 fn macro_pilot_u32_round_trip(input: u32) -> u32 {
@@ -491,7 +488,7 @@ fn macro_f32_addition() {
     assert!((out_val - 3.5).abs() < 0.0001);
 }
 
-// ── PR B.13 — Typed vector wires ──
+// ── Typed vector wires ──
 
 #[polydat::polydat_node(category = Diagnostic)]
 fn macro_pilot_vec_f32_passthrough(input: &[f32]) -> Vec<f32> {
@@ -548,7 +545,7 @@ fn macro_vec_disables_jit() {
     );
 }
 
-// ── PR B.11 — Wrapper types (Bytes, Json, Handle) ──
+// ── Wrapper types (Bytes, Json, Handle) ──
 
 use std::sync::Arc;
 
@@ -660,7 +657,8 @@ fn macro_handle_passthrough_with_downcast() {
 #[test]
 fn macro_wrapper_types_disable_jit() {
     use polydat::ast::PolydatNode;
-    // Json and Handle types are not JIT-eligible (SRD-111 supports String and Bytes via arena handles)
+    // Json and Handle wires are `Ref2` pairs, never immediates, so no u64 kit
+    // is emitted (compiled_handles.md §2)
     assert!(MacroPilotJsonToString::default().compiled_u64().is_none());
     assert!(
         MacroPilotHandlePassthrough::default()
@@ -669,7 +667,7 @@ fn macro_wrapper_types_disable_jit() {
     );
 }
 
-// ── PR B.10 — Multi-output via tuple return ──
+// ── Multi-output via tuple return ──
 
 // Positional default names: out_0, out_1, out_2.
 #[polydat::polydat_node(category = Math)]
@@ -758,9 +756,9 @@ fn macro_tuple_return_funcsig_outputs_count_matches_arity() {
 #[test]
 fn macro_tuple_return_jit_round_trip() {
     use polydat::ast::PolydatNode;
-    // SRD-80 PR B.15: multi-output gained Phase 2 closure
-    // support. divmod is (u64, u64) — both JIT-eligible —
-    // so a `compiled_u64()` closure is now emitted.
+    // Multi-output nodes get a Phase 2 closure. divmod is
+    // (u64, u64) — both JIT-eligible — so a `compiled_u64()`
+    // closure is emitted.
     let node = MacroPilotDivmod::default();
     let compiled = node
         .compiled_u64()
@@ -771,7 +769,7 @@ fn macro_tuple_return_jit_round_trip() {
     assert_eq!(out[1], 2);
 }
 
-// ── PR B.9 — Variadics via &[T] arg ──
+// ── Variadics via &[T] arg ──
 
 #[polydat::polydat_node(
     category = Variadic,
@@ -896,7 +894,7 @@ fn macro_variadic_constructs_via_runtime_factory_with_wires_slice() {
     panic!("macro_pilot_sum not registered");
 }
 
-// ── PR B.8 — PolyWire via Value arg ──
+// ── PolyWire via Value arg ──
 
 // Passthrough Value→Value: SameAsInput output.
 #[polydat::polydat_node(category = Diagnostic)]
@@ -1045,7 +1043,7 @@ fn macro_setup_arg_does_not_appear_in_funcsig() {
     assert_eq!(sig.params[1].name, "seed");
 }
 
-// ── PR B.7 — JIT (Phase 2/3) emission ──
+// ── JIT (Phase 2/3) emission ──
 
 // JIT-eligible: bare u64 + Const<u64> → u64. Should emit
 // compiled_u64 and jit_constants.
@@ -1166,7 +1164,7 @@ fn macro_string_arg_node_has_a_slot_kit_and_no_u64_op() {
     let node = MacroPilotStringPassthrough::default();
     // A string is a `Ref2` pair, never an immediate: the u64 kit is
     // not emitted, and the slot kit copies the string out of the
-    // producer's pair into the step's own scratch entry (SRD 115).
+    // producer's pair into the step's own scratch entry (compiled_handles.md §5).
     assert!(
         node.compiled_u64().is_none(),
         "a String arg has no u64 form"
@@ -1335,7 +1333,7 @@ fn macro_const_bool_false_takes_disable_branch() {
     panic!("macro_pilot_scale_or_zero not found");
 }
 
-// ── Narrow-width Phase-2 eligibility (alignment §8.3 follow-up) ──
+// ── Narrow-width Phase-2 eligibility (jit_boundary.md, "Scalar buffer conventions") ──
 //
 // The macro's buffer tokens are width-aware: narrow scalar wires
 // (u8/i8/u16/i16/u32/i32/f32/f16) ride the u64 slots per their
@@ -1398,7 +1396,7 @@ fn macro_narrow_widths_are_phase2_eligible_and_equivalent() {
     // the wire_type_to_jit_type table.)
 }
 
-// ── The engine a kit is built for (group G / decision 3) ──────────
+// ── The engine a kit is built for (polytile.md §7.2) ──────────
 
 /// A kit that answers with the tier it was built for. A node whose
 /// closure runs a program of its own — a tile's projection body — has

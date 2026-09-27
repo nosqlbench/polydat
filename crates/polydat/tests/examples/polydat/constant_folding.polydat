@@ -1,4 +1,5 @@
-// constant_folding.gk — Init-time constant propagation (SRD 44).
+// constant_folding.polydat — Init-time constant propagation
+// (evaluation_model.md, "Compile-Time Constant Folding").
 //
 // Nodes with no coordinate dependency are evaluated once at init time
 // and replaced with constants. The cycle-time graph sees them as literals.

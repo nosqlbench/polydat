@@ -59,12 +59,9 @@ use polydat::dsl::registry::{self, FuncSig};
 
 // ─── Expected-adapter table ───────────────────────────────────────
 //
-// The compiler's own `auto_adapter` is the table. This file used to
-// keep a hand mirror of it, "updated in lock-step" so that a shift in
-// the widening rules could not escape review. The mirror fell behind
-// as soon as the generator drew the adapter nodes and reached types it
-// had never seen (`U8→Bytes` is class A and was missing). Review of the
-// table is `adapter_catalog_invariants::doc_matrix_matches_catalog`'s
+// The compiler's own `auto_adapter` is the table. A hand mirror of it
+// here would fall behind whenever the generator reaches a type pair the
+// mirror lacks, such as the class-A `U8→Bytes`. Review of the table is `adapter_catalog_invariants::doc_matrix_matches_catalog`'s
 // job: a catalog change fails CI until type_system.md §3 shows it.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -287,11 +284,10 @@ impl Rng {
 /// - context nodes that require runtime fixtures (metric queries,
 ///   control sets, fiber context) that aren't present in a unit test.
 ///
-/// The `__` adapter nodes are drawn like any other. They were filtered
-/// out as internals, which left the conversions every real program runs
-/// unfuzzed while native code carried a drifted second copy of them;
-/// `fuzz_conversions` now fuzzes the table directly, and here they
-/// turn up in the middle of random programs as well.
+/// The `__` adapter nodes are drawn like any other, since every real
+/// program runs these conversions and native code carries a second
+/// copy of them; `fuzz_conversions` fuzzes the table directly, and
+/// here they turn up in the middle of random programs as well.
 fn fuzzable_sigs() -> Vec<FuncSig> {
     let mut sigs = registry::registry()
         .into_iter()
@@ -317,16 +313,10 @@ fn fuzzable_sigs() -> Vec<FuncSig> {
         // node the fuzzer can only observe by the files it leaves
         // behind is not one a fuzzer should call.
         //
-        // The list used to hold fifteen more. Ten of them — `metric`,
-        // the `control*` family, `rate`, `concurrency`, `phase`,
-        // `session_id` — are not polydat's nodes at all any more; a
-        // host registers them, so the filter named nothing this
-        // registry contains. The `csv_*` / `jsonl_*` five were held
-        // out "until the macro grows a `Result`-returning setup
-        // attribute", and it has: a missing file is now
+        // The `csv_*` / `jsonl_*` nodes are fuzzed: a missing file is
         // `csv_row: construction failed: ... cannot find the file`,
         // a sentence and not a panic, which is what invariant 2 asks
-        // of any error. They are fuzzed.
+        // of any error.
         .filter(|s| s.name != "fft_analyze")
         .collect::<Vec<_>>();
     // In name order. The registry comes in link order, which differs by
@@ -552,8 +542,8 @@ fn sweep_engines() -> Vec<polydat::Engine> {
         Engine::Interpreter(JitMode::Off),
         // Cones on is a *different* engine for this purpose — a fused
         // cone runs native code for nodes the interpreter would
-        // otherwise run itself, which is where `blend` was found
-        // skipping a check its body makes (2026-09-22).
+        // otherwise run itself, where a lowering can skip a check its
+        // node's body makes.
         Engine::Interpreter(JitMode::Auto),
         Engine::Closures(Provenance::Raw),
         Engine::Closures(Provenance::Auto),
@@ -598,13 +588,12 @@ fn values_agree(a: &[polydat::ast::Value], b: &[polydat::ast::Value]) -> bool {
 
 /// Invariants 4 and 5 — the differential half.
 ///
-/// The generator above is engine-blind: it produced programs, the
-/// interpreter compiled them, and nothing ever asked the tiers a host
-/// actually runs on. That left every compiled-only mechanism unfuzzed —
-/// the native lowerings, the kits, the `Ref2` scratch, segment fusion —
-/// and it is not hypothetical: `jit_shuffle` carried its own copy of a
-/// node body with its own divide-by-zero, which this fuzzer could reach
-/// in the node and never in the helper (2026-09-22).
+/// The generator above is engine-blind: it produces programs the
+/// interpreter compiles, and asks nothing of the tiers a host actually
+/// runs on. This fuzzer covers the compiled-only mechanisms — the
+/// native lowerings, the kits, the `Ref2` scratch, segment fusion —
+/// where a helper such as `jit_shuffle` carries its own copy of a node
+/// body and can fail where the node does not.
 ///
 /// Two invariants, both stated against the interpreter as oracle:
 ///
@@ -755,8 +744,8 @@ fn check_module(source: &str, sweep: bool, tag: &str, repro: &str) -> Vec<String
             // only that the compiler classified it rather than
             // leaking panics or raw backtraces. A structured
             // `bad constant …` message proves the opt-in
-            // assembly-time validator (SRD 15 §"Const
-            // Constraint Metadata") rejected the literal
+            // assembly-time validator of const-constraint
+            // metadata rejected the literal
             // before the node's constructor saw it.
             if msg.to_string().is_empty()
                 || msg.to_string().to_lowercase().contains("panic")
@@ -965,7 +954,7 @@ fn strict_values_inserts_nonzero_assertion_on_mod_wire() {
 
 /// When the divisor source is a constant (already validated at
 /// assembly time), strict_values mode skips the assertion — it's
-/// provably redundant. SRD 15 §"Strict Wire Mode" skip rule #2.
+/// provably redundant (graph_compiler.md §2, strict-wire assertions).
 #[test]
 fn strict_values_skips_assertion_when_source_is_constant() {
     use polydat::dsl::events::CompileEvent;
@@ -1001,8 +990,7 @@ fn strict_values_skips_assertion_when_source_is_constant() {
 /// in the compile event log — `strict_values` / `strict_types` /
 /// `strict` produce advisories, unknown pragmas produce warnings,
 /// and the pragma surface is forward-compatible (an unrecognised
-/// pragma never blocks compilation). See SRD 15 §"Module-Level
-/// Pragmas".
+/// pragma never blocks compilation). See polydat_grammar.md §14.
 #[test]
 fn pragmas_round_trip_through_compile() {
     use polydat::dsl::events::CompileEvent;
@@ -1115,11 +1103,10 @@ fn sanity_f64_to_u64_rejects_without_cast() {
     );
 }
 
-/// The strictness pragmas reach the graph on every entry point. The
-/// plain interpreter path once dropped them, so `pragma strict_values`
-/// inserted an assertion under the logged compile and not under
-/// `compile_polydat`; the two programs now have the same node count on
-/// every path, and so does the default engine's.
+/// The strictness pragmas reach the graph on every entry point, so
+/// `pragma strict_values` inserts its assertion under the logged
+/// compile and under `compile_polydat` alike: the two programs have
+/// the same node count on every path, and so does the default engine's.
 #[test]
 fn strict_pragmas_reach_every_compile_path() {
     let source = "\

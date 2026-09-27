@@ -582,9 +582,8 @@ impl Gen {
                 ][self.rng.range(3)];
                 self.bind_ext("Streamer", 0, format!("streamer(\"{spec}\")"));
             }
-            // The shapes the general closure kit took on in engine
-            // parity step 2: every one of these ran on the interpreter
-            // only before it.
+            // Shapes the general closure kit carries onto the compiled
+            // engines (compiled_handles.md §5).
             35 => {
                 // Byte strings through the arena: a `&[u8]` argument and
                 // a `Vec<u8>` result, rendered as text at the end.
@@ -688,7 +687,7 @@ impl Gen {
             41 => {
                 // A cursor whose literal `over` clause denotes one
                 // partition: resolved and seeded at build, so no kernel
-                // needs a host call (engine parity step 3). Its slot is a
+                // needs a host call. Its slot is a
                 // partition like any other for the family above.
                 if !self.lines.iter().any(|l| l.starts_with("cursor ")) {
                     let spec = ["0..50%", "25%..75%", "*", "10%..90%"][self.rng.range(4)];
@@ -998,7 +997,7 @@ fn check_with(src: &str, outputs: &[&str], cycles: u64, externs: &[(String, Valu
     }
     // Every engine is driven through the `Kernel` trait, output by
     // output, so a compiled kernel runs each output's cone as the
-    // interpreter does (engine parity step 5), and the side channel's
+    // interpreter does (engines.md §3.1), and the side channel's
     // rows are counted per engine per cycle: what `emit_row` observes
     // is what it observes on the interpreter.
     let _ = polydat::library::emit::take_rows();

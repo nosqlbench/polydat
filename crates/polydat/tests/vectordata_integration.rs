@@ -7,7 +7,7 @@
 //! They are #[ignore] by default — run explicitly with:
 //!   cargo test -p polydat --features vectordata --test suite vectordata_integration:: -- --ignored
 //!
-//! Per SRD 53 §"Native Vector Binding", vector accessors produce
+//! Per type_system.md §1.7, vector accessors produce
 //! typed `Value::VecF32` / `Value::VecI32` directly. Display
 //! rendering goes through `to_display_string()` which formats as a
 //! JSON array — these tests check that path.

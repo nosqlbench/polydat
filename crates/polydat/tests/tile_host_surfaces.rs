@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! SRD 114 §5.6 and §10, step 6: the host surfaces. Tile defaults as a
+//! The host surfaces (polytile.md §5.6, §10). Tile defaults as a
 //! program transform, tiles inside module bodies, the skeleton event
 //! `explain tiles` prints, the text emit format, and the binary's
 //! `--emit tile:<name>`, `--tile-delims`, and `--tile-sigil`.
@@ -308,7 +308,7 @@ fn the_binary_applies_tile_delimiters_and_sigil_as_a_transform() {
 
 #[test]
 fn the_toy_definition_emits_a_json_document_per_reading() {
-    // SRD 114 step 8: the toy test definition's load statement carries a
+    // The worked example (polytile.md §10): the toy test definition's load statement carries a
     // document rendered by a tile inside the traversal body.
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("examples")

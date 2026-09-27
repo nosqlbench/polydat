@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! SRD 114 §3 and §5.6: the structural JSON form renders exactly what
+//! The structural JSON form (polytile.md §3, §5.6) renders exactly what
 //! the equivalent textual template renders (L5), and a host can hand a
 //! tile in as template text, JSON text, a parsed JSON value, or a
 //! `polytile` binding in source.

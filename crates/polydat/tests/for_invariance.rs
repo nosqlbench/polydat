@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! SRD 113 step 5: program invariance under coordinates. A compiled
+//! Program invariance under coordinates (for_traversal.md §5.1). A compiled
 //! program is a property of the lexical position of each `for` body,
 //! not of the tuples that reach it. A three-level traversal compiles
 //! exactly four programs (the root and one per body) and activating

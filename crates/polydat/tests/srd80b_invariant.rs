@@ -1,7 +1,8 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! SRD-80b §"Lock in the convention" — CI gate.
+//! The hand-written-impl invariant (library_catalog.md, "Carve-outs
+//! from the canonical path") — CI gate.
 //!
 //! Asserts that **hand-written `impl PolydatNode for X` blocks**
 //! only appear in the explicit by-design carve-out files. Every
@@ -67,12 +68,9 @@ fn srd80b_no_handwritten_polydat_node_impl_outside_carveouts() {
             Err(_) => return,
         };
         for (lineno, line) in body.lines().enumerate() {
-            // A `macro_rules!` that writes `impl PolydatNode for
-            // $name` was skipped here, which let a file generate any
-            // number of hand-written nodes and still pass. It is not
-            // skipped any more: no macro in the library writes one,
-            // because the last of them — the four dataset-accessor
-            // families in `vectors.rs` — are `#[polydat_node]` now.
+            // Lines inside a `macro_rules!` body are read too, so a
+            // macro that writes `impl PolydatNode for $name` fails
+            // the same way a literal impl does.
             let line = line.trim_start();
             if line.starts_with("impl PolydatNode for")
                 || line.starts_with("impl<") && line.contains("PolydatNode for")

@@ -112,7 +112,7 @@ pub fn overrides(csv: &str, jsonl: &str, txt: &str) -> HashMap<&'static str, Str
         // with `to_json(cycle)` so the signature smoke compiles.
         ("body_column_i32",
             "input cycle: u64\nout := body_column_i32(to_json(cycle), \"key\")".into()),
-        // SRD 71: partition-typed inputs come from a cursor's
+        // Partition-typed inputs (cursor_partitions.md §7) come from a cursor's
         // `.cursor` projection — declare a small cursor and
         // pull from there. The cursor's `over` clause takes a
         // string-literal spec (parsed at phase setup); the
@@ -289,7 +289,8 @@ pub fn overrides(csv: &str, jsonl: &str, txt: &str) -> HashMap<&'static str, Str
         format!("input cycle: u64\nout := file_line_at(cycle, \"{txt}\")"),
     );
 
-    // SRD-66 `pick(b0..bN-1, v0..vN-1)` — needs Bool
+    // `pick(b0..bN-1, v0..vN-1)` (library_catalog.md, "`pick` —
+    // semantics") needs Bool
     // selectors and uniform values. The auto-generated
     // single-wire form fails the min_wires=2 check, and a
     // comparison such as `cycle == 0` is a u64 truth value, not
@@ -322,13 +323,13 @@ pub fn overrides(csv: &str, jsonl: &str, txt: &str) -> HashMap<&'static str, Str
         "input cycle: u64\nout := dynamic_weighted_select(cycle, \"alpha:0.3;beta:0.5;gamma:0.2\")"
             .into(),
     );
-    // SRD 113: `streamer` takes comprehension text (or the compiler's
+    // `streamer` (for_traversal.md §3.1) takes comprehension text (or the compiler's
     // JSON payload); the generic string example is neither.
     overrides.insert(
         "streamer",
         "input cycle: u64\nout := streamer(\"k in 1..4, limit in 10,20,30\")".into(),
     );
-    // SRD 114: `tile_render` takes a compiled skeleton the compiler
+    // `tile_render` (polytile.md §6) takes a compiled skeleton the compiler
     // emits for a `tile` statement; exercise it through one.
     overrides.insert(
         "tile_render",
@@ -360,11 +361,10 @@ pub fn synthesized_call(sig: &polydat::dsl::registry::FuncSig, wire: &str) -> Op
     let mut args: Vec<String> = Vec::new();
     // Each constant position gets a *different* value, ascending, so
     // that the position a lowering reads a constant from is
-    // observable. Every constant of a type used to be the same literal
-    // — `1.0` for every `ConstF64` — which made
-    // `hash_interval(x, 1.0, 1.0)` the case under test and left the
-    // whole sweep blind to a lowering that read its constants in the
-    // wrong order. Ascending keeps the pair a `[lo, hi)` node wants,
+    // observable. One literal for every constant of a type, such as
+    // `1.0` for every `ConstF64`, would make `hash_interval(x, 1.0, 1.0)`
+    // the case under test and leave the sweep blind to a lowering that
+    // reads its constants in the wrong order. Ascending keeps the pair a `[lo, hi)` node wants,
     // and none of them is zero, which a modulus would refuse.
     //
     // A value its parameter's own declared constraint refuses gives way

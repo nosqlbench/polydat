@@ -350,9 +350,7 @@ fn no_thread_local_value_storage_tripwire() {
 
 /// Registry `lookup` returns a real `&'static` into the link-time
 /// inventory — same address across calls — proving it does not
-/// allocate (and leak) per call. Regression guard for the Miri
-/// leak finding (2026-06-12): the former impl `Box::leak`'d a
-/// clone, leaking ~200 bytes every call.
+/// allocate (and leak) per call, as a `Box::leak`'d clone would.
 #[test]
 fn lookup_does_not_allocate_per_call() {
     use polydat::dsl::registry::lookup;

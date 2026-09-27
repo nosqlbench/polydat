@@ -207,7 +207,7 @@ mod tests {
     fn compile_and_verify(src: &str, expected_min_nodes: usize) {
         // These tests pin the GENERATED graph's structure — the
         // benchmark generators must produce N-node DAGs. Compile
-        // with jit=off so SRD-105 cone extraction (default auto)
+        // with jit=off so cone extraction (engines.md §2; default auto)
         // doesn't fuse the chain into a single cone node; the
         // engine mix is exactly what these graphs exist to
         // benchmark, not a given.

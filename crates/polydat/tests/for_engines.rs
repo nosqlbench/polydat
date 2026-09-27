@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Engine parity, step 8 (A5): traversals open and run on any engine.
+//! Traversals open and run on any engine (engines.md §3.6).
 //! A kernel on any engine opens the traversals its program declares
 //! through the `Kernel` trait, against the values it holds; each
 //! activation is a fresh kernel over the body's program for the engine

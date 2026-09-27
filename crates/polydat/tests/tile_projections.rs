@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! SRD 114 §5.4, step 5: projections over every source the `for`
+//! Projections (polytile.md §5.4) over every source the `for`
 //! construct accepts (inline text, producers, derivations, generator
 //! calls), nested projections inside a body, the bounded-cardinality
 //! check, and member projections through the structural form.

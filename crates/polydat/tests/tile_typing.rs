@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! SRD 114 §4: every hole is typed at compile time. The declared type
+//! Every hole is typed (polytile.md §4) at compile time. The declared type
 //! wins and must be reachable through the adapter catalog; otherwise the
 //! wire's inferred type stands; the position decides how the encoding
 //! writes the value. One test per row of the §4.3 table, one per error

@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! SRD 113 step 2: element typing and body compilation. Each `for`
+//! Element typing and body compilation (for_traversal.md §3.3, §4). Each `for`
 //! body compiles once into a child program keyed by its lexical
 //! position, with element names typed from the comprehension and outer
 //! wires cascaded from the parent.

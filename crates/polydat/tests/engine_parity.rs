@@ -139,7 +139,7 @@ fn the_node_by_engine_matrix_is_as_recorded() {
     let current = lines.join("\n") + "\n";
     let overwrite = std::env::var("ENGINE_PARITY").as_deref() == Ok("overwrite");
     // The same matrix, rendered into the node reference, so the documented
-    // feature set and the tested one are one file (engine parity, step 10).
+    // feature set and the tested one are one file.
     check_reference_section(&lines, overwrite);
     if overwrite {
         std::fs::write(&table, &current).unwrap();
@@ -174,7 +174,7 @@ fn the_node_by_engine_matrix_is_as_recorded() {
 /// accepts; this pins that what it accepts it computes alike. Nodes
 /// declared nondeterministic (clocks, entropy, thread identity) are
 /// left out; a run failure the interpreter reports must read the same on
-/// every engine that fails too (step 6, A7).
+/// every engine that fails too (engines.md §3.4).
 #[test]
 fn the_engines_agree_on_every_node() {
     use polydat::ast::{Purity, Value};
@@ -648,11 +648,11 @@ fn the_128_bit_carriers_agree_on_every_engine() {
 }
 
 /// The tier a node reports and the tier it runs on are the same
-/// question, and `compile_level_of` used to answer it by asking only
-/// whether the node had a scalar `compiled_u64` op — so a node whose
-/// compiled form is a slot kit reported `Phase1` while the closure
-/// tier ran it as a closure step and the hybrid as a slot call. The
-/// binary prints that answer as "P1 interpreter".
+/// question, so a node whose compiled form is a slot kit, and not a
+/// scalar `compiled_u64` op, reports a compiled tier rather than
+/// `Phase1`: the closure tier runs it as a closure step and the hybrid
+/// as a slot call. The binary prints a `Phase1` answer as
+/// "P1 interpreter".
 #[test]
 fn a_slot_kit_node_reports_the_tier_it_runs_on() {
     let k = polydat::dsl::compile_polydat_interpreter(
@@ -682,9 +682,8 @@ fn a_slot_kit_node_reports_the_tier_it_runs_on() {
 ///
 /// `FuncSig.identity` is where the identity is declared, and the native
 /// lowering writes it as a constant — a second copy of the same fact,
-/// and the copy drifted: `min()` answered `u64::MAX` on the interpreter
-/// and `0` on native, because `0` is `max`'s identity and had been
-/// written into both arms. Found by the fuzzer 2026-09-22.
+/// which can drift: writing `max`'s identity `0` into `min`'s arm would
+/// make `min()` answer `u64::MAX` on the interpreter and `0` on native.
 ///
 /// The registry is the oracle here rather than a table in this file,
 /// so a variadic added with an identity is covered the day it is added.
@@ -779,12 +778,12 @@ fn every_carrier_passes_through_a_polymorphic_node_on_every_engine() {
 /// Every node reads the same on every engine — values, at the edges.
 ///
 /// The matrix above records whether each node *runs* on each engine: it
-/// drives one cycle at `3` and discards what comes back. So nothing
-/// compared a node's answer across engines, and the four drifts found
-/// on 2026-09-22 all lived exactly there — a native lowering carrying a
-/// second copy of the node's rule and disagreeing at an edge: `shuffle`
-/// at a zero range, `blend` and `unfair_coin` at an out-of-range
-/// constant, `min` with no wires. `cycle = 3` reaches none of those.
+/// drives one cycle at `3` and discards what comes back, so it does not
+/// compare a node's answer across engines. A native lowering carrying a
+/// second copy of the node's rule disagrees at an edge, such as
+/// `shuffle` at a zero range, `blend` and `unfair_coin` at an
+/// out-of-range constant, or `min` with no wires, and `cycle = 3`
+/// reaches none of those.
 ///
 /// This drives each node's coverage program at inputs chosen for where
 /// arithmetic breaks — zero, one, the 32- and 53-bit boundaries, the
@@ -797,9 +796,9 @@ fn every_carrier_passes_through_a_polymorphic_node_on_every_engine() {
 /// runtime exception engines.md §8 names.
 ///
 /// The whole sweep runs in about a second, so a node that makes it slow
-/// is a finding too: `date_components` once walked 584 million years at
-/// `u64::MAX`, and a node that sized a buffer by its input once aborted
-/// the process here.
+/// is a finding too, such as a node that walks its input year by year
+/// at `u64::MAX`, or one that sizes a buffer by its input and aborts
+/// the process.
 #[test]
 fn every_node_reads_the_same_on_every_engine_at_the_edges() {
     const EDGES: &[u64] = &[
@@ -1082,9 +1081,9 @@ fn a_constant_outside_its_node_s_contract_is_refused_at_build() {
 /// engine (engines.md §3.1). `counter()` counts its own runs, and it is
 /// outside the cone of `a`: however many times `a` is pulled, the first
 /// pull of `n` finds the counter never run, on every engine and in both
-/// of pure native code's modes. Pure native code used to run its one
-/// function for the whole program on every pull after a write, so each
-/// pull of `a` advanced a counter nothing had asked for.
+/// of pure native code's modes. A pure native kernel that ran its one
+/// function for the whole program on every pull after a write would
+/// advance, on each pull of `a`, a counter nothing had asked for.
 #[test]
 fn a_pull_runs_its_own_cone_and_nothing_else_on_every_engine() {
     use polydat::dsl::compile::compile_polydat_with;
@@ -1115,7 +1114,7 @@ fn a_pull_runs_its_own_cone_and_nothing_else_on_every_engine() {
 }
 
 /// Native segments follow the graph's connections, not the statements'
-/// order (SRD-105, compile::fusion_units): three chains that share
+/// order (engines.md §8, compile::fusion_units): three chains that share
 /// nothing, written interleaved, are three segments, so pulling one
 /// runs one. A run of consecutive native nodes would have made them a
 /// single segment, and every pull would have run all three.
@@ -1167,8 +1166,8 @@ fn independent_chains_are_separate_native_segments() {
 
 /// `set_inputs` writes the coordinates and nothing past them: a longer
 /// slice than the program has coordinates leaves its externs alone, on
-/// every engine. The interpreter used to write the extra value into the
-/// first extern, and the compiled engines into the extern's slots, where
+/// every engine. The extra value never lands in the first extern on the
+/// interpreter, nor in the extern's slots on the compiled engines, where
 /// a by-reference extern keeps a pointer.
 #[test]
 fn set_inputs_never_reaches_past_the_coordinates() {

@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Fuzz coverage for the tile grammar (SRD 114 step 1).
+//! Fuzz coverage for the tile grammar (polytile.md §2).
 //!
 //! A grammar-directed generator emits random tile statements over every
 //! body form and encoding, with random delimiters and sigils, holes with

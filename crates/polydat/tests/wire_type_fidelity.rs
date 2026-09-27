@@ -3,11 +3,10 @@
 
 #![cfg(feature = "vectordata")]
 
-//! Exported-wire type fidelity (the `query_vector` VecF32→Str
-//! regression class, `local/CARE_PACKAGE_query_vector_typing.md`).
+//! Exported-wire type fidelity: a `query_vector` VecF32 wire is never
+//! exported as Str (type_system.md §7).
 //!
-//! Governing principle (`feedback_no_auto_string_conversion`): native
-//! types stay native through data passing; string rendering happens
+//! Governing principle: native types stay native through data passing; string rendering happens
 //! only at presentation points. A typed wire consumed by BOTH a typed
 //! sink and a text-formatting sink must keep its native exported type
 //! — the formatting consumer gets its rendering on its own edge, never
@@ -40,7 +39,7 @@ query_vector := query_vector_at(prebuffered, q)
     );
 }
 
-/// Care-package step 4 — the two-consumer kernel: the same VecF32 wire
+/// The two-consumer kernel: the same VecF32 wire
 /// feeds a typed downstream consumer AND a text-formatting consumer
 /// (`printf`, the lowering of every string-interpolation template).
 /// The export must STAY VecF32; the formatting consumer's Str lives on

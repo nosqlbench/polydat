@@ -160,9 +160,7 @@ fn a_built_source_projects_the_comprehension_it_traverses() {
 
     // A source's text is rendered from its comprehension, so a text
     // that disagrees with the tree is not a thing that can be built:
-    // there is no text to set. The forged source this test used to
-    // construct no longer compiles, and the property it was checking
-    // holds by construction instead.
+    // there is no text to set, and the property holds by construction.
     let built = ForSource::comprehension(tree.clone(), sp).expect("writable tree");
     assert_eq!(
         built.to_text(),

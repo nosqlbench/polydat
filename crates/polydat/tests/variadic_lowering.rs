@@ -134,7 +134,7 @@ fn printf_on_a_produced_string_reads_its_pair_inside_the_cone() {
 #[test]
 fn a_string_from_an_interpreted_node_enters_a_cone_as_a_boundary_input() {
     // `default_or` tolerates a `None` input and reads a kernel input
-    // here, so it may not sit inside a cone (SRD-74) and stays
+    // here, so it may not sit inside a cone (engines.md §3.3) and stays
     // interpreted; the string it produces enters the printf cone
     // borrowed into its pair for the call.
     let src = "input cycle: u64\nextern label: str = \"abc\"\nh := hash(cycle)\nc := default_or(label, \"x\")\nout := printf(\"[{:>30}] {}\", c, h)\n";
@@ -168,7 +168,7 @@ fn json_constructors_lower_and_agree() {
 fn value_port_nodes_join_a_cone_only_behind_a_member() {
     // `to_json` and `json_text` take a polymorphic `Value` and tolerate
     // None. Fed by a member (`hash`), no None can reach them and they
-    // fuse; fed by a kernel input, they stay on P1 (SRD-74) and agree.
+    // fuse; fed by a kernel input, they stay on P1 (engines.md §3.3) and agree.
     let src = "input cycle: u64\nj := to_json(hash(cycle))\nt := json_text(j)\n";
     agree(src, &["j", "t"], 6, &["to_json", "json_text"], &[]);
     let src = "input cycle: u64\nj := to_json(cycle)\n";

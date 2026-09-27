@@ -174,10 +174,10 @@ id := q.ordinal"#;
 
 #[test]
 fn cursor_keyword_as_binding_name_error() {
-    // "source" is now a keyword, can't be used as a binding name
+    // `cursor` is a keyword and can't be used as a binding name
     let tokens = polydat::dsl::lexer::lex("cursor := hash(cycle)");
-    // This should lex as Source token followed by ColonEq, which the
-    // parser should reject (source expects = not :=)
+    // This lexes as a Cursor token followed by ColonEq, which the
+    // parser rejects (a cursor declaration expects = not :=)
     assert!(tokens.is_ok()); // lexer succeeds
     let result = polydat::dsl::parser::parse(tokens.unwrap());
     assert!(result.is_err()); // parser rejects

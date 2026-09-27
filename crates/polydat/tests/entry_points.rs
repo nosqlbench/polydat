@@ -365,13 +365,12 @@ fn the_two_native_tiers_agree_in_value_and_differ_in_name() {
 
 /// The diagnostic entry point diagnoses the program it would compile.
 ///
-/// `compile_polydat_checked` used to build a different program from the
-/// one the kernel entry points build — it skipped the pragmas and the
-/// source text — so a host could be told a program was fine and then
-/// have it refused, or the reverse (F-H4). It goes through
-/// `compile_ast_with_engine` on the default engine now, so it accepts
-/// exactly what `compile_polydat_kernel` accepts, across the shapes
-/// that used to differ.
+/// `compile_polydat_checked` builds the same program the kernel entry
+/// points build, pragmas and source text included, so a host is never
+/// told a program is fine and then has it refused, or the reverse
+/// (F-H4). It goes through `compile_ast_with_engine` on the default
+/// engine, so it accepts exactly what `compile_polydat_kernel` accepts,
+/// across the shapes that depend on the pragmas and the source text.
 ///
 /// `compile_polydat_to_assembler` is the one entry point that may
 /// disagree, and only about `for`: an assembler holds no traversal, so
@@ -491,8 +490,7 @@ for k in 1..4 {
 /// This is the rule the plainest entry point is most able to break
 /// quietly: it hands back `dyn Kernel` either way, so a body that built
 /// the interpreter would look right at every call site and cost every
-/// caller the ladder. `compile_polydat` did exactly that until
-/// 2026-09-22. The engine is a value the options carry, and the default
+/// caller the ladder. The engine is a value the options carry, and the default
 /// value is the most native form the build has.
 #[test]
 fn the_engine_less_entry_points_build_the_default_engine() {
@@ -527,9 +525,9 @@ fn the_engine_less_entry_points_build_the_default_engine() {
     }
 }
 
-/// The interpreter is still reachable, and reached by name. It is the
-/// oracle a differential test compares against, so it has to be — what
-/// changed is that a caller now says so.
+/// The interpreter is reachable, and reached by name. It is the
+/// oracle a differential test compares against, so it has to be, and
+/// a caller that wants it says so.
 #[test]
 fn the_interpreter_is_reached_by_naming_it() {
     let src = "out := hash(cycle)\n";

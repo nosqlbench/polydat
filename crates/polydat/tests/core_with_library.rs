@@ -371,17 +371,15 @@ mod dsl_compile_tests {
 
     #[test]
     fn init_binding_survives_dce_even_when_unconsumed() {
-        // Regression test for the prebuffer-not-firing bug. An
-        // `const` binding declares a side-effect-bearing init-time
-        // computation (download, register, prebuffer). The user's
-        // signal that they want it evaluated is the `init`
-        // keyword itself, *not* a downstream wire reference. Yet
-        // the assembler's DCE walks back from the requested
-        // outputs and prunes whatever's not in their ancestry.
+        // A `const` binding declares a side-effect-bearing init-time
+        // computation (download, register, prebuffer). The author's
+        // signal that they want it evaluated is the `const` keyword
+        // itself, *not* a downstream wire reference, while the
+        // assembler's DCE walks back from the requested outputs and
+        // prunes whatever is not in their ancestry.
         //
-        // Pre-fix: with `required = ["b"]` and an unconsumed
-        // `init side_effect = …` binding, the `side_effect` node
-        // (and its constant-fold call) got pruned. Post-fix:
+        // With `required = ["b"]` and an unconsumed
+        // `const side_effect := …` binding,
         // `compile_polydat_with_outputs` extends the required list
         // with every `const` binding's name, so DCE keeps the
         // node, fold evaluates it, and `kernel.pull("side_effect")`
@@ -737,7 +735,7 @@ mod dsl_compile_tests {
         );
     }
 
-    /// SRD-84 Part 1 — `&&` / `||` as eager truthiness combinators:
+    /// `&&` / `||` as eager truthiness combinators (polydat_grammar.md §7):
     /// correct results, lowest precedence (below comparison; `||`
     /// looser than `&&`), and truthiness normalisation (a value is
     /// "true" iff non-zero — which raw bitwise would get wrong).
@@ -786,8 +784,8 @@ mod dsl_compile_tests {
         );
     }
 
-    /// SRD-84 Part 1b — `<expr> as <type>` cast: alignment-only type
-    /// fusion (no-op when aligned, SRD-79 adapter otherwise), tight
+    /// The `<expr> as <type>` cast (polydat_grammar.md §10): alignment-only
+    /// type fusion (no-op when aligned, the catalog adapter otherwise), tight
     /// (atom-binding) precedence, and an error when no fusion exists.
     #[test]
     fn as_cast_type_fusion_and_precedence() {
@@ -871,7 +869,7 @@ mod compile_cone_tests {
         compile(src, mode).program().node_count()
     }
 
-    /// SRD-105 panic parity: a predicate violation reports the same
+    /// Panic parity (engines.md §3.4): a predicate violation reports the same
     /// actionable core — predicate name, violation text, and for
     /// is_one_of the allow-list contents — whether it fires on the
     /// interpreter or inside a fused cone. The cone adds its member
@@ -950,7 +948,7 @@ mod compile_cone_tests {
 
     #[test]
     fn mixed_graph_keeps_fallback_on_interpreter() {
-        // `default_or` consumes None (SRD-74 opt-out) — ineligible by
+        // `default_or` consumes None (engines.md §3.3) — ineligible by
         // contract, so it must survive extraction as its own node while
         // the u64 chain ahead of it fuses.
         let src = "input (x: u64)\n\
@@ -1068,8 +1066,8 @@ mod compile_cone_tests {
 
     #[test]
     fn is_one_of_violation_parity() {
-        // The allow-list contents must appear in BOTH messages —
-        // catchup A2: the JIT fail extern used to elide them.
+        // The allow-list contents must appear in BOTH messages,
+        // including the one the JIT fail extern reports.
         assert_parity(
             "input (x: u64)\nchecked := is_one_of(add(x, 100), 1, 3, 7)\n",
             5,
@@ -1077,7 +1075,7 @@ mod compile_cone_tests {
         );
     }
 
-    /// SRD-105 Push 3 — program identity is engine-mix invariant.
+    /// Program identity is engine-mix invariant (engines.md §2).
     /// Identity hashing walks THROUGH fusion nodes into their stored
     /// subgraph, so `jit=off` / `auto` / `force` compiles of the same
     /// source hash identically and resume-skip matching survives mode
@@ -1170,14 +1168,11 @@ mod dsl_registry_tests {
 
     #[test]
     fn mixed_radix_is_variadic_consts() {
-        // SRD-80b Phase E: `mixed_radix` is macro-registered via the
-        // `Const<Vec<u64>>` shape, which implies
+        // `mixed_radix` is macro-registered (library_catalog.md,
+        // "Registration") via the `Const<Vec<u64>>` shape, which implies
         // `VariadicConsts { min_consts: 0 }` (empty lists permitted at
         // the signature level; the trailing-zero positional rule lives
-        // in the arithmetic module's hand validator). The stale
-        // hand-written FuncSig this test used to pin (min_consts: 1,
-        // params without the const-vec entry) duplicated the macro
-        // registration under the same name and was removed.
+        // in the arithmetic module's hand validator).
         let sig = lookup("mixed_radix").unwrap();
         assert!(
             matches!(sig.arity, Arity::VariadicConsts { min_consts: 0 }),
@@ -1709,7 +1704,7 @@ mod compile_lattice_tests {
 
     #[test]
     fn mixed_graph_reports_cone_and_residue() {
-        // mul+add fuse; default_or (SRD-74 None-consumer) stays
+        // mul+add fuse; default_or (a None consumer, engines.md §3.3) stays
         // interpreted and is neither p3-classifiable nor
         // p2-capable (Value-based optionality).
         let src = "input (x: u64)\n\
@@ -1959,7 +1954,7 @@ mod dsl_stub_tests {
 
     #[test]
     fn scoped_expr_binds_to_a_kernel_scope_and_is_callable() {
-        // SRD-84 shape 2 — a scoped, callable expression. Shape 1
+        // Shape 2 — a scoped, callable expression. Shape 1
         // (`GraphMatter`) builds the matter: a typed extern wire plus a
         // predicate stub. Shape 2 (`ScopedExpr`) binds it into a
         // sub-context of a parent kernel and evaluates it many times
@@ -2083,11 +2078,10 @@ fn the_cursor_advancer_injects_each_ordinal_into_the_state() {
 
 /// The typed embedding errors carry what the compiler knew, rather
 /// than a shape rebuilt from the message text (F-C7). Each case below
-/// used to lose a field: the type mismatch reported `(unknown)` nodes
-/// and `U64 → U64` though the assembler had the real four; the
-/// unknown function never suggested a near name though the registry
-/// computes one; the lifecycle mismatch named no input though the
-/// kernel's inputs are exactly what it is about.
+/// checks a field the message text alone loses: the type mismatch
+/// names its nodes and both types as the assembler had them, the
+/// unknown function suggests the near name the registry computes, and
+/// the lifecycle mismatch names the input it is about.
 #[cfg(test)]
 mod typed_embedding_errors {
     use polydat::dsl::compile::{EmbeddingError, eval_const_expr};
@@ -2133,11 +2127,11 @@ mod typed_embedding_errors {
 /// A node whose output type comes from its wires reports that type,
 /// not a placeholder (F-N9).
 ///
-/// `pick` returns whatever its value wires carry, and its output port
-/// used to be declared `U64` regardless. A `Str` from `pick` feeding a
-/// `Str` port therefore had a `U64ToString` adapter inserted between
-/// them — and the adapter read the string's pointer as a number, so
-/// `matches(pick(b, "yes"), "y.*")` compared the pattern against
+/// `pick` returns whatever its value wires carry, so its output port
+/// takes that type. A port declared `U64` regardless would put a
+/// `U64ToString` adapter between a `Str` from `pick` and a `Str` port,
+/// and the adapter would read the string's pointer as a number, so
+/// `matches(pick(b, "yes"), "y.*")` would compare the pattern against
 /// something like "2163471811744".
 #[cfg(test)]
 mod polymorphic_output_types {

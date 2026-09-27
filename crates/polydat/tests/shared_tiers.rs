@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Engine parity, step 9 (A10): a `shared` binding runs on every engine
+//! A `shared` binding runs on every engine (engines.md §3.6)
 //! with the interpreter's cell protocol. The binding's slot is bound to
 //! a `SharedCell`; a write publishes through the cell; a read takes the
 //! cell's current value, inside a cycle too; and a host attaches one

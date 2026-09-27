@@ -1,6 +1,6 @@
 // timeseries.gk — Multi-tenant time-series workload.
 //
-// The full worked example from the SRD. Models 100 tenants, each with
+// A full worked example. Models 100 tenants, each with
 // 1000 devices, writing sensor readings with realistic distributions.
 //
 // Op template:

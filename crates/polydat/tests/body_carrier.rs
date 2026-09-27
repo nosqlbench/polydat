@@ -1,18 +1,16 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! One carrier for a body, and the engine it runs on (F-L2, decision 3).
+//! One carrier for a body, and the engine it runs on (F-L2).
 //!
 //! A `for` body and a tile's projection body are the same thing: a
 //! statement list compiled once per engine and shared by every use.
-//! They reach that through one type now, `BodySource`, and one method,
-//! `program_on`.
+//! They reach that through one type, `BodySource`, and one method,
+//! `program_on` (for_traversal.md §4, polytile.md §7.2).
 //!
-//! The tile path used to compile each body twice when the node was
-//! constructed — once for the interpreter and once on
-//! `Engine::default()` — whether or not either engine ever rendered
-//! it, and then render on the default engine whatever engine the
-//! kernel it belonged to was running.
+//! A body compiles for an engine on that engine's first request, and
+//! a projection body renders on the engine of the kernel it belongs
+//! to rather than on `Engine::default()`.
 
 use polydat::dsl::traversal::BodySource;
 use polydat::{Engine, JitMode, Provenance};
@@ -91,14 +89,11 @@ fn a_projection_renders_the_same_on_every_engine() {
 /// A tile's projection body compiles under the settings the program
 /// around it compiles under (F-L4).
 ///
-/// The body used to reach the render node as source text inside a
-/// JSON payload, and was compiled there with defaults: no source
-/// directory, no library paths, no strict flag, no pragmas, and an
-/// empty module table. So a module the program itself defines — which
-/// the compiler had already resolved — was an unknown function inside
-/// the body, while every other scope of the same program could call
-/// it. The compiler hands the node the body it lowered now, settings
-/// and all.
+/// The compiler hands the render node the body it lowered, with the
+/// source directory, library paths, strict flag, pragmas, and module
+/// table it used, rather than source text compiled with defaults. A
+/// module the program itself defines is therefore callable inside the
+/// body, as it is in every other scope of the same program.
 #[test]
 fn a_projection_body_sees_the_program_s_modules() {
     let src = "input cycle: u64\n\

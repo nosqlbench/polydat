@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Engine parity, step 6 (A7): a node that fails at evaluation fails
+//! A node that fails at evaluation fails (engines.md §3.4)
 //! with the same attributed message on every engine. The interpreter
 //! enriches a node's panic with the node's name, the outputs it
 //! feeds, the program's context, and the input values; a compiled

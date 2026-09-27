@@ -1,8 +1,8 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! SRD 113 step 1: the `for` construct parses in both readings and
-//! round trips through the pretty-printer. Step 2 lowers both forms.
+//! The `for` construct parses in both readings and round trips through
+//! the pretty-printer (for_traversal.md §2).
 
 use polydat::dsl::ast::{Expr, ForSourceKind, PolydatFile, Statement};
 use polydat::dsl::pprint::pp_file;

@@ -44,7 +44,7 @@ fn string_text_fuses_to_declared_extern_types() {
 #[test]
 fn assigned_input_becomes_a_fixed_extern() {
     let mut k = compile(SRC, &[("seed", "7")]).unwrap();
-    // `seed` is no longer a coordinate: only `cycle` is.
+    // The assigned `seed` is not a coordinate: only `cycle` is.
     assert_eq!(k.program().coord_count(), 1);
     k.set_inputs(&[2]);
     assert_eq!(k.pull_ref("ts").as_u64(), 2 * 1000 + 7);

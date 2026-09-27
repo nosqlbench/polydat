@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! SRD 113 step 3: producer wires. `name := for ...` binds a Streamer
+//! Producer wires (for_traversal.md §3.1). `name := for ...` binds a Streamer
 //! value; derived forms filter and order a bound producer; streams from
 //! one wire are independent; cardinality metadata is exposed.
 

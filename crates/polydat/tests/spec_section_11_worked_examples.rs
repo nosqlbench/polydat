@@ -66,7 +66,7 @@ fn spec_11_2_filter_then_extrema_truncated() {
         clause("limit", &[10, 50, 100]),
     ]);
     let filtered = Comprehension::filter(cart, "true");
-    // SRD-18d §214: `extrema/k` truncates by *strata* (interior
+    // comprehension_forms.md §3.6: `extrema/k` truncates by *strata* (interior
     // count), not by tuple count. `extrema/1` keeps the first stratum
     // — exactly the 2² = 4 lattice corners — via the indexed form.
     // (A higher `/k` would add edges / interior, up to the full
@@ -138,7 +138,7 @@ fn spec_11_6_form_a_order_then_filter() {
     let ordered = Comprehension::order(cart, StrategyName::Extrema, Some(1));
     let form_a = Comprehension::filter(ordered, "true"); // simplified: trivially true
     let tuples = dispense(&form_a);
-    // SRD-18d §214: a 3×3 has 3 strata (corners 4, edges 4, center 1);
+    // comprehension_forms.md §3.6: a 3×3 has 3 strata (corners 4, edges 4, center 1);
     // `extrema/1` keeps the corner stratum → 4. Filter "true" keeps all 4.
     assert_eq!(tuples.len(), 4);
 }

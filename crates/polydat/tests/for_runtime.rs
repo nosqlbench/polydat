@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! SRD 113 step 4: the activation runtime. A traversal dispenses one
+//! The activation runtime (for_traversal.md §5). A traversal dispenses one
 //! activation per tuple over the body's single compiled program, binds
 //! elements and cascaded wires, narrows cursors, and iterates cycles
 //! under the §3.4 rule. Axioms T1 (determinism) and T2 (cost bound) are

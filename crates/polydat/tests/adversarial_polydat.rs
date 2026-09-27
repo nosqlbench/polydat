@@ -982,9 +982,9 @@ fn type_mismatch_error_carries_binding_name() {
 }
 
 /// Type-mismatch errors involving anonymous compiler-generated
-/// nodes should now name the user-level binding that owns them.
-/// Before this fix, messages cited `__anon_14 ──(String)──▶ __anon_13`;
-/// after, the prefix is the LHS binding (`overscan__anon_*`).
+/// nodes name the user-level binding that owns them: rather than a
+/// bare `__anon_14 ──(String)──▶ __anon_13`, the prefix is the LHS
+/// binding (`overscan__anon_*`).
 #[test]
 fn type_mismatch_error_names_user_binding_via_prefix() {
     // Bitwise-shift a String — u64_shl wants u64 on both sides;

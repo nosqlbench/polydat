@@ -555,10 +555,8 @@ fn paired_examples() -> Vec<Paired> {
 ///
 /// Exhaustive on purpose: a new `Statement` variant is a compile
 /// error here, and then a missing example is a test failure below
-/// (F-L7). Coverage used to be whatever someone had pasted into the
-/// document, and the document was missing `for`, `tile`, the `if`
-/// block, and `shared x: T` — four of the newest forms in the
-/// language.
+/// (F-L7), so the document's coverage is every form the grammar has
+/// rather than whatever examples were pasted into it.
 fn statement_form(s: &Statement) -> &'static str {
     match s {
         Statement::InputDecl(_) => "input",
@@ -753,10 +751,7 @@ fn walk_statement(s: &Statement, seen: &mut std::collections::BTreeSet<&'static 
 /// Every surface form the grammar can express appears in a worked
 /// example in the specification.
 ///
-/// The document's coverage used to be whatever examples someone had
-/// pasted in, and nothing noticed a form that had none: `for`, `tile`,
-/// the tile `if` block, and `shared x: T` were all absent. The form
-/// lists above are exhaustive matches, so a new AST variant fails to
+/// The form lists above are exhaustive matches, so a new AST variant fails to
 /// compile here until it is named, and then fails this test until the
 /// specification shows it.
 #[test]
