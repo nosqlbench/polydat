@@ -199,11 +199,9 @@ fn a_cone_names_the_member_that_failed() {
 /// above says why: it names the code that raised, which is the engine's
 /// own. A build failure is a different thing. The reason is a property
 /// of the program (`bad spec 's97'`), the user has none of polydat's
-/// source, and a file and line there reads as an internal defect. The
-/// three compiled engines never carried one; the interpreter did, which
-/// is how the same program failed two ways depending on the engine, and
-/// how a message the fuzzer classifies as cryptic reached a user
-/// (F-E16: `ConstantFold` on every engine, an error and never a panic).
+/// source, and a file and line there reads as an internal defect. No
+/// engine carries one, so the same program fails one way on every
+/// engine: `ConstantFold`, an error and never a panic.
 #[test]
 fn a_fold_failure_reads_the_same_on_every_engine() {
     let src = "p := partitions(\"s97\")\n";

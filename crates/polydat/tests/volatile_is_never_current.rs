@@ -9,10 +9,10 @@
 //! effectively-const classification, the exclusion is contagious
 //! downstream, and "an engine never treats them as current".
 //!
-//! The fold half held. The runtime half did not: the never-current
-//! set was computed before the output modifiers were installed, so it
-//! saw only the nodes that declare `Purity::Nondeterministic`, and a
-//! volatile binding was cached like any other (F-C5).
+//! The runtime half depends on the never-current set being computed
+//! after the output modifiers are installed. Computed before them, it
+//! sees only the nodes that declare `Purity::Nondeterministic`, and a
+//! volatile binding is cached like any other.
 
 use polydat::ast::{NodeMeta, PolydatNode, Port, Slot, Value};
 use polydat::compile::assembly::{PolydatAssembler, WireRef};

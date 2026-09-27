@@ -497,7 +497,7 @@ Design:
 - [SIMD ISA Selection and Scalar-Flow
   Auto-Promotion](crates/polydat/docs/design/simd_isa_autopromotion.md) — current
   native-width policy, landed Tier-1 slice, and remaining gates.
-- [All design documents](crates/polydat/docs/design) — the complete SRD set.
+- [All design documents](crates/polydat/docs/design) — the complete set of specifications.
 
 Published API documentation is configured for
 [docs.rs/polydat](https://docs.rs/polydat).

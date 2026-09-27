@@ -314,7 +314,7 @@ fn the_pure_tier_names_itself_and_refuses_the_modes_it_lacks() {
 /// declining a program the others accept — the value cannot be
 /// computed anywhere. The pure tier keeps no step list, so its
 /// constants are compiled a second time into an entry of their own and
-/// run over the same buffer to reach the same rule (F-E15).
+/// run over the same buffer to reach the same rule.
 #[test]
 fn every_engine_folds_its_constants_at_build() {
     let src = "input cycle: u64\nn := mod_wire(10, 0)\nv := n + cycle\n";
@@ -367,8 +367,8 @@ fn the_two_native_tiers_agree_in_value_and_differ_in_name() {
 ///
 /// `compile_polydat_checked` builds the same program the kernel entry
 /// points build, pragmas and source text included, so a host is never
-/// told a program is fine and then has it refused, or the reverse
-/// (F-H4). It goes through `compile_ast_with_engine` on the default
+/// told a program is fine and then has it refused, or the reverse.
+/// It goes through `compile_ast_with_engine` on the default
 /// engine, so it accepts exactly what `compile_polydat_kernel` accepts,
 /// across the shapes that depend on the pragmas and the source text.
 ///

@@ -2077,7 +2077,7 @@ fn the_cursor_advancer_injects_each_ordinal_into_the_state() {
 }
 
 /// The typed embedding errors carry what the compiler knew, rather
-/// than a shape rebuilt from the message text (F-C7). Each case below
+/// than a shape rebuilt from the message text. Each case below
 /// checks a field the message text alone loses: the type mismatch
 /// names its nodes and both types as the assembler had them, the
 /// unknown function suggests the near name the registry computes, and
@@ -2125,7 +2125,7 @@ mod typed_embedding_errors {
     }
 }
 /// A node whose output type comes from its wires reports that type,
-/// not a placeholder (F-N9).
+/// not a placeholder.
 ///
 /// `pick` returns whatever its value wires carry, so its output port
 /// takes that type. A port declared `U64` regardless would put a
@@ -2160,7 +2160,7 @@ mod polymorphic_output_types {
 }
 
 /// The kernel-bound embedding surfaces take any scope, not just an
-/// interpreter kernel (F-C6).
+/// interpreter kernel.
 ///
 /// `Lookup` had one kernel implementor and these surfaces took
 /// `&PolydatKernel`, so a host holding a `Box<dyn Kernel>` could not

@@ -554,8 +554,8 @@ fn paired_examples() -> Vec<Paired> {
 /// The name of a statement's form, as the grammar spells it.
 ///
 /// Exhaustive on purpose: a new `Statement` variant is a compile
-/// error here, and then a missing example is a test failure below
-/// (F-L7), so the document's coverage is every form the grammar has
+/// error here, and then a missing example is a test failure below,
+/// so the document's coverage is every form the grammar has
 /// rather than whatever examples were pasted into it.
 fn statement_form(s: &Statement) -> &'static str {
     match s {

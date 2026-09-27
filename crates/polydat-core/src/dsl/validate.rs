@@ -33,7 +33,7 @@ pub(crate) fn validate_ast(file: &PolydatFile, report: &mut DiagnosticReport) {
     // a library node, and the compiler gives a program's own module the
     // call before the registry sees it, so the diagnostic pass has to
     // know them or it reports an unknown function for a module that is
-    // right there in the file (F-H4).
+    // right there in the file.
     let modules: std::collections::HashSet<String> = file
         .statements
         .iter()

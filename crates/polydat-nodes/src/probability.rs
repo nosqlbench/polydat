@@ -1158,7 +1158,7 @@ mod const_constraint_tests {
     /// A constraint declared on a const argument is checked when the
     /// node is built, so a bad literal is a compile error naming the
     /// node and the parameter rather than a panic on some later cycle
-    /// from inside the body (F-N6).
+    /// from inside the body.
     #[test]
     fn a_declared_const_constraint_refuses_at_assembly() {
         for (src, want) in [

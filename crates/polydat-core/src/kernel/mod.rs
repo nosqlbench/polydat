@@ -490,7 +490,7 @@ mod tests {
     /// (`refuse_strict` → `strict_violation`). The adapter half is
     /// pinned across engines in `entry_points`; this pins the config
     /// half, which needs a node with a config-typed wire port and so
-    /// lives beside the one that has it (F-H3).
+    /// lives beside the one that has it.
     #[test]
     fn strict_refuses_a_cycle_fed_config_wire_on_every_engine() {
         use crate::compile::assembly::{PolydatAssembler, WireRef};

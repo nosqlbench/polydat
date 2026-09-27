@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! `transform::declared_wires` answers the same question the compiler
-//! does, from the source instead of from a compiled program (F-H7).
+//! does, from the source instead of from a compiled program.
 //!
 //! `run --emit` needs the names of a scope's wires before the program
 //! is compiled, because the emit binding it appends names them. Reading

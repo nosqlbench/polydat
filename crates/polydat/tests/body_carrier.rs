@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! One carrier for a body, and the engine it runs on (F-L2).
+//! One carrier for a body, and the engine it runs on.
 //!
 //! A `for` body and a tile's projection body are the same thing: a
 //! statement list compiled once per engine and shared by every use.
@@ -87,7 +87,7 @@ fn a_projection_renders_the_same_on_every_engine() {
 }
 
 /// A tile's projection body compiles under the settings the program
-/// around it compiles under (F-L4).
+/// around it compiles under.
 ///
 /// The compiler hands the render node the body it lowered, with the
 /// source directory, library paths, strict flag, pragmas, and module

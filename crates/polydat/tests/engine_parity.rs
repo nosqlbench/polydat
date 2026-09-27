@@ -478,7 +478,7 @@ fn check_reference_section(lines: &[String], overwrite: bool) {
     );
 }
 
-/// The 128-bit carriers on every engine (F-C16).
+/// The 128-bit carriers on every engine.
 ///
 /// `U128`/`I128` are the one scalar family that cannot ride a single
 /// slot, so they cross the compiled tiers as a limb pair and have no
