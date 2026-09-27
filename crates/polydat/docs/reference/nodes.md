@@ -69,15 +69,15 @@ it rarely needs to, and
 | `clamp_in` | `clamp_in(n, p)` — saturating projection into the partition. `max(p.start_ord, min(n, p.end_ord - 1))`. Unlike `mod_in`, values outside the partition saturate at the boundary rather than wrapping. Degenerate cardinality=0 returns the start. |
 | `count_of` | Total number of partitions in the list this partition was resolved as part of. `1` for a single-partition spec. The function spelling of the `partition_count` projection — pairs with `idx_of` for "i of n" labelling. |
 | `div` |  |
-| `div_wire` | Division of a u64 by a wire-fed divisor. SRD-80 PR B.14 migration — same NonZeroU64 contract as mod_wire. |
+| `div_wire` | Division of a u64 by a wire-fed divisor, with the same NonZeroU64 contract as mod_wire. |
 | `end_of` | Partition's end ordinal (exclusive). |
 | `idx_of` | 0-based position in the partition list. |
 | `in_range` | Assert that a u64 value is in the inclusive range `[lo, hi]`. |
 | `interleave` | Interleave the bits of two u64 values into one (Morton code). |
-| `is_one_of` | Assert that a u64 value is one of an enumerated allow-list. SRD-80b Phase C migration via `Const<Vec<C>>` combinator. Lowered through its slot kit (called from native code); `classify_node` returns Fallback for it because a `Const<Vec<u64>>` node publishes no `jit_constants`, so the `JitOp::IsOneOfCheck` arm never fires. |
+| `is_one_of` | Assert that a u64 value is one of an enumerated allow-list. Authored with the `Const<Vec<C>>` combinator and lowered through its slot kit (called from native code); `classify_node` returns Fallback for it because a `Const<Vec<u64>>` node publishes no `jit_constants`, so the `JitOp::IsOneOfCheck` arm never fires. |
 | `is_positive` | Assert that a u64 value is strictly positive (> 0). |
 | `lid_mle` | `lid_mle(distances, k)` — Levina–Bickel maximum-likelihood estimate of the **local intrinsic dimensionality** at one query point, from its sorted ground-truth nearest-neighbor distances. |
-| `matches` | Assert that a string value matches a regex pattern. SRD-80 PR B.6 migration. |
+| `matches` | Assert that a string value matches a regex pattern. |
 | `mixed_radix` | Decompose `value` into mixed-radix digits using the given `radixes`. The output is a vector of N digits where N = `radixes.len()`. A radix of 0 in the trailing position captures the remainder verbatim. |
 | `mod` |  |
 | `mod_in` | `mod_in(n, p) = p.start_ord + (n mod cardinality(p))`. Maps an arbitrary integer (typically a per-cycle ordinal) into the partition's range, wrapping. Degenerate cardinality=0 returns the partition's start ordinal. |
@@ -171,7 +171,7 @@ it rarely needs to, and
 | `f64_le` |  |
 | `f64_lt` |  |
 | `f64_ne` |  |
-| `pick` | Branched-dispatch primitive: select the value whose paired selector is true. SRD-80b split-halves variadic — the macro recognises two consecutive `&[T]` variadic args as a split-halves shape, emits `selectors.len()` Bool slots followed by `values.len()` polymorphic slots (each pair `(b_i, v_i)` shares an index), and slices `inputs` at the midpoint at eval time. |
+| `pick` | Branched-dispatch primitive: select the value whose paired selector is true. A split-halves variadic: the macro recognises two consecutive `&[T]` variadic args as a split-halves shape, emits `selectors.len()` Bool slots followed by `values.len()` polymorphic slots (each pair `(b_i, v_i)` shares an index), and slices `inputs` at the midpoint at eval time. |
 | `select_f64` | Pick between two f64 inputs based on a u64 condition. f64s travel as raw u64 bit patterns through the compiled buffer. |
 | `select_str` | Pick between two String inputs based on a u64 condition. Any nonzero `cond` → `a`; zero → `b`. |
 | `select_u64` | Pick between two u64 inputs based on a u64 condition. |
@@ -198,7 +198,7 @@ it rarely needs to, and
 
 | Node | What it does |
 |---|---|
-| `counter` | Monotonic counter (non-deterministic). SRD-80 PR B.11 migration. |
+| `counter` | Monotonic counter (non-deterministic). |
 | `current_epoch_millis` | Current wall-clock time in epoch milliseconds. |
 | `env` | Environment variable read, frozen at construction. |
 | `env_or` | Environment variable read with default, frozen at construction. |
@@ -226,7 +226,7 @@ it rarely needs to, and
 | `str_to_vec_f64` | `str_to_vec_f64(s)` — a JSON array of numbers as a `vec_f64` wire, such as a window of samples for `is_stable`. Fails by name on anything that is not a JSON array of numbers. |
 | `str_to_vec_i32` | `str_to_vec_i32(s)` — a JSON array of integers as a `vec_i32` wire. |
 | `str_to_vec_i64` | `str_to_vec_i64(s)` — a JSON array of integers as a `vec_i64` wire. |
-| `to_f64` | Convert u64 integer value to f64. SRD-80 PR B.14 migration. |
+| `to_f64` | Convert u64 integer value to f64. |
 | `to_i64` | `to_i64(n)` — the signed reading of a `u64`. |
 | `trunc_u64` | Truncate an `f64` toward zero into a `u64` (saturating; NaN → 0). The explicit escape hatch for writing an f64 expression (e.g. `floor_decade(...)`) into a u64-typed cell or port. |
 | `unit_interval` | Normalize a u64 to a uniform f64 in [0.0, 1.0). |

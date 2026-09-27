@@ -1,8 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Partition-typed stdlib nodes — SRD 71 §"Functions that consume
-//! partitions".
+//! Partition-typed stdlib nodes (cursor_partitions.md §7.3).
 //!
 //! Each node takes a [`polydat::iteration::cursor_partition::Partition`] value
 //! (carried through Polydat wires as `Value::Ext`) via the
@@ -36,8 +35,7 @@
 //! returns sub-partitions. The numeric comprehension generator
 //! that yields evenly spaced *values* over a `[start, end)`
 //! interval is `linear_starts(start, end, n)` (with
-//! `linear_steps` as its inclusive fence-post sibling) — see
-//! SRD 18c.
+//! `linear_steps` as its inclusive fence-post sibling).
 
 use polydat::derive_support::Ext;
 use polydat::iteration::cursor_partition::{Partition, PartitionList};

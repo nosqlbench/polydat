@@ -1,8 +1,8 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Parameter resolution and validation helpers (SRD 12 §"Parameter
-//! resolution and validation").
+//! Parameter resolution and validation helpers (library_catalog.md,
+//! "Parameter resolution and validation").
 //!
 //! These nodes are pass-throughs with assertions on the value they
 //! carry. They let workloads say "this parameter must be defined",
@@ -63,8 +63,6 @@ fn this_or(primary: Option<u64>, default: u64) -> u64 {
 /// Assert that a u64 value is strictly positive (> 0).
 ///
 /// Signature: `is_positive(input: u64) -> u64`
-/// Assert that a u64 value is strictly positive (> 0). SRD-80
-/// PR B.15 migration.
 #[polydat::polydat_node(category = Arithmetic)]
 fn is_positive(
     input: u64,
@@ -83,8 +81,6 @@ fn is_positive(
 /// Assert that a u64 value is in the inclusive range `[lo, hi]`.
 ///
 /// Signature: `in_range(input: u64, lo: u64, hi: u64) -> u64`
-/// Assert that a u64 value is in the inclusive range `[lo, hi]`.
-/// SRD-80 PR B.15 migration.
 #[polydat::polydat_node(category = Arithmetic, validate = in_range_validate)]
 fn in_range(
     input: u64,
@@ -116,8 +112,7 @@ fn in_range_validate(
 // =========================================================================
 
 /// Assert that a u64 value is one of an enumerated allow-list.
-/// SRD-80b Phase C migration via `Const<Vec<C>>` combinator.
-/// Lowered through its slot kit (called from native code);
+/// Authored with the `Const<Vec<C>>` combinator and lowered through its slot kit (called from native code);
 /// `classify_node` returns Fallback for it because a
 /// `Const<Vec<u64>>` node publishes no `jit_constants`, so the
 /// `JitOp::IsOneOfCheck` arm never fires.
@@ -155,7 +150,6 @@ fn compile_matches_regex(pattern: &str) -> Regex {
 }
 
 /// Assert that a string value matches a regex pattern.
-/// SRD-80 PR B.6 migration.
 #[polydat::polydat_node(category = Arithmetic)]
 fn matches(
     input: &str,

@@ -87,11 +87,10 @@ fn fair_coin(input: u64) -> u64 {
 #[polydat::polydat_node(category = Probability)]
 fn unfair_coin(input: u64, #[constraint(RangeF64 { min: 0.0, max: 1.0 })] p: Const<f64>) -> u64 {
     // The range is declared, so the factory refuses a bad `p` when the
-    // node is built and names the parameter, as `chance` does. It used
-    // to be a panic here, which every engine that runs this body hit
-    // and every engine that lowers it past the body did not — so the
-    // same program answered garbage through a cone and refused
-    // elsewhere.
+    // node is built and names the parameter, as `chance` does. A panic
+    // here would fire only on engines that run this body and not on
+    // one that lowers past it, so the same program would answer garbage
+    // through a cone and be refused elsewhere.
     let h = crate::hash::splitmix64_u64(input);
     let unit = hash_to_unit(h);
     if unit < *p { 1 } else { 0 }
@@ -145,9 +144,8 @@ fn select(cond: u64, if_true: u64, if_false: u64) -> u64 {
 #[polydat::polydat_node(category = Probability)]
 fn chance(input: u64, #[constraint(RangeF64 { min: 0.0, max: 1.0 })] p: Const<f64>) -> u64 {
     // The range is declared, so the factory refuses a bad `p` when the
-    // node is built and names the parameter. It used to be a panic here
-    // — which ran on every evaluation and reported on some later cycle
-    // rather than at the program that wrote it.
+    // node is built and names the parameter, at the program that wrote
+    // it rather than on some later cycle's evaluation.
     let h = crate::hash::splitmix64_u64(input);
     let unit = hash_to_unit(h);
     let result: f64 = if unit < *p { 1.0 } else { 0.0 };
@@ -204,11 +202,11 @@ fn n_of(
     // `n <= m` by `n_of_validate`, which a per-parameter constraint
     // cannot say because it is a relation between two of them.
     //
-    // `n <= m` used to be a panic here. That fired on the interpreter
-    // and the closure tier and did not fire at all on the native tier,
-    // where the body is never run — `n_of(cycle, 9, 3)` returned 1
-    // rather than failing. A rule a body states is only as reliable as
-    // the body's chance of running.
+    // A panic here would fire on the interpreter and the closure tier
+    // and not at all on the native tier, where the body is never run,
+    // so `n_of(cycle, 9, 3)` would return 1 there rather than fail. A
+    // rule a body states is only as reliable as the body's chance of
+    // running.
     n_of_m_eval(input, *n, *m)
 }
 
@@ -573,9 +571,8 @@ mod tests {
     }
 
     /// The declared `RangeF64` is refused where the node is built, so
-    /// it is refused once and on every engine — where the old eval-time
-    /// panic fired only on engines that ran this body, and never on one
-    /// that lowered past it.
+    /// it is refused once and on every engine, including one that
+    /// lowers past the body.
     #[test]
     fn unfair_coin_rejects_invalid_p() {
         for bad in [1.5f64, -0.1] {
@@ -754,9 +751,9 @@ mod tests {
         }
     }
 
-    // `m > 0` and `n <= m` are no longer checked from the body, so
-    // there is nothing here to assert about a directly constructed
-    // `NOf`. Both rules are now refused when the node is built, which
+    // `m > 0` and `n <= m` are not checked from the body, so there is
+    // nothing here to assert about a directly constructed `NOf`. Both
+    // rules are refused when the node is built, which
     // `const_constraint_tests` below covers on every engine.
 
     #[test]

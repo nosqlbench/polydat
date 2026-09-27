@@ -19,15 +19,14 @@ use polydat::ast::CompiledU64Op;
 /// `add(base_epoch, offset)`.
 ///
 /// JIT level: P3 (single `iadd` instruction).
-// SRD-80 PR B.7 — Phase 3 const-arg arithmetic family
-// migrated to `#[polydat_node]`. The macro derives `Add`,
+// The P3 const-arg arithmetic family. The macro derives `Add`,
 // `Mul`, `Div`, `Mod` from snake_case → PascalCase; the
 // `r#mod` raw identifier is stripped to "mod" for the DSL
 // name and PascalCased to `Mod` for the struct.
 //
 // `classify_node` matches by DSL name ("add", "mul", "div",
-// "mod") and reads `jit_constants()` — the macro auto-emits
-// both, so Phase 3 dispatch is preserved verbatim.
+// "mod") and reads `jit_constants()`, both of which the macro
+// auto-emits.
 
 #[polydat::polydat_node(category = Arithmetic)]
 fn add(input: u64, addend: Const<u64>) -> u64 {
@@ -41,10 +40,8 @@ fn mul(input: u64, factor: Const<u64>) -> u64 {
 
 #[polydat::polydat_node(category = Arithmetic)]
 fn div(input: u64, divisor: Const<u64>) -> u64 {
-    // Greenfield posture: zero-divisor panics at cycle time
-    // (matching the body's `/`). The original `new()` assert
-    // is retired with the migration; if early-fail is needed
-    // again, it lands via a const-constraint attribute later.
+    // A zero divisor panics at cycle time (the body's `/`); the
+    // divisor declares no const constraint.
     input / *divisor
 }
 
@@ -62,7 +59,7 @@ fn r#mod(input: u64, modulus: Const<u64>) -> u64 {
 /// divisor port declares a `NonZeroU64` constraint, so under
 /// `// @pragma: strict_values` the compiler auto-inserts an
 /// `assert_u64_nonzero` between the source and the divisor input
-/// (SRD 15 §"Strict Wire Mode"). Without strict mode, the node
+/// (graph_compiler.md §2). Without strict mode, the node
 /// trusts the divisor and a zero value will panic at cycle time —
 /// the canonical "panic at hour 14" hazard, opt-out by design.
 ///
@@ -71,16 +68,16 @@ fn r#mod(input: u64, modulus: Const<u64>) -> u64 {
 /// is baked into the JIT closure as a constant).
 ///
 /// JIT level: P3 (`urem` on two wire slots; `JitOp::U64ModWire`).
-/// Modulo of a u64 by a wire-fed divisor. SRD-80 PR B.14
-/// migration — the `#[constraint(NonZeroU64)]` attribute carries
-/// the strict-wire-mode assertion contract.
+/// Modulo of a u64 by a wire-fed divisor. The
+/// `#[constraint(NonZeroU64)]` attribute carries the
+/// strict-wire-mode assertion contract.
 #[polydat::polydat_node(category = Arithmetic)]
 fn mod_wire(input: u64, #[constraint(NonZeroU64)] divisor: u64) -> u64 {
     input % divisor
 }
 
-/// Division of a u64 by a wire-fed divisor. SRD-80 PR B.14
-/// migration — same NonZeroU64 contract as mod_wire.
+/// Division of a u64 by a wire-fed divisor, with the same
+/// NonZeroU64 contract as mod_wire.
 #[polydat::polydat_node(category = Arithmetic)]
 fn div_wire(input: u64, #[constraint(NonZeroU64)] divisor: u64) -> u64 {
     input / divisor
@@ -104,8 +101,8 @@ fn div_wire(input: u64, #[constraint(NonZeroU64)] divisor: u64) -> u64 {
 ///   - bucketing: snap a value up to the next bin edge
 ///
 /// JIT level: P3 (`JitOp::CeilToMultiple`, inline).
-/// Smallest multiple of `multiple` that is ≥ `value`. SRD-80
-/// PR B.13. `multiple == 0` is a soft no-op (returns value
+/// Smallest multiple of `multiple` that is ≥ `value`.
+/// `multiple == 0` is a soft no-op (returns value
 /// unchanged) so a transient zero from a wire-bound extern
 /// doesn't break a binding mid-evaluation.
 #[polydat::polydat_node(category = Arithmetic)]
@@ -139,7 +136,7 @@ fn ceil_to_multiple(value: u64, multiple: u64) -> u64 {
 /// trap, the function quietly yields the only honest answer.
 ///
 /// JIT level: P3 (single `udiv_ceil`).
-/// Count of multiples needed to cover `value`. SRD-80 PR B.13.
+/// Count of multiples needed to cover `value`.
 /// `multiple == 0` returns 0 (no count covers positive value
 /// with zero-sized multiples). JIT P3.
 #[polydat::polydat_node(category = Arithmetic)]
@@ -158,7 +155,7 @@ fn multiples_at_least(value: u64, multiple: u64) -> u64 {
 ///
 /// Functionally `if current == 0 { fallback } else { current }`
 /// — a simple conditional. The name reflects its intended use
-/// alongside SRD-13f cross-scope shared wires:
+/// alongside cross-scope shared wires (scope_model.md §6):
 ///
 /// ```text
 ///   shared query_passes := set_or_get(
@@ -185,11 +182,6 @@ fn multiples_at_least(value: u64, multiple: u64) -> u64 {
 ///
 /// JIT level: P3 through its slot kit (no named JitOp); the body
 /// is the compare+select.
-//
-// SRD-80b Phase E: migrated to `#[polydat_node]`. Struct
-// renamed from `SetOrGetU64` to `SetOrGet` (greenfield
-// posture — no cross-crate callers reference the old name)
-// to match the macro's snake_case → PascalCase derivation.
 #[polydat::polydat_node(category = Arithmetic)]
 fn set_or_get(current: u64, fallback: u64) -> u64 {
     if current == 0 { fallback } else { current }
@@ -203,10 +195,6 @@ fn set_or_get(current: u64, fallback: u64) -> u64 {
 /// you want values to pile up at the edges rather than wrap around.
 ///
 /// JIT level: P3 (`umax` + `umin`).
-//
-// SRD-80b Phase E: migrated to `#[polydat_node]`. Struct
-// renamed from `ClampU64` to `Clamp` (greenfield posture —
-// no cross-crate callers reference the old name).
 #[polydat::polydat_node(category = Arithmetic)]
 fn clamp(input: u64, min: Const<u64>, max: Const<u64>) -> u64 {
     input.clamp(*min, *max)
@@ -313,9 +301,8 @@ fn mixed_radix_validate(
 ///
 /// JIT level: P3 (unrolled chain, `JitOp::VariadicSum`; likewise
 /// product/min/max).
-// SRD-80 PR B.9 — variadic N-ary u64 reductions migrated to
-// `#[polydat_node]`. Macro generates Sum/Product/Min/Max
-// structs with `new(n_wires)` ctors and auto-emits Phase 2
+// Variadic N-ary u64 reductions. The macro generates
+// Sum/Product/Min/Max structs with `new(n_wires)` ctors and auto-emits P2
 // closures that pass the JIT `&[u64]` buffer directly to the
 // body. AllCommutative declared via attribute.
 
@@ -350,9 +337,6 @@ fn max(values: &[u64]) -> u64 {
 /// changes when either dimension changes, with spatial correlation.
 ///
 /// JIT level: P3 (extern call).
-//
-// SRD-80b Phase E: migrated to `#[polydat_node]`. Struct
-// name `Interleave` matches snake_case → PascalCase of `interleave`.
 #[polydat::polydat_node(category = Arithmetic)]
 fn interleave(a: u64, b: u64) -> u64 {
     let mut result: u64 = 0;

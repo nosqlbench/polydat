@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! The producer node (SRD 113 §3.1). `name := for ...` lowers to
+//! The producer node (for_traversal.md §3.1). `name := for ...` lowers to
 //! `const name := streamer("<json>")`, where the payload is the
 //! resolved comprehension serialized by [`StreamerValue::to_json`].
 //! The node parses once at setup and emits the same reflected value on

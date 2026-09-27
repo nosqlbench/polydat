@@ -122,9 +122,9 @@ mod tests {
 
     /// `size` defaults to zero, so `shuffle(x)` and `shuffle(x, fb)`
     /// reach the empty range without the author asking for it. It is
-    /// the range's floor, and above all it is not a panic: this used to
-    /// divide by zero, and the trap surfaced as a raw arithmetic
-    /// message from the build's constant fold.
+    /// the range's floor, and above all it is not a panic: a division
+    /// by zero here would surface as a raw arithmetic message from the
+    /// build's constant fold.
     #[test]
     fn an_empty_range_answers_its_floor() {
         for min in [0u64, 7, u64::MAX] {

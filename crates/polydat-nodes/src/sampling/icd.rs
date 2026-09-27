@@ -483,8 +483,7 @@ fn dist_zipf(
 // ---------------------------------------------------------------------------
 // Inventory stub: histribution and dist_empirical register themselves
 // via their own modules; `LutSample` (lut.rs) is a programmatic node
-// (not DSL-registered). This module no longer hand-rolls a
-// signatures() vec — every DSL node here self-registers via
+// (not DSL-registered). Every DSL node here self-registers via
 // `#[polydat_node]`.
 // ---------------------------------------------------------------------------
 

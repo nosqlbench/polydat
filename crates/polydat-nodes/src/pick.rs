@@ -1,7 +1,8 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! `pick` — branched-dispatch primitive (SRD-66 §"Surface 3").
+//! `pick` — branched-dispatch primitive (library_catalog.md, "`pick` —
+//! semantics").
 //!
 //! Signature: `pick(b0, b1, …, bN-1, v0, v1, …, vN-1) -> V`
 //!
@@ -11,20 +12,20 @@
 //! when their probe assumptions break, never a silent default.
 //!
 //! The split-halves call shape (all booleans first, then all values)
-//! was chosen over interleaved pairs so long lists scan cleanly and
-//! a missing pair surfaces as "odd total args" at compile time. See
-//! SRD-66 §"Why not pair-wise `(b, v)` interleaving?" for rationale.
+//! is used rather than interleaved pairs so long lists scan cleanly and
+//! a missing pair surfaces as "odd total args" at compile time (the
+//! spec's "Argument shape").
 
 use polydat::ast::Value;
 
-/// Static guidance suffix appended to every `pick` panic, per
-/// SRD-66 §"Diagnostic guidance".
+/// Static guidance suffix appended to every `pick` panic (the spec's
+/// "Diagnostic guidance").
 const PICK_HINT: &str = "\n  hint: did the probe phase that sets these booleans run before \
 this phase? Check scenario-tree DFS order or declare a `detect_*` \
 phase ahead of consumers.";
 
 /// Branched-dispatch primitive: select the value whose paired
-/// selector is true. SRD-80b split-halves variadic — the macro
+/// selector is true. A split-halves variadic: the macro
 /// recognises two consecutive `&[T]` variadic args as a
 /// split-halves shape, emits `selectors.len()` Bool slots
 /// followed by `values.len()` polymorphic slots (each pair

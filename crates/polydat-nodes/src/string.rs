@@ -708,9 +708,8 @@ mod tests {
         assert_eq!(out[0].as_str(), "ÄPFEL");
     }
 
-    // `str_lower_accepts_non_string_via_display` retired: SRD-80b
-    // Wire trait dispatch panics on shape mismatch instead of
-    // silently display-coercing. Workload-level support for
+    // `str_lower` does not display-coerce a non-string: `Wire` trait
+    // dispatch panics on a shape mismatch. Workload-level support for
     // chained `str_lower(format_u64(...))` flows through assembler-
     // inserted Str adapters (e.g. polyfill U64ToStr), not through
     // a lying Wire impl. Tests that want to exercise the coercion

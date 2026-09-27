@@ -102,10 +102,10 @@ fn decompose_epoch_ms(epoch_ms: u64) -> (u64, u64, u64, u64, u64, u64, u64) {
 /// Days since 1970-01-01 to a proleptic Gregorian `(year, month, day)`,
 /// in constant time.
 ///
-/// The calendar used to be walked a year at a time, which is exact but
-/// linear in the year: at `u64::MAX` milliseconds that is some 584
-/// million iterations, one evaluation taking tens of seconds. This is
-/// the closed form (H. Hinnant, "chrono-Compatible Low-Level Date
+/// Walking the calendar a year at a time is exact but linear in the
+/// year: at `u64::MAX` milliseconds that is some 584 million
+/// iterations, one evaluation taking tens of seconds. This is the
+/// closed form (H. Hinnant, "chrono-Compatible Low-Level Date
 /// Algorithms"): count 400-year eras of 146 097 days from 0000-03-01,
 /// so the leap day falls at the end of each year of the era, then read
 /// the year, day of year, and month out of the era arithmetically. The
@@ -173,9 +173,10 @@ mod tests {
         }
     }
 
-    /// The top of the range answers at once and in range: the input
-    /// that used to walk 584 million years. The bound is loose; the walk
-    /// took tens of seconds and the closed form takes nanoseconds.
+    /// The top of the range answers at once and in range: the input a
+    /// year-at-a-time walk would take 584 million iterations over. The
+    /// bound is loose; that walk takes tens of seconds and the closed
+    /// form takes nanoseconds.
     #[test]
     fn the_largest_epoch_decomposes_in_constant_time() {
         let t = std::time::Instant::now();

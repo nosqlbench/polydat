@@ -108,9 +108,9 @@ fn fractal_noise_2d_jit_constants(node: &FractalNoise2d) -> Vec<u64> {
 /// octave's term is below the resolution of the sum and changes
 /// nothing; far past that the doubling frequency overflows to infinity
 /// and the sample is NaN. An octave count is also work per call, one
-/// noise sample each, so an unbounded one is a hang. The count used to
-/// pass through `as u32` as well, which truncated `2^53 + 1` octaves to
-/// one. Sixty-four keeps every octave that can contribute.
+/// noise sample each, so an unbounded one is a hang, and a count passed
+/// through `as u32` would truncate `2^53 + 1` octaves to one.
+/// Sixty-four keeps every octave that can contribute.
 #[polydat::polydat_node(category = Noise, jit_constants = fractal_noise_1d_jit_constants)]
 fn fractal_noise_1d(
     input: u64,

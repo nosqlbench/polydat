@@ -266,7 +266,7 @@ mod codegen {
         // Create a real Shuffle to get its constants
         use crate::sampling::metashift::{Shuffle, feedback_for_size};
         use polydat::ast::PolydatNode;
-        // SRD-80b Phase E — `Shuffle::new` now takes `(feedback, size, min)`.
+        // `Shuffle::new` takes `(feedback, size, min)`.
         // The bank-0 feedback for size=1000 is computed via the public helper.
         let size = 1000u64;
         let node = Shuffle::new(feedback_for_size(size), size, 0);
@@ -402,8 +402,8 @@ mod codegen {
 
     #[test]
     fn classify_routes_is_one_of_to_fallback() {
-        // SRD-80b Phase C — `is_one_of` migrated to the macro's
-        // `Const<Vec<C>>` shape. classify_node returns Fallback
+        // `is_one_of` has the macro's `Const<Vec<C>>` shape.
+        // classify_node returns Fallback
         // (no `jit_constants` from a `Const<Vec<_>>` node); P3
         // runs it through its slot kit.
         use crate::param_helpers::IsOneOf;
