@@ -28,7 +28,7 @@
 //! concentric-shell depth). See `take_n_strata`.
 
 use super::{MultiIndex, Selection, Strategy, capped, index_fn_dim, index_fn_supports_lookup};
-use crate::iteration::comprehension::metadata::IndexFn;
+use crate::iteration::comprehension::metadata::{IndexFn, cycle_length};
 use crate::iteration::comprehension::strategy::StrategyName;
 
 /// All extrema first, stratified by how many indices are interior.
@@ -140,9 +140,7 @@ pub(crate) fn extrema_multi_indices(idx: &IndexFn, truncation: Option<u64>) -> V
             s
         }
         IndexFn::Lockstep { length } => vec![*length],
-        IndexFn::Modular { axis_sizes } => {
-            vec![axis_sizes.iter().copied().max().unwrap_or(0)]
-        }
+        IndexFn::Modular { axis_sizes } => vec![cycle_length(axis_sizes)],
         IndexFn::Concatenation { segment_sizes } => {
             vec![segment_sizes.iter().copied().sum()]
         }

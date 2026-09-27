@@ -24,7 +24,7 @@
 //! non-`Lex` order over such an input selects its positions and
 //! computes only the selected tuples (spec §6.2, §10.2 R2).
 
-use crate::iteration::comprehension::metadata::{CycleOperand, IndexFn};
+use crate::iteration::comprehension::metadata::{CycleOperand, IndexFn, cycle_length};
 use crate::iteration::comprehension::source::{LiteralValue, Source};
 use crate::iteration::comprehension::strategies::{Selection, Tuple, TupleValue};
 use crate::iteration::comprehension::strategy::{StrategyName, ZipMode};
@@ -424,6 +424,8 @@ struct ZipStream {
     known_len: u64,
     /// Under Cycle, the position of the next tuple.
     step: u64,
+    /// Under Cycle, an indexed or buffered operand was found empty.
+    empty: bool,
     initialized: bool,
     done: bool,
 }
@@ -449,6 +451,7 @@ impl ZipStream {
             streamed_len: None,
             known_len: 0,
             step: 0,
+            empty: false,
             initialized: false,
             done: false,
         }
@@ -457,11 +460,15 @@ impl ZipStream {
     /// Hold each operand as the plan says. An operand the plan indexes
     /// but whose stream is not addressable is buffered; without a
     /// plan, addressable operands are indexed and the first other
-    /// operand streams.
+    /// operand streams. An empty operand empties the zip, so the
+    /// indexed operands' lengths are checked first and the buffered
+    /// operands are drained in ascending bound, stopping at the first
+    /// empty one before any other is held.
     fn initialize_cycle(&mut self) {
         let planned = self.plan.len() == self.children.len();
-        let mut holds = Vec::with_capacity(self.children.len());
-        for (i, child) in self.children.iter_mut().enumerate() {
+        let mut holds: Vec<Option<Hold>> = Vec::with_capacity(self.children.len());
+        let mut buffered: Vec<(usize, Option<u64>)> = Vec::new();
+        for (i, child) in self.children.iter().enumerate() {
             let want = if planned {
                 self.plan[i].clone()
             } else if child.indexed_len().is_some() {
@@ -472,30 +479,48 @@ impl ZipStream {
                 CycleOperand::Buffered { bound: None }
             };
             let hold = match (want, child.indexed_len()) {
-                (CycleOperand::Indexed, Some(len)) => Hold::Indexed(len),
+                (CycleOperand::Indexed, Some(len)) => Some(Hold::Indexed(len)),
                 (CycleOperand::Streamed, _) if self.streamed.is_none() => {
                     self.streamed = Some(i);
-                    Hold::Streamed
+                    Some(Hold::Streamed)
+                }
+                (CycleOperand::Buffered { bound }, _) => {
+                    buffered.push((i, bound));
+                    None
                 }
                 _ => {
-                    let mut buf = Vec::new();
-                    while let Some(t) = child.advance() {
-                        buf.push(t);
-                    }
-                    Hold::Buffered(buf)
+                    buffered.push((i, None));
+                    None
                 }
             };
             holds.push(hold);
         }
+        if holds.iter().any(|h| matches!(h, Some(Hold::Indexed(0)))) {
+            self.empty = true;
+            self.done = true;
+            return;
+        }
+        buffered.sort_by_key(|&(i, bound)| (bound.is_none(), bound, i));
+        for (i, _) in buffered {
+            let child = &mut self.children[i];
+            let mut buf = Vec::new();
+            while let Some(t) = child.advance() {
+                buf.push(t);
+            }
+            if buf.is_empty() {
+                self.empty = true;
+                self.done = true;
+                return;
+            }
+            holds[i] = Some(Hold::Buffered(buf));
+        }
+        let holds: Vec<Hold> = holds.into_iter().flatten().collect();
         for hold in &holds {
             let len = match hold {
                 Hold::Indexed(len) => *len,
                 Hold::Buffered(buf) => buf.len() as u64,
                 Hold::Streamed => continue,
             };
-            if len == 0 {
-                self.done = true;
-            }
             self.known_len = self.known_len.max(len);
         }
         self.holds = holds;
@@ -597,11 +622,7 @@ impl TupleStream for ZipStream {
                 if let Some(s) = self.streamed {
                     self.children[s].rewind();
                 }
-                self.done = self.holds.iter().any(|h| match h {
-                    Hold::Indexed(len) => *len == 0,
-                    Hold::Buffered(buf) => buf.is_empty(),
-                    Hold::Streamed => false,
-                }) || self.streamed_len == Some(0);
+                self.done = self.empty || self.streamed_len == Some(0);
             }
         }
     }
@@ -617,8 +638,7 @@ impl TupleStream for ZipStream {
             .collect::<Option<_>>()?;
         Some(match self.mode {
             ZipMode::Strict | ZipMode::Truncate => lens.iter().copied().min().unwrap_or(0),
-            ZipMode::Cycle if lens.contains(&0) => 0,
-            ZipMode::Cycle => lens.iter().copied().max().unwrap_or(0),
+            ZipMode::Cycle => cycle_length(&lens),
         })
     }
 
@@ -877,6 +897,11 @@ impl TupleStream for OrderMaterializeStream {
 /// walker evaluates richer predicates through the scope.
 fn evaluate_predicate(predicate: &str, tuple: &Tuple) -> bool {
     let trimmed = predicate.trim();
+    // A predicate wrapped in one pair of parentheses, as a folded
+    // filter's conjuncts are.
+    if let Some(inner) = enclosed(trimmed) {
+        return evaluate_predicate(inner, tuple);
+    }
     if trimmed.eq_ignore_ascii_case("true") {
         return true;
     }
@@ -887,13 +912,13 @@ fn evaluate_predicate(predicate: &str, tuple: &Tuple) -> bool {
     if let Some(inner) = trimmed.strip_prefix('!') {
         return !evaluate_predicate(inner.trim(), tuple);
     }
+    // Disjunction, which binds looser than conjunction.
+    if let Some(parts) = split_top_level(trimmed, "||") {
+        return parts.iter().any(|p| evaluate_predicate(p, tuple));
+    }
     // Conjunction.
     if let Some(parts) = split_top_level(trimmed, "&&") {
         return parts.iter().all(|p| evaluate_predicate(p, tuple));
-    }
-    // Disjunction.
-    if let Some(parts) = split_top_level(trimmed, "||") {
-        return parts.iter().any(|p| evaluate_predicate(p, tuple));
     }
     // `{name} in [v1, v2, ...]`
     if let Some(in_pos) = trimmed.find(" in ") {
@@ -1052,6 +1077,25 @@ fn parse_literal(s: &str) -> Option<LiteralValue> {
 
 fn lit_to_tuple_value(lv: &LiteralValue) -> TupleValue {
     literal_to_tuple_value(lv)
+}
+
+/// The text inside `s` when one pair of parentheses encloses all of it.
+fn enclosed(s: &str) -> Option<&str> {
+    let inner = s.strip_prefix('(')?.strip_suffix(')')?;
+    let mut depth = 0i64;
+    for b in inner.bytes() {
+        match b {
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                if depth < 0 {
+                    return None;
+                }
+            }
+            _ => {}
+        }
+    }
+    (depth == 0).then_some(inner)
 }
 
 fn split_top_level(s: &str, sep: &str) -> Option<Vec<String>> {
@@ -1323,6 +1367,48 @@ mod tests {
             stream.rewind();
             assert_eq!(collect(&mut stream), first, "a rewound zip replays");
         }
+    }
+
+    /// An operand empty at open, known from its metadata or found by
+    /// its filter, in any position, empties the zip, before and after
+    /// a rewind.
+    #[test]
+    fn an_empty_operand_empties_the_zip() {
+        let empties = [
+            clause("e", &[]),
+            Comprehension::filter(clause("e", &[1, 2]), "{e} > 5"),
+            Comprehension::filter(clause("e", &[1, 2]), "false"),
+        ];
+        for empty in empties {
+            for at in 0..3 {
+                let mut children = vec![kept("a", &[1, 2, 3, 4]), clause("b", &[7, 8])];
+                children.insert(at, empty.clone());
+                let ast = Comprehension::zip(children, ZipMode::Cycle);
+                let program = compile(&ast);
+                let mut stream = interpret(&program);
+                assert!(collect(&mut stream).is_empty(), "{ast:?}");
+                stream.rewind();
+                assert!(collect(&mut stream).is_empty(), "{ast:?}");
+                // The empty literal is known empty from its metadata, so
+                // the zip holds nothing.
+                if matches!(empty, Comprehension::Clause { .. }) {
+                    assert!(program.ops().iter().all(|op| !op.is_barrier()), "{ast:?}");
+                }
+            }
+        }
+    }
+
+    /// A predicate in parentheses, as chained filters fold to, and a
+    /// disjunction binding looser than a conjunction.
+    #[test]
+    fn predicates_group_as_written() {
+        let ks = clause("k", &[1, 2, 3, 4, 5]);
+        let folded = Comprehension::filter(Comprehension::filter(ks.clone(), "{k} > 1"), "false");
+        let optimized = crate::iteration::comprehension::optimize::optimize(folded);
+        assert!(collect(&mut interpret(&compile(&optimized))).is_empty());
+        let mixed = Comprehension::filter(ks, "{k} == 1 || {k} > 2 && {k} < 4");
+        let tuples = collect(&mut interpret(&compile(&mixed)));
+        assert_eq!(ints(&tuples), vec![vec![1], vec![3]]);
     }
 
     /// Over an addressable input a strategy computes only the tuples

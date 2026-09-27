@@ -13,7 +13,10 @@
 //! each constructor and a seeded generator over their compositions:
 //! cartesians (independent and dependent), the three zip modes, unions,
 //! every order strategy with and without truncation and seed, filters,
-//! and sampled continuous spaces.
+//! and sampled continuous spaces. On a shape with discrete sources and
+//! constant filters that the scope-less streaming surface compiles,
+//! every tuple binds every name of the shape and that surface yields
+//! the same count of tuples binding the same names.
 
 use polydat::iteration::comprehension::ast::Comprehension;
 use polydat::iteration::comprehension::cardinality::{Interval, ProductMeasure};
@@ -58,6 +61,25 @@ fn assert_equivalent(ast: &Comprehension, scope: &polydat::kernel::PolydatKernel
                 "clause yields differ for {ast:?}"
             );
             assert_eq!(reported.tuples, reference.tuples);
+            if let Some(streamed) = constant_filters(ast).then(|| streamed_names(ast)).flatten() {
+                let names = shape_names(ast);
+                for tuple in &reference.tuples {
+                    assert_eq!(
+                        tuple_names(tuple.iter().map(|(n, _)| n)),
+                        names,
+                        "a tuple does not bind every name of {ast:?}"
+                    );
+                }
+                assert_eq!(
+                    streamed.len(),
+                    reference.tuples.len(),
+                    "the streaming surface's tuple count differs for {ast:?}"
+                );
+                assert!(
+                    streamed.iter().all(|t| *t == names),
+                    "a streamed tuple does not bind every name of {ast:?}"
+                );
+            }
             reference.tuples.len()
         }
         (Err(reference), Err(indexed)) => {
@@ -73,6 +95,49 @@ fn assert_equivalent(ast: &Comprehension, scope: &polydat::kernel::PolydatKernel
             reference.map(|r| r.tuples.len()),
             indexed.map(|t| t.len())
         ),
+    }
+}
+
+/// A shape's names, sorted.
+fn shape_names(ast: &Comprehension) -> Vec<String> {
+    tuple_names(ast.coordinate_names().iter())
+}
+
+fn tuple_names<'a>(names: impl Iterator<Item = &'a String>) -> Vec<String> {
+    let mut names: Vec<String> = names.cloned().collect();
+    names.sort();
+    names
+}
+
+/// The sorted names of each tuple the scope-less streaming surface
+/// dispenses for `ast`, or `None` when that surface refuses it: an
+/// invalid shape, or a source that needs a scope.
+fn streamed_names(ast: &Comprehension) -> Option<Vec<Vec<String>>> {
+    let compiled = polydat::iteration::comprehension::surfaces::compile(ast).ok()?;
+    Some(
+        compiled
+            .coordinate_stream()
+            .map(|t| tuple_names(t.bindings.iter().map(|(n, _)| n)))
+            .collect(),
+    )
+}
+
+/// Whether every filter in `c` is the constant `true` or `false` and
+/// no clause is continuous: the shapes on which the streaming surface
+/// and the traversal evaluators share predicate and sampling semantics,
+/// so their tuple counts are comparable.
+fn constant_filters(c: &Comprehension) -> bool {
+    match c {
+        Comprehension::Clause { source, .. } => {
+            !matches!(source, Source::ContinuousInterval { .. })
+        }
+        Comprehension::Cartesian { children }
+        | Comprehension::Zip { children, .. }
+        | Comprehension::Union { children } => children.iter().all(constant_filters),
+        Comprehension::Filter { child, predicate } => {
+            matches!(predicate.as_str(), "true" | "false") && constant_filters(child)
+        }
+        Comprehension::Order { child, .. } => constant_filters(child),
     }
 }
 
@@ -222,6 +287,127 @@ fn every_shape_indexes_as_it_materializes() {
     }
 }
 
+/// An empty operand empties a cycle zip on every path: every tuple
+/// binds every name, and an empty operand has no tuple to cycle. The
+/// operand may be empty as written, after a filter, or as a generator
+/// that yields nothing, in any position, and the zip may sit inside a
+/// cartesian or a union.
+#[test]
+fn an_empty_operand_empties_a_cycle_zip() {
+    use polydat::iteration::comprehension::CardinalityClass;
+    let scope = scope();
+    let cycle = |children| Comprehension::zip(children, ZipMode::Cycle);
+    let empties: Vec<fn(&str) -> Comprehension> = vec![
+        |n| ints(n, &[]),
+        |n| range(n, 3, 3, 1),
+        |n| Comprehension::filter(range(n, 0, 6, 1), format!("{{{n}}} > 9")),
+        |n| Comprehension::filter(ints(n, &[1, 2]), "false"),
+        |n| generator(n, "4..4"),
+    ];
+    let mut shapes = Vec::new();
+    for empty in &empties {
+        let zips = [
+            cycle(vec![range("k", 1, 5, 1), empty("color")]),
+            cycle(vec![empty("color"), range("k", 1, 5, 1)]),
+            cycle(vec![
+                range("k", 1, 5, 1),
+                empty("color"),
+                ints("size", &[7, 8]),
+            ]),
+            cycle(vec![
+                Comprehension::filter(range("k", 0, 9, 1), "{k} > 2"),
+                ints("size", &[7, 8]),
+                empty("color"),
+            ]),
+        ];
+        // The zip's metadata never counts a tuple it cannot yield.
+        for zip in &zips {
+            match zip.metadata().cardinality {
+                CardinalityClass::Bounded(0)
+                | CardinalityClass::BoundedAtMost(_)
+                | CardinalityClass::Unbounded => {}
+                other => panic!("{other:?} for {zip:?}"),
+            }
+        }
+        shapes.extend(zips);
+        shapes.push(Comprehension::cartesian(vec![
+            ints("p", &[1, 2]),
+            cycle(vec![range("k", 1, 5, 1), empty("color")]),
+        ]));
+        shapes.push(Comprehension::union(vec![
+            cycle(vec![range("k", 1, 5, 1), empty("color")]),
+            cycle(vec![range("k", 1, 5, 1), empty("color")]),
+        ]));
+        shapes.push(Comprehension::order(
+            cycle(vec![empty("color"), range("k", 1, 5, 1)]),
+            StrategyName::Shuffle,
+            Some(3),
+        ));
+    }
+    for shape in &shapes {
+        assert_eq!(assert_equivalent(shape, &scope), 0, "{shape:?}");
+        assert_eq!(evaluate_indexed(shape, &scope).unwrap().len(), 0);
+        // The streaming surface yields nothing where it compiles the
+        // shape; it refuses a non-Lex order over an operand that is not
+        // addressable.
+        let streamed = streamed_names(shape);
+        assert!(
+            streamed.as_ref().is_none_or(Vec::is_empty),
+            "{streamed:?} for {shape:?}"
+        );
+        if !matches!(shape, Comprehension::Order { .. }) {
+            assert!(
+                streamed.is_some(),
+                "the streaming surface refused {shape:?}"
+            );
+        }
+    }
+
+    // Emptiness known from the operand's metadata empties the zip's
+    // metadata and holds nothing.
+    let known = cycle(vec![
+        Comprehension::filter(range("k", 0, 9, 1), "{k} > 2"),
+        Comprehension::filter(ints("size", &[7, 8]), "{size} > 0"),
+        ints("color", &[]),
+    ]);
+    let meta = known.metadata();
+    assert_eq!(meta.cardinality, CardinalityClass::Bounded(0));
+    assert_eq!(
+        meta.materialization,
+        polydat::iteration::comprehension::Materialization::Streaming
+    );
+    let bounds = polydat::iteration::comprehension::ir::check_bounds(
+        &polydat::iteration::comprehension::ir::compile(&known),
+    );
+    assert!(bounds.barriers.is_empty(), "{bounds:?}");
+    // An operand that may be empty at open makes the count an upper
+    // bound.
+    let maybe = cycle(vec![
+        range("k", 0, 5, 1),
+        Comprehension::filter(ints("size", &[7, 8]), "{size} > 7"),
+    ]);
+    assert_eq!(
+        maybe.metadata().cardinality,
+        CardinalityClass::BoundedAtMost(5)
+    );
+
+    // A traversal and a producer over the same zip, written in the
+    // language.
+    let src = "input cycle: u64\n\
+               sweep := for (k, color) in zip_cycle(1..5, 5..5)\n\
+               for (k, color) in zip_cycle(1..5, 5..5) {\n    \
+               s := u64_add(k, color)\n}\n";
+    let mut kernel = polydat::dsl::compile_polydat_interpreter(src).unwrap();
+    kernel.set_inputs(&[0]);
+    let mut stream = kernel.traverse(0).unwrap();
+    assert_eq!(stream.len(), 0);
+    assert!(stream.advance().unwrap().is_none());
+    let sweep = kernel.pull_ref("sweep").clone();
+    let streamer = sweep.as_streamer().unwrap();
+    assert_eq!(streamer.cardinality(), CardinalityClass::Bounded(0));
+    assert_eq!(streamer.coordinate_stream().unwrap().count(), 0);
+}
+
 /// A small PRNG, so the generated shapes are the same on every run.
 struct Rng(u64);
 
@@ -251,6 +437,8 @@ impl Rng {
 struct Shapes {
     rng: Rng,
     names: u64,
+    /// Cycle zips given an operand that keeps nothing.
+    emptied: u64,
 }
 
 impl Shapes {
@@ -319,9 +507,18 @@ impl Shapes {
                     1 => ZipMode::Truncate,
                     _ => ZipMode::Cycle,
                 };
-                let children = (0..2 + self.rng.below(2))
+                let mut children: Vec<Comprehension> = (0..2 + self.rng.below(2))
                     .map(|_| self.shape(depth - 1, bound))
                     .collect();
+                // A cycle zip often gets an operand empty at open, in
+                // any position, besides the empty sources and filters
+                // the operands draw on their own.
+                if mode == ZipMode::Cycle && self.rng.coin(30) {
+                    let at = self.rng.below(children.len() as u64) as usize;
+                    let child = children.remove(at);
+                    children.insert(at, Comprehension::filter(child, "false"));
+                    self.emptied += 1;
+                }
                 Comprehension::zip(children, mode)
             }
             5 => {
@@ -388,11 +585,12 @@ fn generated_shapes_index_as_they_materialize() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(1500);
-    let (mut compared, mut tuples) = (0u64, 0usize);
+    let (mut compared, mut tuples, mut emptied) = (0u64, 0usize, 0u64);
     for case in 0..cases {
         let mut shapes = Shapes {
             rng: Rng(0x5EED_0000 + case),
             names: 0,
+            emptied: 0,
         };
         let shape = shapes.shape(3, &[]);
         if bound(&shape) > 4000 {
@@ -400,9 +598,14 @@ fn generated_shapes_index_as_they_materialize() {
         }
         tuples += assert_equivalent(&shape, &scope);
         compared += 1;
+        emptied += shapes.emptied;
     }
     assert!(compared > cases / 2, "only {compared} of {cases} compared");
     assert!(tuples > 0, "no generated shape produced a tuple");
+    assert!(
+        emptied >= cases / 100,
+        "only {emptied} compared cycle zips had an emptied operand"
+    );
 }
 
 /// The open cost of a large product: the reference evaluator builds

@@ -13,7 +13,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::iteration::comprehension::metadata::CycleOperand;
+use crate::iteration::comprehension::metadata::{CycleOperand, cycle_plan_is_empty};
 use crate::iteration::comprehension::source::Source;
 use crate::iteration::comprehension::strategy::{StrategyName, ZipMode};
 
@@ -153,7 +153,7 @@ impl Op {
     /// `true` if this opcode is a materialization barrier per
     /// spec §6.2 + §6.3. Used by the bounds checker. A `Cycle` zip
     /// is one when it buffers an operand, or when it carries no plan
-    /// and may have to.
+    /// and may have to; one with an operand known empty holds nothing.
     pub fn is_barrier(&self) -> bool {
         match self {
             Op::OrderMaterialize { .. } => true,
@@ -163,9 +163,10 @@ impl Op {
                 ..
             } => {
                 operands.is_empty()
-                    || operands
-                        .iter()
-                        .any(|o| matches!(o, CycleOperand::Buffered { .. }))
+                    || (!cycle_plan_is_empty(operands)
+                        && operands
+                            .iter()
+                            .any(|o| matches!(o, CycleOperand::Buffered { .. })))
             }
             _ => false,
         }

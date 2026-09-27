@@ -86,7 +86,9 @@ pub enum IndexFn {
 
     /// Zip Cycle. Modular addressing — index `i` maps to each
     /// child at `i mod child.cardinality`. At least one child
-    /// must be bounded (the cycling target).
+    /// must be bounded (the cycling target). The index range is
+    /// [`cycle_length`] of the sizes: the longest child's, or empty
+    /// when any child is empty.
     Modular {
         /// Element count per child.
         axis_sizes: Vec<u64>,
@@ -297,6 +299,26 @@ fn zip_metadata(children: &[Comprehension], mode: ZipMode) -> Metadata {
     }
 }
 
+/// The tuple count of a `zip(Cycle)` over operands of these counts:
+/// the longest operand's, or zero when any operand is empty. Every
+/// tuple binds every operand's names, and an empty operand has no
+/// tuple to cycle.
+pub fn cycle_length(counts: &[u64]) -> u64 {
+    if counts.contains(&0) {
+        0
+    } else {
+        counts.iter().copied().max().unwrap_or(0)
+    }
+}
+
+/// `true` when metadata alone shows the operand yields no tuple.
+fn known_empty(m: &Metadata) -> bool {
+    matches!(
+        m.cardinality,
+        CardinalityClass::Bounded(0) | CardinalityClass::BoundedAtMost(0)
+    )
+}
+
 /// How a `zip(Cycle)` holds one operand while it cycles (spec §6.2,
 /// §6.3).
 ///
@@ -305,7 +327,10 @@ fn zip_metadata(children: &[Comprehension], mode: ZipMode) -> Metadata {
 /// at `i mod |operand|` directly and holds nothing; one operand that
 /// is not addressable streams, and is restarted when it runs out
 /// before the zip does; every other operand that is not addressable
-/// is buffered in full.
+/// is buffered in full. An operand found empty empties the zip, so an
+/// executor checks the indexed operands' lengths and drains the
+/// buffered operands in ascending bound before it holds any tuple,
+/// and stops at the first empty one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CycleOperand {
@@ -314,7 +339,8 @@ pub enum CycleOperand {
     /// Pulled once per tuple, and restarted when it runs out before
     /// the zip does.
     Streamed,
-    /// Held in full and replayed.
+    /// Held in full and replayed. A bound of zero marks an operand
+    /// known empty: the executor drains it first and holds nothing.
     Buffered {
         /// Tuples the buffer holds at most; `None` when the operand's
         /// count is unknown before it is evaluated.
@@ -323,22 +349,24 @@ pub enum CycleOperand {
 }
 
 /// The plan a `zip(Cycle)` over operands with these bundles executes:
-/// an addressable discrete operand is [`CycleOperand::Indexed`]; of the
+/// an operand known empty is buffered with bound zero; any other
+/// addressable discrete operand is [`CycleOperand::Indexed`]; of the
 /// rest, the first whose count is unknown streams, or when every count
 /// is known, the first with the largest bound; every other operand is
 /// buffered.
 pub fn cycle_operands(children: &[Metadata]) -> Vec<CycleOperand> {
     let indexed = |m: &Metadata| {
-        m.index_addressable
-            .as_ref()
-            .is_some_and(|idx| !idx.has_continuous_axis())
+        !known_empty(m)
+            && m.index_addressable
+                .as_ref()
+                .is_some_and(|idx| !idx.has_continuous_axis())
     };
     let bound = |m: &Metadata| match &m.cardinality {
         CardinalityClass::Bounded(n) | CardinalityClass::BoundedAtMost(n) => Some(*n),
         _ => None,
     };
     let rest: Vec<usize> = (0..children.len())
-        .filter(|&i| !indexed(&children[i]))
+        .filter(|&i| !indexed(&children[i]) && !known_empty(&children[i]))
         .collect();
     let streamed = rest
         .iter()
@@ -365,10 +393,19 @@ pub fn cycle_operands(children: &[Metadata]) -> Vec<CycleOperand> {
         .collect()
 }
 
+/// `true` when `plan` holds an operand known empty, so the zip yields
+/// no tuple and buffers nothing.
+pub fn cycle_plan_is_empty(plan: &[CycleOperand]) -> bool {
+    plan.contains(&CycleOperand::Buffered { bound: Some(0) })
+}
+
 /// A `zip(Cycle)`'s working set under `plan`: the buffered operands'
 /// bounds summed, unbounded when one of them has no bound, and
-/// streaming when nothing is buffered.
+/// streaming when nothing is buffered or an operand is known empty.
 pub fn cycle_materialization(plan: &[CycleOperand]) -> Materialization {
+    if cycle_plan_is_empty(plan) {
+        return Materialization::Streaming;
+    }
     let mut total: u64 = 0;
     let mut buffered = false;
     for operand in plan {
@@ -662,14 +699,24 @@ fn combine_zip_cardinality(children: &[Metadata], mode: ZipMode) -> CardinalityC
                 CardinalityClass::Bounded(*bounded.iter().min().unwrap())
             }
         }
+        // An operand known empty empties the zip. Otherwise an operand
+        // whose count is an upper bound may be empty at open, so the
+        // zip's count is an upper bound too.
         ZipMode::Cycle => {
-            let bounded: Vec<u64> = counts.iter().filter_map(|c| *c).collect();
-            if counts.iter().any(Option::is_none) {
-                CardinalityClass::Unbounded
-            } else if let Some(max) = bounded.iter().max() {
-                CardinalityClass::Bounded(*max)
-            } else {
+            if children.iter().any(known_empty) {
                 CardinalityClass::Bounded(0)
+            } else if counts.iter().any(Option::is_none) {
+                CardinalityClass::Unbounded
+            } else {
+                let max = counts.iter().filter_map(|c| *c).max().unwrap_or(0);
+                if children
+                    .iter()
+                    .any(|m| matches!(m.cardinality, CardinalityClass::BoundedAtMost(_)))
+                {
+                    CardinalityClass::BoundedAtMost(max)
+                } else {
+                    CardinalityClass::Bounded(max)
+                }
             }
         }
     }
@@ -824,7 +871,7 @@ fn index_fn_cardinality(idx: &IndexFn) -> u64 {
             .copied()
             .fold(1u64, |a, b| a.saturating_mul(b)),
         IndexFn::Lockstep { length } => *length,
-        IndexFn::Modular { axis_sizes } => axis_sizes.iter().copied().max().unwrap_or(0),
+        IndexFn::Modular { axis_sizes } => cycle_length(axis_sizes),
         IndexFn::Concatenation { segment_sizes } => segment_sizes
             .iter()
             .copied()
@@ -1108,6 +1155,72 @@ mod tests {
                 working_set_size: 2
             }
         );
+    }
+
+    /// An operand known empty empties the zip: no tuple, no index, and
+    /// nothing held, in any position and beside operands of unknown
+    /// count.
+    #[test]
+    fn zip_cycle_with_an_operand_known_empty_is_empty() {
+        let operands = || {
+            vec![
+                unknown_count("tick"),
+                Comprehension::filter(clause("a", &[1, 2, 3]), "{a} > 1"),
+                clause("color", &[1, 2, 3]),
+            ]
+        };
+        let empties = [
+            clause("e", &[]),
+            Comprehension::filter(clause("e", &[]), "{e} > 1"),
+        ];
+        for empty in &empties {
+            for at in 0..=3 {
+                let mut children = operands();
+                children.insert(at, empty.clone());
+                let plan = cycle_operands(
+                    &children
+                        .iter()
+                        .map(Comprehension::metadata)
+                        .collect::<Vec<_>>(),
+                );
+                assert_eq!(plan[at], CycleOperand::Buffered { bound: Some(0) });
+                assert!(cycle_plan_is_empty(&plan));
+                let m = Comprehension::zip(children, ZipMode::Cycle).metadata();
+                assert_eq!(m.cardinality, CardinalityClass::Bounded(0));
+                assert_eq!(m.materialization, Materialization::Streaming);
+            }
+        }
+        let addressable = Comprehension::zip(
+            vec![clause("k", &[1, 2, 3]), clause("e", &[])],
+            ZipMode::Cycle,
+        );
+        let m = addressable.metadata();
+        assert_eq!(
+            m.index_addressable,
+            Some(IndexFn::Modular {
+                axis_sizes: vec![3, 0]
+            })
+        );
+        assert_eq!(
+            index_fn_cardinality(m.index_addressable.as_ref().unwrap()),
+            0
+        );
+        assert_eq!(cycle_length(&[3, 0]), 0);
+        assert_eq!(cycle_length(&[3, 5]), 5);
+    }
+
+    /// An operand that may be empty at open makes the zip's count an
+    /// upper bound.
+    #[test]
+    fn zip_cycle_over_an_operand_at_most_counts_at_most() {
+        let c = Comprehension::zip(
+            vec![
+                clause("k", &[1, 2, 3, 4, 5]),
+                Comprehension::filter(clause("a", &[1, 2]), "{a} > 1"),
+            ],
+            ZipMode::Cycle,
+        );
+        assert_eq!(c.metadata().cardinality, CardinalityClass::BoundedAtMost(5));
     }
 
     /// Two operands of unknown count: one streams, the other has no

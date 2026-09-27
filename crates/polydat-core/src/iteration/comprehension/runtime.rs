@@ -70,7 +70,7 @@ use crate::iteration::comprehension::ast::Comprehension;
 use crate::iteration::comprehension::cardinality::{Interval, ProductMeasure};
 use crate::iteration::comprehension::eval_source::{EvalContext, SourceEval};
 use crate::iteration::comprehension::measure::AxisMeasure;
-use crate::iteration::comprehension::metadata::IndexFn;
+use crate::iteration::comprehension::metadata::{IndexFn, cycle_length};
 use crate::iteration::comprehension::source::Source;
 use crate::iteration::comprehension::strategies::Selection;
 use crate::iteration::comprehension::strategy::StrategyName;
@@ -314,8 +314,9 @@ enum Indexed {
     },
     /// A strict or truncating zip: every child's tuple at the position.
     Lockstep { children: Vec<Indexed>, len: u64 },
-    /// A cycle zip: every non-empty child's tuple at the position
-    /// modulo its length.
+    /// A cycle zip: every child's tuple at the position modulo its
+    /// length. An empty child empties the zip, so no position reaches
+    /// one.
     Cycle { children: Vec<Indexed>, len: u64 },
     /// A union: the child whose segment holds the position.
     Concat { children: Vec<Indexed>, len: u64 },
@@ -392,10 +393,7 @@ impl Indexed {
             }
             Indexed::Cycle { children, .. } => {
                 for child in children {
-                    let len = child.len();
-                    if len > 0 {
-                        child.append_at(i % len, out);
-                    }
+                    child.append_at(i % child.len(), out);
                 }
             }
             Indexed::Concat { children, .. } => {
@@ -965,15 +963,15 @@ impl EvalState<'_> {
                 first
             }
             ZipMode::Truncate => lengths.iter().copied().min().unwrap_or(0),
-            ZipMode::Cycle => lengths.iter().copied().max().unwrap_or(0),
+            ZipMode::Cycle => {
+                let counts: Vec<u64> = lengths.iter().map(|&n| n as u64).collect();
+                cycle_length(&counts) as usize
+            }
         };
         let mut tuples = Vec::with_capacity(iter_count);
         for i in 0..iter_count {
             let mut bindings: RuntimeTuple = Vec::new();
             for (child, &len) in per_child.iter().zip(lengths.iter()) {
-                if len == 0 {
-                    continue;
-                }
                 let idx = match mode {
                     ZipMode::Cycle => i % len,
                     _ => i,
@@ -1486,7 +1484,7 @@ impl EvalState<'_> {
                 first
             }
             ZipMode::Truncate => lengths.iter().copied().min().unwrap_or(0),
-            ZipMode::Cycle => lengths.iter().copied().max().unwrap_or(0),
+            ZipMode::Cycle => cycle_length(&lengths),
         };
         Ok(match mode {
             ZipMode::Strict | ZipMode::Truncate => (

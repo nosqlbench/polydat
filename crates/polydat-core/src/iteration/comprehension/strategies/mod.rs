@@ -27,7 +27,7 @@
 //! Strategies are selected by [`StrategyName`]; [`for_name`]
 //! dispatches a strategy name to its boxed [`Strategy`] impl.
 
-use super::metadata::IndexFn;
+use super::metadata::{IndexFn, cycle_length};
 use super::strategy::StrategyName;
 
 pub mod antidiagonal;
@@ -331,8 +331,7 @@ pub fn multi_index_to_flat(idx: &IndexFn, mi: &MultiIndex) -> Option<usize> {
             Some(mi[0] as usize)
         }
         IndexFn::Modular { axis_sizes } => {
-            let max = axis_sizes.iter().copied().max().unwrap_or(0);
-            if mi.len() != 1 || mi[0] >= max {
+            if mi.len() != 1 || mi[0] >= cycle_length(axis_sizes) {
                 return None;
             }
             Some(mi[0] as usize)
@@ -367,7 +366,7 @@ pub(crate) fn index_fn_size(idx: &IndexFn) -> u64 {
             .copied()
             .fold(1u64, |a, b| a.saturating_mul(b)),
         IndexFn::Lockstep { length } => *length,
-        IndexFn::Modular { axis_sizes } => axis_sizes.iter().copied().max().unwrap_or(0),
+        IndexFn::Modular { axis_sizes } => cycle_length(axis_sizes),
         IndexFn::Concatenation { segment_sizes } => segment_sizes
             .iter()
             .copied()
