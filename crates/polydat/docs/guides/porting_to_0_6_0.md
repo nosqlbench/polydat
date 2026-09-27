@@ -53,7 +53,7 @@ The release makes three things true that a host builds on:
 | `Strategy` requires `select`, which returns a `Selection` of positions; `apply` and `apply_seeded` are provided | a host's own `Strategy` implementation | implement `select` from the input's `IndexFn`, count, truncation, and seed ([comprehension_forms.md](../design/comprehension_forms.md) §3.6) |
 | `KernelProgram` requires `create_uninitialized`; `create_kernel` is provided and initializes | a host's own `KernelProgram` implementation | implement `create_uninitialized`, returning the kernel without calling `init` |
 | `Op::OrderMaterialize` gains `input` and `Op::Zip` gains `operands` | a pattern or literal naming every field of either | end the pattern with `..`; `OrderMaterialize` now holds its input and pops nothing from the stack |
-| New variants: `KernelError::ConstInit`, `AssemblyError::ConstInit`, `AssemblyError::NativeCone`, `WriteError::ConstSlot`, `WriteError::FromParent`, `ContractViolation::Bind`, `RuntimeError::ZipLengthMismatch`, `ValidationError::PredicateContextRequired`, `InputKind::Const` | an exhaustive `match` on any of these enums (E0004) | add the arm or a wildcard |
+| New variants: `KernelError::ConstInit`, `AssemblyError::ConstInit`, `AssemblyError::NativeCone`, `WriteError::ConstSlot`, `WriteError::FromParent`, `ContractViolation::Bind`, `RuntimeError::ZipLengthMismatch`, `ValidationError::PredicateContextRequired`, `InputKind::Const`, `polydat_grammar::LiteralValue::UInt` | an exhaustive `match` on any of these enums (E0004) | add the arm or a wildcard |
 | The node types `SessionStartMillis` and `ElapsedMillis` are removed | code that named them | a const capture; see the next table |
 | `polydat_grammar::PragmaSet` loses its `parent` field, `attach_to`, and `PragmaConflict` | code that chained pragma sets by hand | `PragmaSet::nested` builds a nested scope's set from its enclosing one ([polydat_grammar.md](../design/polydat_grammar.md) §14.1) |
 | `NodeBuildFn` takes a `&BuildContext` first: `fn(&BuildContext, &str, &[WireRef], &[PortType], &[ConstArg])`, and `build_node` takes it first too | a host factory function or a direct `build_node` call | add the parameter; read the enclosing binding from `ctx.binding()` (or `ctx.bindings()`, outermost first) and host resources from `ctx.resources()` ([library_catalog.md](../design/library_catalog.md), "Host-registered nodes") |
@@ -125,6 +125,7 @@ returns it again on every later `advance`.
 | A predicate compiled without a scope may name only what its tuples bind | a coordinate stream whose `where` names an enclosing wire, now `ValidationError::PredicateContextRequired` (a name nothing provides is V3, below) | traverse it with `for`, which captures those names when it opens, or build the stream with `from_ast_in` naming the scope's names |
 | `order reverse_lex` over a filter is refused on streams, as it was on traversals | a stream of such an order (V4) | order before filtering, or use `lex` ([comprehension_forms.md](../design/comprehension_forms.md) §5, V4) |
 | A non-Lex order over a truncated `lex` of a filter or a dependent cartesian is refused at compile | such an order, which was accepted before; that prefix streams and holds no positions to select from | apply the non-Lex order first, or truncate after it ([comprehension_forms.md](../design/comprehension_forms.md) §5, V4) |
+| A named generator refuses what it used to clamp or accept, and a call with constant arguments is checked at compile | `fib(n)` past 93, `pow2(n)` past 64, and `binomial(n)` past 67 (which saturated or were cut short); `geometric` with a factor that is not positive and finite; `geometric_until` with a factor at most 1 (which yielded nothing); a constant-argument call that used to fail only when its stream opened | pass an argument within the limit the error names (`fib(94): term 94 is past u64::MAX; fib.n is at most 93`); a call whose arguments come from inputs or externs is still checked when it opens ([comprehension_forms.md](../design/comprehension_forms.md) §3.1.3) |
 | A name that nothing binds is refused at compile (V3) | a clause source or predicate naming something that neither the comprehension nor, for a traversal, the program provides; a bare word in a predicate, which is a name and never resolves | bind or declare the name, or quote the text; the error `ValidationError::V3UnresolvedNames { reads }` names each unresolved name and where it is read ([comprehension_forms.md](../design/comprehension_forms.md) §5, V3) |
 | V6's bound check reads every zip operand, including one inside a wrapper | a zip whose unbounded operand was hidden by a rewrite and accepted | bound the operand, or use a cycle zip ([comprehension_forms.md](../design/comprehension_forms.md) §5, V6) |
 | Under `pragma strict_values`, a constant that violates the constraint of the port it feeds fails the build | a program such as `mod_wire(cycle, 0)`, which compiled before because a constant source was skipped unchecked | pass a value the constraint accepts; the error names the port, the constraint, and the constant ([graph_compiler.md](../design/graph_compiler.md) §2.3) |
@@ -336,6 +337,12 @@ a rule the specifications now state and every engine follows.
   shuffled tuples. The optimizer dropped the inner order in both cases
   before ([comprehension_forms.md](../design/comprehension_forms.md)
   §7.4, O1).
+- **Generator values above `i64::MAX` reach every surface.** A stream
+  over `pow2(64)`, `fib(93)`, or `binomial(67)` reported its count and
+  yielded nothing, because such a value could not be written as a
+  signed literal; values now travel as `u64` on every surface, and
+  `linear_steps` and `log_steps` end exactly on their given bounds
+  ([comprehension_forms.md](../design/comprehension_forms.md) §3.1.3).
 - **Every strategy accepts an order's output.** An order's output is
   addressable: position i is the input tuple its selection lists at i.
   So `order(order(c, halton, 50), shuffle)` shuffles the 50 halton
@@ -450,6 +457,8 @@ a rule the specifications now state and every engine follows.
   An argument error now names the argument as `generator.parameter`,
   as `fib.n` in `fib.n: expected non-negative integer, got '-1'`, and a
   wrong argument count says `arguments` for every generator.
+  `NamedGenerator` also gives `of_call`, `yields_integers`, and
+  `largest_valid_argument`.
 - **Name checking for comprehensions:** `validate::check_names` with a
   `Surface` reports every name a comprehension reads that its surface
   cannot supply (`NameRead`, `ReadSite`, `outer_reads`), and
