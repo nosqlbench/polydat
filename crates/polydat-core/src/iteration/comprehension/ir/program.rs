@@ -116,6 +116,7 @@ mod tests {
             Op::Zip {
                 n: 2,
                 mode: ZipMode::Strict,
+                operands: Vec::new(),
             },
             push_clause("c"),
             Op::Cartesian { n: 2 },

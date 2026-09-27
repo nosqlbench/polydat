@@ -10,7 +10,7 @@
 //! memory(C) ≤
 //!     O(depth(C))                                 // operator stack
 //!   + Σ (per-operator steady-state, see §6.2)     // O(1) for streaming ops
-//!   + Σ (zip(Cycle) shorter-child cardinality)    // barrier 1
+//!   + Σ (zip(Cycle) buffered-operand bounds)      // barrier 1
 //!   + Σ (ORDER_MATERIALIZE working-set size)      // barrier 2
 //! ```
 //!
@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 
 use super::op::Op;
 use super::program::Program;
+use crate::iteration::comprehension::metadata::CycleOperand;
 use crate::iteration::comprehension::strategy::ZipMode;
 
 /// Closed-form peak-memory estimate for an IR `Program`.
@@ -116,16 +117,25 @@ fn barrier_for(op_index: usize, op: &Op) -> Bound {
         Op::Zip {
             n,
             mode: ZipMode::Cycle,
+            operands,
         } => {
-            // zip(Cycle) shorter-child barrier: working set =
-            // sum of non-longest child cardinalities. Without
-            // child cardinalities at this layer, report
-            // None — the metadata propagator carries the actual
-            // computed working set per spec §10.7.2.
+            // zip(Cycle) buffers the operands its plan marks buffered;
+            // the working set is their bounds summed. A zip without a
+            // plan, or with a buffered operand of unknown count, has
+            // no bound at this layer.
+            let mut total: Option<u64> = (!operands.is_empty()).then_some(0);
+            for operand in operands {
+                if let CycleOperand::Buffered { bound } = operand {
+                    total = match (total, bound) {
+                        (Some(t), Some(b)) => Some(t.saturating_add(*b)),
+                        _ => None,
+                    };
+                }
+            }
             Bound {
                 op_index,
                 description: format!("ZIP(Cycle, {n})"),
-                working_set_size: None,
+                working_set_size: total,
             }
         }
         _ => unreachable!("non-barrier op classified as barrier"),
@@ -192,21 +202,43 @@ mod tests {
     }
 
     #[test]
-    fn zip_cycle_reports_barrier_with_unknown_size_at_ir_layer() {
+    fn zip_cycle_without_a_plan_reports_an_unknown_size() {
         let p = Program::new(vec![
             push_clause("a"),
             push_clause("b"),
             Op::Zip {
                 n: 2,
                 mode: ZipMode::Cycle,
+                operands: Vec::new(),
             },
             Op::Dispense,
         ]);
         let b = check_bounds(&p);
         assert_eq!(b.barriers.len(), 1);
-        // IR layer doesn't know child cardinalities.
         assert!(b.barriers[0].working_set_size.is_none());
         assert!(b.total_barrier_working_set().is_none());
+    }
+
+    #[test]
+    fn zip_cycle_sums_its_buffered_operands() {
+        let p = Program::new(vec![
+            push_clause("a"),
+            push_clause("b"),
+            push_clause("c"),
+            Op::Zip {
+                n: 3,
+                mode: ZipMode::Cycle,
+                operands: vec![
+                    CycleOperand::Streamed,
+                    CycleOperand::Buffered { bound: Some(4) },
+                    CycleOperand::Indexed,
+                ],
+            },
+            Op::Dispense,
+        ]);
+        let b = check_bounds(&p);
+        assert_eq!(b.barriers.len(), 1);
+        assert_eq!(b.barriers[0].working_set_size, Some(4));
     }
 
     #[test]

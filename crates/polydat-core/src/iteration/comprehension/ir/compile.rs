@@ -17,7 +17,8 @@
 //! path uses `indexed: false`.
 
 use crate::iteration::comprehension::ast::Comprehension;
-use crate::iteration::comprehension::strategy::StrategyName;
+use crate::iteration::comprehension::metadata::cycle_operands;
+use crate::iteration::comprehension::strategy::{StrategyName, ZipMode};
 
 use super::op::{Op, OrderStreamingKind};
 use super::program::Program;
@@ -55,9 +56,19 @@ fn emit(ast: &Comprehension, ops: &mut Vec<Op>) {
             for child in children {
                 emit(child, ops);
             }
+            let operands = match mode {
+                ZipMode::Cycle => cycle_operands(
+                    &children
+                        .iter()
+                        .map(Comprehension::metadata)
+                        .collect::<Vec<_>>(),
+                ),
+                ZipMode::Strict | ZipMode::Truncate => Vec::new(),
+            };
             ops.push(Op::Zip {
                 n: children.len(),
                 mode: *mode,
+                operands,
             });
         }
         Comprehension::Union { children } => {
@@ -117,7 +128,6 @@ fn order_op(
 mod tests {
     use super::*;
     use crate::iteration::comprehension::source::{LiteralValue, Source};
-    use crate::iteration::comprehension::strategy::ZipMode;
 
     fn clause(name: &str, vs: &[i64]) -> Comprehension {
         Comprehension::clause(
@@ -216,9 +226,38 @@ mod tests {
             prog.ops()[2],
             Op::Zip {
                 n: 2,
-                mode: ZipMode::Strict
+                mode: ZipMode::Strict,
+                ..
             }
         ));
+    }
+
+    /// A cycle zip carries its operands' plan: addressable operands
+    /// are indexed, and of the rest the largest streams.
+    #[test]
+    fn compile_zip_cycle_carries_the_operand_plan() {
+        use crate::iteration::comprehension::metadata::CycleOperand;
+        let ast = Comprehension::zip(
+            vec![
+                clause("x", &[1, 2, 3]),
+                Comprehension::filter(clause("y", &[1, 2]), "{y} > 0"),
+                Comprehension::filter(clause("z", &[1, 2, 3, 4]), "{z} > 0"),
+            ],
+            ZipMode::Cycle,
+        );
+        let prog = compile(&ast);
+        let plan = prog.ops().iter().find_map(|op| match op {
+            Op::Zip { operands, .. } => Some(operands.clone()),
+            _ => None,
+        });
+        assert_eq!(
+            plan,
+            Some(vec![
+                CycleOperand::Indexed,
+                CycleOperand::Buffered { bound: Some(2) },
+                CycleOperand::Streamed,
+            ])
+        );
     }
 
     #[test]

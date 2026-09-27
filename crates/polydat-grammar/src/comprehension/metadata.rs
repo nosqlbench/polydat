@@ -286,27 +286,7 @@ fn zip_metadata(children: &[Comprehension], mode: ZipMode) -> Metadata {
 
     let materialization = match mode {
         ZipMode::Strict | ZipMode::Truncate => Materialization::Streaming,
-        ZipMode::Cycle => {
-            // Shorter children's cardinalities sum into the
-            // barrier working set (each non-longest child must
-            // replay).
-            let cards: Vec<u64> = child_meta
-                .iter()
-                .filter_map(|m| match &m.cardinality {
-                    CardinalityClass::Bounded(n) | CardinalityClass::BoundedAtMost(n) => Some(*n),
-                    _ => None,
-                })
-                .collect();
-            if cards.is_empty() {
-                Materialization::Streaming
-            } else {
-                let max = cards.iter().copied().max().unwrap_or(0);
-                let sum_non_longest: u64 = cards.iter().filter(|n| **n != max).sum();
-                Materialization::BoundedBarrier {
-                    working_set_size: sum_non_longest,
-                }
-            }
-        }
+        ZipMode::Cycle => cycle_materialization(&cycle_operands(&child_meta)),
     };
 
     Metadata {
@@ -314,6 +294,98 @@ fn zip_metadata(children: &[Comprehension], mode: ZipMode) -> Metadata {
         index_addressable,
         natural_order: NaturalOrder::Lockstep,
         materialization,
+    }
+}
+
+/// How a `zip(Cycle)` holds one operand while it cycles (spec §6.2,
+/// §6.3).
+///
+/// Cycling re-emits an operand's earlier tuples once it is exhausted
+/// and a longer operand is not. An index-addressable operand is read
+/// at `i mod |operand|` directly and holds nothing; one operand that
+/// is not addressable streams, and is restarted when it runs out
+/// before the zip does; every other operand that is not addressable
+/// is buffered in full.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CycleOperand {
+    /// Read at `i mod |operand|` through its index function.
+    Indexed,
+    /// Pulled once per tuple, and restarted when it runs out before
+    /// the zip does.
+    Streamed,
+    /// Held in full and replayed.
+    Buffered {
+        /// Tuples the buffer holds at most; `None` when the operand's
+        /// count is unknown before it is evaluated.
+        bound: Option<u64>,
+    },
+}
+
+/// The plan a `zip(Cycle)` over operands with these bundles executes:
+/// an addressable discrete operand is [`CycleOperand::Indexed`]; of the
+/// rest, the first whose count is unknown streams, or when every count
+/// is known, the first with the largest bound; every other operand is
+/// buffered.
+pub fn cycle_operands(children: &[Metadata]) -> Vec<CycleOperand> {
+    let indexed = |m: &Metadata| {
+        m.index_addressable
+            .as_ref()
+            .is_some_and(|idx| !idx.has_continuous_axis())
+    };
+    let bound = |m: &Metadata| match &m.cardinality {
+        CardinalityClass::Bounded(n) | CardinalityClass::BoundedAtMost(n) => Some(*n),
+        _ => None,
+    };
+    let rest: Vec<usize> = (0..children.len())
+        .filter(|&i| !indexed(&children[i]))
+        .collect();
+    let streamed = rest
+        .iter()
+        .copied()
+        .find(|&i| bound(&children[i]).is_none())
+        .or_else(|| {
+            rest.iter()
+                .copied()
+                .rev()
+                .max_by_key(|&i| bound(&children[i]))
+        });
+    children
+        .iter()
+        .enumerate()
+        .map(|(i, m)| {
+            if indexed(m) {
+                CycleOperand::Indexed
+            } else if Some(i) == streamed {
+                CycleOperand::Streamed
+            } else {
+                CycleOperand::Buffered { bound: bound(m) }
+            }
+        })
+        .collect()
+}
+
+/// A `zip(Cycle)`'s working set under `plan`: the buffered operands'
+/// bounds summed, unbounded when one of them has no bound, and
+/// streaming when nothing is buffered.
+pub fn cycle_materialization(plan: &[CycleOperand]) -> Materialization {
+    let mut total: u64 = 0;
+    let mut buffered = false;
+    for operand in plan {
+        if let CycleOperand::Buffered { bound } = operand {
+            buffered = true;
+            match bound {
+                Some(n) => total = total.saturating_add(*n),
+                None => return Materialization::UnboundedBarrier,
+            }
+        }
+    }
+    if buffered {
+        Materialization::BoundedBarrier {
+            working_set_size: total,
+        }
+    } else {
+        Materialization::Streaming
     }
 }
 
@@ -388,15 +460,27 @@ fn order_metadata(
             child_meta.materialization, // counter wrapper at most
         ),
         non_lex => {
-            // R2 (Phase 6) rewrites this into an indexed_order
-            // IR opcode; AST-level metadata stops here.
-            let working_set_size =
-                strategy_working_set(non_lex, &child_meta.index_addressable, truncation);
-            (
-                None,
-                NaturalOrder::Strategy(non_lex),
-                Materialization::BoundedBarrier { working_set_size },
-            )
+            // Over an addressable input the strategy selects positions
+            // and holds only its selection (R2); over any other input
+            // the input is buffered in full first.
+            let materialization = match &child_meta.index_addressable {
+                Some(_) => Materialization::BoundedBarrier {
+                    working_set_size: strategy_working_set(
+                        non_lex,
+                        &child_meta.index_addressable,
+                        truncation,
+                    ),
+                },
+                None => match &child_meta.cardinality {
+                    CardinalityClass::Bounded(n) | CardinalityClass::BoundedAtMost(n) => {
+                        Materialization::BoundedBarrier {
+                            working_set_size: *n,
+                        }
+                    }
+                    _ => Materialization::UnboundedBarrier,
+                },
+            };
+            (None, NaturalOrder::Strategy(non_lex), materialization)
         }
     };
 
@@ -677,12 +761,9 @@ fn simplify_measures(measures: Vec<ProductMeasure>) -> ProductMeasure {
 }
 
 /// Strategy-specific working-set size for use as
-/// `BoundedBarrier.working_set_size`. Pre-R2, the naïve form
-/// uses the input cardinality; with R2 push-down, the size
-/// shrinks to the strategy's closed-form minimum. The metadata
-/// here records the **R2-realized** size (the size the
-/// optimizer will achieve), so consumers reading metadata see
-/// the post-optimization budget.
+/// `BoundedBarrier.working_set_size` over an addressable input: the
+/// selection the strategy holds, since it reads tuples only at the
+/// positions it selects (R2).
 fn strategy_working_set(
     strategy: StrategyName,
     input: &Option<IndexFn>,
@@ -700,18 +781,14 @@ fn strategy_working_set(
             let dim = lattice_dim(idx).max(1);
             n.saturating_mul(dim as u64)
         }
-        // Extrema (SRD-18d §214): `/k` selects the first k *strata*
-        // (interior count 0..k-1), not k tuples — the output is
-        // `≥ 2^dim` corners for k≥1 and grows to the full space. The
-        // materialize step buffers the whole input regardless, so the
-        // safe working-set bound is the input cardinality. (A tight
-        // first-k-strata sum would need per-axis interior sizes;
-        // deferred — over-reporting here is safe, under-reporting is
-        // not.)
-        (StrategyName::Extrema, Some(idx), Some(_k)) => index_fn_cardinality(idx),
-        // Shells / Diagonal / Antidiagonal: per-emitted O(N).
-        (StrategyName::Shells, Some(_), Some(n))
-        | (StrategyName::Diagonal, Some(_), Some(n))
+        // Extrema (SRD-18d §214) and Shells rank every multi-index of
+        // the input's index space before keeping the first strata or
+        // shells, so they hold the whole index space.
+        (StrategyName::Extrema, Some(idx), Some(_))
+        | (StrategyName::Shells, Some(idx), Some(_)) => index_fn_cardinality(idx),
+        // Diagonal / Antidiagonal walk the diagonals in order and stop
+        // at `n`.
+        (StrategyName::Diagonal, Some(_), Some(n))
         | (StrategyName::Antidiagonal, Some(_), Some(n)) => n,
         // No truncation: fall back to the input's cardinality.
         (_, Some(idx), None) => index_fn_cardinality(idx),
@@ -959,12 +1036,89 @@ mod tests {
             }
             other => panic!("expected Modular, got {other:?}"),
         }
-        // shorter child cardinality = 3 → barrier size 3
-        assert_eq!(
-            m.materialization,
-            Materialization::BoundedBarrier {
-                working_set_size: 3
+        // Both operands are addressable: cycling reads the shorter one
+        // at `i mod 3` and buffers nothing.
+        assert_eq!(m.materialization, Materialization::Streaming);
+    }
+
+    fn unknown_count(name: &str) -> Comprehension {
+        Comprehension::clause(
+            name,
+            Source::Generator {
+                expr: "values({n})".into(),
+                cardinality_hint: None,
+            },
+        )
+    }
+
+    /// With an operand of unknown count, that operand streams and every
+    /// finite operand that is not addressable is buffered in full;
+    /// addressable ones are indexed.
+    #[test]
+    fn zip_cycle_with_an_unknown_count_buffers_every_finite_unaddressable_operand() {
+        let c = Comprehension::zip(
+            vec![
+                unknown_count("tick"),
+                Comprehension::filter(clause("a", &(0..1000).collect::<Vec<_>>()), "{a} > 1"),
+                Comprehension::filter(clause("b", &[1, 2, 3]), "{b} > 0"),
+                clause("color", &[1, 2, 3]),
+            ],
+            ZipMode::Cycle,
+        );
+        let plan = cycle_operands(
+            &match &c {
+                Comprehension::Zip { children, .. } => children,
+                _ => unreachable!(),
             }
+            .iter()
+            .map(Comprehension::metadata)
+            .collect::<Vec<_>>(),
+        );
+        assert_eq!(
+            plan,
+            vec![
+                CycleOperand::Streamed,
+                CycleOperand::Buffered { bound: Some(1000) },
+                CycleOperand::Buffered { bound: Some(3) },
+                CycleOperand::Indexed,
+            ]
+        );
+        assert_eq!(
+            c.metadata().materialization,
+            Materialization::BoundedBarrier {
+                working_set_size: 1003
+            }
+        );
+    }
+
+    /// With every count known, the largest operand that is not
+    /// addressable streams and the others are buffered.
+    #[test]
+    fn zip_cycle_streams_the_largest_unaddressable_operand() {
+        let c = Comprehension::zip(
+            vec![
+                Comprehension::filter(clause("a", &[1, 2]), "{a} > 0"),
+                Comprehension::filter(clause("b", &[1, 2, 3, 4]), "{b} > 0"),
+                clause("k", &(0..100).collect::<Vec<_>>()),
+            ],
+            ZipMode::Cycle,
+        );
+        assert_eq!(
+            c.metadata().materialization,
+            Materialization::BoundedBarrier {
+                working_set_size: 2
+            }
+        );
+    }
+
+    /// Two operands of unknown count: one streams, the other has no
+    /// bound to buffer.
+    #[test]
+    fn zip_cycle_with_two_unknown_counts_is_unbounded() {
+        let c = Comprehension::zip(vec![unknown_count("x"), unknown_count("y")], ZipMode::Cycle);
+        assert_eq!(
+            c.metadata().materialization,
+            Materialization::UnboundedBarrier
         );
     }
 

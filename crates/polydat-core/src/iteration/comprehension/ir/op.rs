@@ -8,11 +8,12 @@
 //! transducer; operands flow as tuple streams via
 //! `advance() -> Option<Tuple>`, never as materialized
 //! `Vec<Tuple>`. The two materialization barriers — non-Lex
-//! `ORDER_MATERIALIZE` and `ZIP(Cycle)`'s shorter-child
-//! buffering — are called out explicitly.
+//! `ORDER_MATERIALIZE` and `ZIP(Cycle)`'s buffering of operands
+//! that are not index-addressable — are called out explicitly.
 
 use serde::{Deserialize, Serialize};
 
+use crate::iteration::comprehension::metadata::CycleOperand;
 use crate::iteration::comprehension::source::Source;
 use crate::iteration::comprehension::strategy::{StrategyName, ZipMode};
 
@@ -37,13 +38,21 @@ pub enum Op {
     },
 
     /// Replace the top-N stream operands with their lockstep
-    /// diagonal. Streaming under Strict/Truncate; `Cycle`
-    /// buffers each non-longest child.
+    /// diagonal. Streaming under Strict/Truncate; under `Cycle`
+    /// each operand is held as `operands` plans (spec §6.2):
+    /// indexed, streamed, or buffered.
     Zip {
         /// Operands combined.
         n: usize,
         /// The length policy.
         mode: ZipMode,
+        /// Under `Cycle`, how each operand is held, from the
+        /// operands' metadata ([`crate::iteration::comprehension::metadata::cycle_operands`]).
+        /// Empty under Strict and Truncate, and for a program built
+        /// without one, whose operands the interpreter plans from the
+        /// streams themselves.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        operands: Vec<CycleOperand>,
     },
 
     /// Replace the top-N stream operands with a stream that
@@ -142,16 +151,24 @@ impl Op {
     }
 
     /// `true` if this opcode is a materialization barrier per
-    /// spec §6.2 + §6.3. Used by the bounds checker.
+    /// spec §6.2 + §6.3. Used by the bounds checker. A `Cycle` zip
+    /// is one when it buffers an operand, or when it carries no plan
+    /// and may have to.
     pub fn is_barrier(&self) -> bool {
-        matches!(
-            self,
-            Op::OrderMaterialize { .. }
-                | Op::Zip {
-                    mode: ZipMode::Cycle,
-                    ..
-                }
-        )
+        match self {
+            Op::OrderMaterialize { .. } => true,
+            Op::Zip {
+                mode: ZipMode::Cycle,
+                operands,
+                ..
+            } => {
+                operands.is_empty()
+                    || operands
+                        .iter()
+                        .any(|o| matches!(o, CycleOperand::Buffered { .. }))
+            }
+            _ => false,
+        }
     }
 }
 
@@ -187,14 +204,28 @@ mod tests {
         assert!(
             Op::Zip {
                 n: 2,
-                mode: ZipMode::Cycle
+                mode: ZipMode::Cycle,
+                operands: vec![
+                    CycleOperand::Streamed,
+                    CycleOperand::Buffered { bound: Some(3) }
+                ],
             }
             .is_barrier()
         );
         assert!(
             !Op::Zip {
                 n: 2,
-                mode: ZipMode::Strict
+                mode: ZipMode::Cycle,
+                operands: vec![CycleOperand::Indexed, CycleOperand::Streamed],
+            }
+            .is_barrier(),
+            "indexing and streaming buffer nothing"
+        );
+        assert!(
+            !Op::Zip {
+                n: 2,
+                mode: ZipMode::Strict,
+                operands: Vec::new(),
             }
             .is_barrier()
         );

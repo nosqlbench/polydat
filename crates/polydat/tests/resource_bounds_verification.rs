@@ -101,7 +101,8 @@ fn order_shuffle_has_barrier_sized_by_truncation() {
 }
 
 #[test]
-fn zip_cycle_has_barrier_with_unknown_ir_layer_size() {
+fn zip_cycle_over_addressable_operands_has_no_barrier() {
+    // Cycling reads the shorter operand at `i mod 3`.
     let ast = Comprehension::zip(
         vec![
             clause("k", &[1, 2, 3, 4, 5]),
@@ -110,11 +111,24 @@ fn zip_cycle_has_barrier_with_unknown_ir_layer_size() {
         ZipMode::Cycle,
     );
     let b = bounds_for(ast);
+    assert!(b.barriers.is_empty());
+}
+
+#[test]
+fn zip_cycle_buffers_its_shorter_unaddressable_operands() {
+    // The longest operand that is not addressable streams; the other
+    // is buffered, and the addressable one is indexed.
+    let ast = Comprehension::zip(
+        vec![
+            Comprehension::filter(clause("k", &[1, 2, 3, 4, 5]), "{k} > 0"),
+            Comprehension::filter(clause("color", &[100, 200, 300]), "{color} > 0"),
+            clause("size", &[1, 2]),
+        ],
+        ZipMode::Cycle,
+    );
+    let b = bounds_for(ast);
     assert_eq!(b.barriers.len(), 1);
-    // IR layer doesn't know child cardinalities; metadata
-    // layer carries the precise size (sum of non-longest
-    // children).
-    assert!(b.barriers[0].working_set_size.is_none());
+    assert_eq!(b.barriers[0].working_set_size, Some(3));
 }
 
 #[test]

@@ -14,9 +14,19 @@
 //! Returns a [`TupleStream`] — a lazy producer the consumer
 //! pulls from. The stream graph is built at
 //! [`interpret`]-time; tuple production happens on-demand.
+//!
+//! A stream over an index-addressable subtree (clauses over literal
+//! lists and ranges, combined by cartesian, zip, union, and `Lex`
+//! order) also answers the tuple at a position without pulling. A
+//! cartesian over such children computes each tuple from its
+//! position instead of caching its tail axes, a cycle zip reads such
+//! an operand at `i mod |operand|` instead of buffering it, and a
+//! non-`Lex` order over such an input selects its positions and
+//! computes only the selected tuples (spec §6.2, §10.2 R2).
 
+use crate::iteration::comprehension::metadata::{CycleOperand, IndexFn};
 use crate::iteration::comprehension::source::{LiteralValue, Source};
-use crate::iteration::comprehension::strategies::{Tuple, TupleValue};
+use crate::iteration::comprehension::strategies::{Selection, Tuple, TupleValue};
 use crate::iteration::comprehension::strategy::{StrategyName, ZipMode};
 
 use super::op::{Op, OrderStreamingKind};
@@ -27,6 +37,29 @@ use super::program::Program;
 pub trait TupleStream {
     /// The next tuple, or `None` once the stream is exhausted.
     fn advance(&mut self) -> Option<Tuple>;
+
+    /// Restart at the first tuple: the stream dispenses the same
+    /// tuples again, keeping whatever it built the first time.
+    fn rewind(&mut self);
+
+    /// How many tuples the stream dispenses, when its tuples are
+    /// addressable by position; `None` otherwise.
+    fn indexed_len(&self) -> Option<u64> {
+        None
+    }
+
+    /// The tuple the stream dispenses at position `i`, when its tuples
+    /// are addressable, whatever the dispense position; `None` past
+    /// the end or when they are not addressable.
+    fn tuple_at(&self, i: u64) -> Option<Tuple> {
+        let _ = i;
+        None
+    }
+}
+
+/// Append `tuple`'s bindings to `out`.
+fn extend(out: &mut Tuple, tuple: Tuple) {
+    out.bindings.extend(tuple.bindings);
 }
 
 /// Boxed stream alias used throughout the interpreter's stack
@@ -48,9 +81,9 @@ pub fn interpret(program: &Program) -> BoxedStream {
                 let children = pop_n(&mut stack, *n);
                 stack.push(Box::new(CartesianStream::new(children)));
             }
-            Op::Zip { n, mode } => {
+            Op::Zip { n, mode, operands } => {
                 let children = pop_n(&mut stack, *n);
-                stack.push(Box::new(ZipStream::new(children, *mode)));
+                stack.push(Box::new(ZipStream::new(children, *mode, operands.clone())));
             }
             Op::Union { n } => {
                 let children = pop_n(&mut stack, *n);
@@ -111,31 +144,35 @@ fn pop_n(stack: &mut Vec<BoxedStream>, n: usize) -> Vec<BoxedStream> {
 /// `None` so the interpreter doesn't deadlock.
 struct ClauseStream {
     name: String,
-    state: ClauseState,
+    values: ClauseValues,
+    pos: u64,
 }
 
-enum ClauseState {
-    LiteralList {
-        values: Vec<LiteralValue>,
-        pos: usize,
-    },
+/// A clause's values, each computed from its position.
+enum ClauseValues {
+    LiteralList(Vec<LiteralValue>),
+    /// `lo, lo + step, …`, `len` of them.
     IntRange {
-        current: i64,
-        hi: i64,
+        lo: i64,
         step: i64,
+        len: u64,
     },
     Exhausted,
 }
 
 impl ClauseStream {
     fn new(name: String, source: Source) -> Self {
-        let state = match source {
-            Source::Literal { values } => ClauseState::LiteralList { values, pos: 0 },
-            Source::IntRange { lo, hi, step } => ClauseState::IntRange {
-                current: lo,
-                hi,
-                step: step.max(1),
-            },
+        let values = match source {
+            Source::Literal { values } => ClauseValues::LiteralList(values),
+            Source::IntRange { lo, hi, step } => {
+                let step = step.max(1);
+                let len = if hi <= lo {
+                    0
+                } else {
+                    ((i128::from(hi) - i128::from(lo)) as u128).div_ceil(step as u128) as u64
+                };
+                ClauseValues::IntRange { lo, step, len }
+            }
             // Generator / WorkloadParamList: a context-free one is a
             // literal by the time the IR is compiled, and a
             // context-required one is refused by `from_ast`
@@ -144,32 +181,47 @@ impl ClauseStream {
             // ContinuousInterval / Distribution: must be sampled
             // via an enclosing order; bare clause is not pulled
             // in valid programs.
-            _ => ClauseState::Exhausted,
+            _ => ClauseValues::Exhausted,
         };
-        Self { name, state }
+        Self {
+            name,
+            values,
+            pos: 0,
+        }
     }
 }
 
 impl TupleStream for ClauseStream {
     fn advance(&mut self) -> Option<Tuple> {
-        let value = match &mut self.state {
-            ClauseState::LiteralList { values, pos } => {
-                if *pos >= values.len() {
+        let t = self.tuple_at(self.pos)?;
+        self.pos += 1;
+        Some(t)
+    }
+
+    fn rewind(&mut self) {
+        self.pos = 0;
+    }
+
+    fn indexed_len(&self) -> Option<u64> {
+        Some(match &self.values {
+            ClauseValues::LiteralList(values) => values.len() as u64,
+            ClauseValues::IntRange { len, .. } => *len,
+            ClauseValues::Exhausted => 0,
+        })
+    }
+
+    fn tuple_at(&self, i: u64) -> Option<Tuple> {
+        let value = match &self.values {
+            ClauseValues::LiteralList(values) => {
+                literal_to_tuple_value(values.get(usize::try_from(i).ok()?)?)
+            }
+            ClauseValues::IntRange { lo, step, len } => {
+                if i >= *len {
                     return None;
                 }
-                let v = literal_to_tuple_value(&values[*pos]);
-                *pos += 1;
-                v
+                TupleValue::I64((i128::from(*lo) + i128::from(i) * i128::from(*step)) as i64)
             }
-            ClauseState::IntRange { current, hi, step } => {
-                if *current >= *hi {
-                    return None;
-                }
-                let v = TupleValue::I64(*current);
-                *current += *step;
-                v
-            }
-            ClauseState::Exhausted => return None,
+            ClauseValues::Exhausted => return None,
         };
         Some(Tuple::new().with(self.name.clone(), value))
     }
@@ -188,16 +240,22 @@ fn literal_to_tuple_value(lv: &LiteralValue) -> TupleValue {
 // ---- CartesianStream ----
 
 /// Enumerates the cross product of N child streams in Lex
-/// order (rightmost varies fastest). Builds the per-axis
-/// value vectors lazily on demand: the first advance pulls
-/// child 0 once and child 1..N to exhaustion, caching them;
-/// subsequent advances iterate over the cached cross product.
+/// order (rightmost varies fastest).
 ///
-/// This caches all but the first axis. A fully-streaming
-/// cartesian (no caching) would require child re-iteration,
-/// which the IR layer doesn't currently expose.
+/// When every child is addressable, the tuple at position `i` is
+/// its children's tuples at the mixed-radix digits of `i`, and the
+/// stream holds nothing but its position. Otherwise the first advance
+/// pulls child 0 once and children 1..N to exhaustion, caching them,
+/// and later advances iterate over the cached cross product.
 struct CartesianStream {
     children: Vec<BoxedStream>,
+    /// Every child's tuple count, when every child is addressable and
+    /// the product fits.
+    lens: Option<Vec<u64>>,
+    /// The product of `lens`.
+    total: u64,
+    /// The dispense position, when addressable.
+    pos: u64,
     /// Cached values for axes 1..N (axis 0 streams).
     cached: Vec<Vec<Tuple>>,
     /// Current cursor for axis 0 (lazy pull).
@@ -213,8 +271,19 @@ struct CartesianStream {
 impl CartesianStream {
     fn new(children: Vec<BoxedStream>) -> Self {
         let n = children.len();
+        let lens: Option<Vec<u64>> = if children.is_empty() {
+            None
+        } else {
+            children.iter().map(|c| c.indexed_len()).collect()
+        };
+        let total = lens
+            .as_ref()
+            .and_then(|l| l.iter().try_fold(1u64, |acc, n| acc.checked_mul(*n)));
         Self {
             children,
+            lens: total.and(lens),
+            total: total.unwrap_or(0),
+            pos: 0,
             cached: Vec::with_capacity(n.saturating_sub(1)),
             current_a0: None,
             cursors: vec![0; n.saturating_sub(1)],
@@ -246,7 +315,46 @@ impl CartesianStream {
 }
 
 impl TupleStream for CartesianStream {
+    fn indexed_len(&self) -> Option<u64> {
+        self.lens.as_ref().map(|_| self.total)
+    }
+
+    fn tuple_at(&self, i: u64) -> Option<Tuple> {
+        let lens = self.lens.as_ref()?;
+        if i >= self.total {
+            return None;
+        }
+        // Mixed-radix digits of `i`, the last axis least significant.
+        let mut digits = vec![0u64; lens.len()];
+        let mut rest = i;
+        for (d, len) in digits.iter_mut().zip(lens).rev() {
+            *d = rest % len;
+            rest /= len;
+        }
+        let mut out = Tuple::new();
+        for (child, d) in self.children.iter().zip(digits) {
+            extend(&mut out, child.tuple_at(d)?);
+        }
+        Some(out)
+    }
+
+    fn rewind(&mut self) {
+        self.pos = 0;
+        if self.lens.is_some() || !self.initialized || self.children.is_empty() {
+            return;
+        }
+        self.children[0].rewind();
+        self.cursors.iter_mut().for_each(|c| *c = 0);
+        self.current_a0 = self.children[0].advance();
+        self.done = self.current_a0.is_none() || self.cached.iter().any(|v| v.is_empty());
+    }
+
     fn advance(&mut self) -> Option<Tuple> {
+        if self.lens.is_some() {
+            let t = self.tuple_at(self.pos)?;
+            self.pos += 1;
+            return Some(t);
+        }
         if !self.initialized {
             self.initialize();
             self.initialized = true;
@@ -292,50 +400,152 @@ impl TupleStream for CartesianStream {
 
 // ---- ZipStream ----
 
+/// Lockstep over N child streams. Strict and Truncate pull one tuple
+/// from each child and stop when any child runs out. Cycle runs to its
+/// longest operand and holds each operand as its plan says
+/// ([`CycleOperand`]): an indexed operand is read at `i mod |operand|`,
+/// a buffered one is drained once and replayed, and the streamed one
+/// is pulled once per tuple and rewound when it runs out first. An
+/// empty operand empties the zip.
 struct ZipStream {
     children: Vec<BoxedStream>,
     mode: ZipMode,
-    /// For Cycle: cached values of shorter children.
-    cycle_cache: Option<Vec<Vec<Tuple>>>,
-    cycle_cursors: Vec<usize>,
-    cycle_longest_idx: Option<usize>,
+    /// Under Cycle, the plan the op carries; empty for a program built
+    /// without one.
+    plan: Vec<CycleOperand>,
+    /// Under Cycle, how each operand is held, once initialized.
+    holds: Vec<Hold>,
+    /// Under Cycle, the streamed operand's position among the
+    /// children.
+    streamed: Option<usize>,
+    /// The streamed operand's length, known once it first runs out.
+    streamed_len: Option<u64>,
+    /// The longest indexed or buffered operand's length.
+    known_len: u64,
+    /// Under Cycle, the position of the next tuple.
+    step: u64,
     initialized: bool,
     done: bool,
 }
 
+/// How a cycle zip holds one operand.
+enum Hold {
+    /// Read at `i mod len` through the child's `tuple_at`.
+    Indexed(u64),
+    /// Drained once and replayed.
+    Buffered(Vec<Tuple>),
+    /// Pulled once per tuple.
+    Streamed,
+}
+
 impl ZipStream {
-    fn new(children: Vec<BoxedStream>, mode: ZipMode) -> Self {
+    fn new(children: Vec<BoxedStream>, mode: ZipMode, plan: Vec<CycleOperand>) -> Self {
         Self {
             children,
             mode,
-            cycle_cache: None,
-            cycle_cursors: Vec::new(),
-            cycle_longest_idx: None,
+            plan,
+            holds: Vec::new(),
+            streamed: None,
+            streamed_len: None,
+            known_len: 0,
+            step: 0,
             initialized: false,
             done: false,
         }
     }
 
+    /// Hold each operand as the plan says. An operand the plan indexes
+    /// but whose stream is not addressable is buffered; without a
+    /// plan, addressable operands are indexed and the first other
+    /// operand streams.
     fn initialize_cycle(&mut self) {
-        // Pull every child to exhaustion (Cycle's barrier).
-        // Identify the longest child; cache the others.
-        let mut all: Vec<Vec<Tuple>> = Vec::with_capacity(self.children.len());
-        for child in &mut self.children {
-            let mut v = Vec::new();
-            while let Some(t) = child.advance() {
-                v.push(t);
-            }
-            all.push(v);
+        let planned = self.plan.len() == self.children.len();
+        let mut holds = Vec::with_capacity(self.children.len());
+        for (i, child) in self.children.iter_mut().enumerate() {
+            let want = if planned {
+                self.plan[i].clone()
+            } else if child.indexed_len().is_some() {
+                CycleOperand::Indexed
+            } else if self.streamed.is_none() {
+                CycleOperand::Streamed
+            } else {
+                CycleOperand::Buffered { bound: None }
+            };
+            let hold = match (want, child.indexed_len()) {
+                (CycleOperand::Indexed, Some(len)) => Hold::Indexed(len),
+                (CycleOperand::Streamed, _) if self.streamed.is_none() => {
+                    self.streamed = Some(i);
+                    Hold::Streamed
+                }
+                _ => {
+                    let mut buf = Vec::new();
+                    while let Some(t) = child.advance() {
+                        buf.push(t);
+                    }
+                    Hold::Buffered(buf)
+                }
+            };
+            holds.push(hold);
         }
-        let longest_idx = all
-            .iter()
-            .enumerate()
-            .max_by_key(|(_, v)| v.len())
-            .map(|(i, _)| i)
-            .unwrap_or(0);
-        self.cycle_longest_idx = Some(longest_idx);
-        self.cycle_cursors = vec![0; all.len()];
-        self.cycle_cache = Some(all);
+        for hold in &holds {
+            let len = match hold {
+                Hold::Indexed(len) => *len,
+                Hold::Buffered(buf) => buf.len() as u64,
+                Hold::Streamed => continue,
+            };
+            if len == 0 {
+                self.done = true;
+            }
+            self.known_len = self.known_len.max(len);
+        }
+        self.holds = holds;
+    }
+
+    fn advance_cycle(&mut self) -> Option<Tuple> {
+        let i = self.step;
+        if let Some(len) = self.streamed_len
+            && i >= len.max(self.known_len)
+        {
+            self.done = true;
+            return None;
+        }
+        let mut pulled = None;
+        match self.streamed {
+            Some(s) => {
+                pulled = self.children[s].advance();
+                if pulled.is_none() {
+                    // The first run-out is the streamed operand's length.
+                    let len = *self.streamed_len.get_or_insert(i);
+                    if len == 0 || i >= len.max(self.known_len) {
+                        self.done = true;
+                        return None;
+                    }
+                    self.children[s].rewind();
+                    pulled = self.children[s].advance();
+                    if pulled.is_none() {
+                        self.done = true;
+                        return None;
+                    }
+                }
+            }
+            None => {
+                if i >= self.known_len {
+                    self.done = true;
+                    return None;
+                }
+            }
+        }
+        let mut out = Tuple::new();
+        for (child, hold) in self.children.iter().zip(&self.holds) {
+            let t = match hold {
+                Hold::Indexed(len) => child.tuple_at(i % len)?,
+                Hold::Buffered(buf) => buf[(i % buf.len() as u64) as usize].clone(),
+                Hold::Streamed => pulled.take()?,
+            };
+            extend(&mut out, t);
+        }
+        self.step += 1;
+        Some(out)
     }
 }
 
@@ -351,11 +561,7 @@ impl TupleStream for ZipStream {
                 let mut out = Tuple::new();
                 for child in &mut self.children {
                     match child.advance() {
-                        Some(t) => {
-                            for (k, v) in t.bindings {
-                                out.bindings.push((k, v));
-                            }
-                        }
+                        Some(t) => extend(&mut out, t),
                         None => {
                             self.done = true;
                             return None;
@@ -368,36 +574,67 @@ impl TupleStream for ZipStream {
                 if !self.initialized {
                     self.initialize_cycle();
                     self.initialized = true;
-                }
-                let cache = self.cycle_cache.as_ref().unwrap();
-                let longest = self.cycle_longest_idx.unwrap();
-                if cache[longest].is_empty() {
-                    self.done = true;
-                    return None;
-                }
-                if self.cycle_cursors[longest] >= cache[longest].len() {
-                    self.done = true;
-                    return None;
-                }
-                let mut out = Tuple::new();
-                for (i, v) in cache.iter().enumerate() {
-                    if v.is_empty() {
-                        // Empty child → empty zip.
-                        self.done = true;
+                    if self.done {
                         return None;
                     }
-                    let idx = self.cycle_cursors[i] % v.len();
-                    for (k, val) in &v[idx].bindings {
-                        out.bindings.push((k.clone(), val.clone()));
-                    }
                 }
-                // Advance cursors: longest by 1, others wrap.
-                for c in self.cycle_cursors.iter_mut() {
-                    *c += 1;
-                }
-                Some(out)
+                self.advance_cycle()
             }
         }
+    }
+
+    fn rewind(&mut self) {
+        match self.mode {
+            ZipMode::Strict | ZipMode::Truncate => {
+                self.children.iter_mut().for_each(|c| c.rewind());
+                self.done = false;
+            }
+            ZipMode::Cycle => {
+                if !self.initialized {
+                    return;
+                }
+                self.step = 0;
+                if let Some(s) = self.streamed {
+                    self.children[s].rewind();
+                }
+                self.done = self.holds.iter().any(|h| match h {
+                    Hold::Indexed(len) => *len == 0,
+                    Hold::Buffered(buf) => buf.is_empty(),
+                    Hold::Streamed => false,
+                }) || self.streamed_len == Some(0);
+            }
+        }
+    }
+
+    fn indexed_len(&self) -> Option<u64> {
+        if self.children.is_empty() {
+            return None;
+        }
+        let lens: Vec<u64> = self
+            .children
+            .iter()
+            .map(|c| c.indexed_len())
+            .collect::<Option<_>>()?;
+        Some(match self.mode {
+            ZipMode::Strict | ZipMode::Truncate => lens.iter().copied().min().unwrap_or(0),
+            ZipMode::Cycle if lens.contains(&0) => 0,
+            ZipMode::Cycle => lens.iter().copied().max().unwrap_or(0),
+        })
+    }
+
+    fn tuple_at(&self, i: u64) -> Option<Tuple> {
+        if i >= self.indexed_len()? {
+            return None;
+        }
+        let mut out = Tuple::new();
+        for child in &self.children {
+            let at = match self.mode {
+                ZipMode::Strict | ZipMode::Truncate => i,
+                ZipMode::Cycle => i % child.indexed_len()?,
+            };
+            extend(&mut out, child.tuple_at(at)?);
+        }
+        Some(out)
     }
 }
 
@@ -431,6 +668,29 @@ impl TupleStream for UnionStream {
             self.active_idx += 1;
         }
     }
+
+    fn rewind(&mut self) {
+        self.children.iter_mut().for_each(|c| c.rewind());
+        self.active_idx = 0;
+    }
+
+    fn indexed_len(&self) -> Option<u64> {
+        self.children
+            .iter()
+            .try_fold(0u64, |acc, c| acc.checked_add(c.indexed_len()?))
+    }
+
+    fn tuple_at(&self, i: u64) -> Option<Tuple> {
+        let mut offset = i;
+        for child in &self.children {
+            let len = child.indexed_len()?;
+            if offset < len {
+                return child.tuple_at(offset);
+            }
+            offset -= len;
+        }
+        None
+    }
 }
 
 // ---- FilterStream ----
@@ -454,6 +714,10 @@ impl TupleStream for FilterStream {
                 return Some(candidate);
             }
         }
+    }
+
+    fn rewind(&mut self) {
+        self.inner.rewind();
     }
 }
 
@@ -488,26 +752,48 @@ impl TupleStream for OrderStreamingStream {
         self.emitted += 1;
         Some(t)
     }
+
+    fn rewind(&mut self) {
+        self.inner.rewind();
+        self.emitted = 0;
+    }
+
+    fn indexed_len(&self) -> Option<u64> {
+        let len = self.inner.indexed_len()?;
+        Some(self.truncation.map_or(len, |t| t.min(len)))
+    }
+
+    fn tuple_at(&self, i: u64) -> Option<Tuple> {
+        if i >= self.indexed_len()? {
+            return None;
+        }
+        self.inner.tuple_at(i)
+    }
 }
 
 // ---- OrderMaterializeStream ----
 
-/// MATERIALIZATION BARRIER. On first advance, build the
-/// working set per the strategy, then emit permuted tuples
-/// (optionally truncated). Strategy::apply (spec §10.7.8)
-/// dispatches the indexed-vs-naïve path internally using the
-/// `input_index_fn` the compiler propagated from upstream
-/// metadata; falls back to a 1-axis Lattice of observed
-/// length when the upstream metadata couldn't claim a
-/// closed-form addressing function.
+/// MATERIALIZATION BARRIER. On first advance, the strategy selects
+/// the positions it emits from the input's shape (spec §10.7.8):
+/// the `input_index_fn` the compiler propagated from upstream
+/// metadata, or a 1-axis Lattice of the observed length when the
+/// metadata claims none.
+///
+/// Over an addressable input (R2) the stream holds only the
+/// selection and computes each selected tuple as it is emitted;
+/// over any other input it buffers the input first and emits the
+/// selected tuples from the buffer.
 struct OrderMaterializeStream {
     inner: BoxedStream,
     strategy: StrategyName,
     truncation: Option<u64>,
-    input_index_fn: Option<crate::iteration::comprehension::metadata::IndexFn>,
+    input_index_fn: Option<IndexFn>,
     seed: Option<u64>,
-    materialized: Option<Vec<Tuple>>,
-    pos: usize,
+    /// The emitted positions, once selected.
+    selection: Option<Selection>,
+    /// The input's tuples, when the input is not addressable.
+    buffer: Option<Vec<Tuple>>,
+    pos: u64,
 }
 
 impl OrderMaterializeStream {
@@ -515,7 +801,7 @@ impl OrderMaterializeStream {
         inner: BoxedStream,
         strategy: StrategyName,
         truncation: Option<u64>,
-        input_index_fn: Option<crate::iteration::comprehension::metadata::IndexFn>,
+        input_index_fn: Option<IndexFn>,
         seed: Option<u64>,
     ) -> Self {
         Self {
@@ -524,45 +810,49 @@ impl OrderMaterializeStream {
             truncation,
             input_index_fn,
             seed,
-            materialized: None,
+            selection: None,
+            buffer: None,
             pos: 0,
         }
     }
 
-    fn materialize(&mut self) {
-        let mut buf = Vec::new();
-        while let Some(t) = self.inner.advance() {
-            buf.push(t);
-        }
-        let cardinality = buf.len() as u64;
-        let index_fn = self.input_index_fn.clone().unwrap_or(
-            crate::iteration::comprehension::metadata::IndexFn::Lattice {
-                axis_sizes: vec![cardinality],
-            },
-        );
-        let input = crate::iteration::comprehension::strategies::EvaluatedInput {
-            tuples: buf,
-            cardinality,
-            index_fn,
+    fn select(&mut self) {
+        let cardinality = match (&self.input_index_fn, self.inner.indexed_len()) {
+            (Some(_), Some(len)) => len,
+            _ => {
+                let mut buf = Vec::new();
+                while let Some(t) = self.inner.advance() {
+                    buf.push(t);
+                }
+                let len = buf.len() as u64;
+                self.buffer = Some(buf);
+                len
+            }
         };
+        let index_fn = self.input_index_fn.clone().unwrap_or(IndexFn::Lattice {
+            axis_sizes: vec![cardinality],
+        });
         let dispatched = crate::iteration::comprehension::strategies::for_name(self.strategy);
-        let out = dispatched.apply_seeded(&input, self.truncation, self.seed);
-        self.materialized = Some(out);
+        self.selection =
+            Some(dispatched.select(&index_fn, cardinality, self.truncation, self.seed));
     }
 }
 
 impl TupleStream for OrderMaterializeStream {
     fn advance(&mut self) -> Option<Tuple> {
-        if self.materialized.is_none() {
-            self.materialize();
+        if self.selection.is_none() {
+            self.select();
         }
-        let buf = self.materialized.as_ref().unwrap();
-        if self.pos >= buf.len() {
-            return None;
-        }
-        let t = buf[self.pos].clone();
+        let p = self.selection.as_ref()?.get(self.pos)?;
         self.pos += 1;
-        Some(t)
+        match &self.buffer {
+            Some(buf) => buf.get(p as usize).cloned(),
+            None => self.inner.tuple_at(p),
+        }
+    }
+
+    fn rewind(&mut self) {
+        self.pos = 0;
     }
 }
 
@@ -966,5 +1256,109 @@ mod tests {
         let tuples = collect(&mut stream);
         // 2 × 2 = 4 tuples in Lex.
         assert_eq!(tuples.len(), 4);
+    }
+
+    fn ints(tuples: &[Tuple]) -> Vec<Vec<i64>> {
+        tuples
+            .iter()
+            .map(|t| {
+                t.bindings
+                    .iter()
+                    .map(|(_, v)| match v {
+                        TupleValue::I64(n) => *n,
+                        other => panic!("expected an int, got {other:?}"),
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// The cycle zip every plan must produce: operand `c` at
+    /// `i mod |c|` for every `i` below the longest operand.
+    fn cycled(operands: &[&[i64]]) -> Vec<Vec<i64>> {
+        let len = operands.iter().map(|o| o.len()).max().unwrap_or(0);
+        if operands.iter().any(|o| o.is_empty()) {
+            return Vec::new();
+        }
+        (0..len)
+            .map(|i| operands.iter().map(|o| o[i % o.len()]).collect())
+            .collect()
+    }
+
+    fn kept(name: &str, vs: &[i64]) -> Comprehension {
+        // A filter that keeps everything makes the operand
+        // unaddressable without changing its tuples.
+        Comprehension::filter(clause(name, vs), format!("{{{name}}} > -1000"))
+    }
+
+    /// The streamed operand is shorter than an indexed one, so it is
+    /// rewound and replayed rather than buffered.
+    #[test]
+    fn a_short_streamed_operand_is_rewound() {
+        let ast = Comprehension::zip(
+            vec![kept("a", &[1, 2]), clause("b", &[10, 20, 30, 40, 50])],
+            ZipMode::Cycle,
+        );
+        let tuples = collect(&mut interpret(&compile(&ast)));
+        assert_eq!(ints(&tuples), cycled(&[&[1, 2], &[10, 20, 30, 40, 50]]));
+    }
+
+    /// Indexed, buffered, and streamed operands in one zip.
+    #[test]
+    fn every_hold_cycles_to_the_longest_operand() {
+        let shapes: [[&[i64]; 3]; 4] = [
+            [&[1, 2, 3], &[1, 2, 3, 4, 5], &[7]],
+            [&[1, 2, 3, 4, 5, 6, 7], &[1, 2], &[7, 8, 9]],
+            [&[1], &[1, 2], &[7, 8, 9, 10, 11]],
+            [&[1, 2], &[], &[7, 8, 9]],
+        ];
+        for [x, y, z] in shapes {
+            let ast = Comprehension::zip(
+                vec![kept("x", x), kept("y", y), clause("z", z)],
+                ZipMode::Cycle,
+            );
+            let mut stream = interpret(&compile(&ast));
+            let first = collect(&mut stream);
+            assert_eq!(ints(&first), cycled(&[x, y, z]), "{x:?} {y:?} {z:?}");
+            stream.rewind();
+            assert_eq!(collect(&mut stream), first, "a rewound zip replays");
+        }
+    }
+
+    /// Over an addressable input a strategy computes only the tuples
+    /// it selects: `halton/5` over a 10^12-tuple product.
+    #[test]
+    fn an_order_over_an_addressable_product_computes_only_its_selection() {
+        let range = |name: &str| {
+            Comprehension::clause(
+                name,
+                Source::IntRange {
+                    lo: 0,
+                    hi: 1_000_000,
+                    step: 1,
+                },
+            )
+        };
+        let ast = Comprehension::order(
+            Comprehension::cartesian(vec![range("a"), range("b")]),
+            StrategyName::Halton,
+            Some(5),
+        );
+        let tuples = collect(&mut interpret(&compile(&ast)));
+        assert_eq!(tuples.len(), 5);
+    }
+
+    /// A cartesian over addressable children answers any position,
+    /// matching what it dispenses.
+    #[test]
+    fn an_addressable_cartesian_answers_positions() {
+        let ast = Comprehension::cartesian(vec![
+            clause("a", &[1, 2]),
+            Comprehension::union(vec![clause("b", &[10]), clause("b", &[20, 30])]),
+        ]);
+        let mut stream = interpret(&compile(&ast));
+        assert_eq!(stream.indexed_len(), Some(6));
+        let at: Vec<Tuple> = (0..6).map(|i| stream.tuple_at(i).unwrap()).collect();
+        assert_eq!(collect(&mut stream), at);
     }
 }
