@@ -24,8 +24,8 @@ at link time, so a program that calls them needs that crate too:
 
 ```toml
 [dependencies]
-polydat-core = "0.5"
-polydat-nodes = "0.5"
+polydat-core = "0.6"
+polydat-nodes = "0.6"
 ```
 
 ```rust
@@ -51,10 +51,11 @@ fn main() -> Result<(), polydat_core::KernelError> {
 ```
 
 `Engine::default()` is the native engine with the `jit` feature and the
-closure engine without it. The interpreter, the closure engine, and
-the native engine accept every program and yield the same values; the
-pure native engine accepts only programs whose every node has a native
-lowering, and yields the same values for those.
+closure engine without it. All four engines, the interpreter, the
+closure engine, the native engine, and pure native, yield the same
+values. Pure native runs the whole program as native code and calls a
+node's kit where the node has no native lowering, so it refuses only a
+program with a node that has neither.
 
 ## Cargo features
 

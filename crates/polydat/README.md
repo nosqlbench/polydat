@@ -19,7 +19,7 @@ NoSQLBench, and is built to embed in any host.
 
 ```toml
 [dependencies]
-polydat = "0.5"
+polydat = "0.6"
 ```
 
 Compile a graph from source and pull named results:
@@ -56,22 +56,23 @@ fn main() -> Result<(), polydat::KernelError> {
 
 The same program with a header and ten rows is `examples/basic.rs`; run
 it with `cargo run -p polydat --example basic`. The
-[examples directory](examples) also covers the programmatic
+[examples directory](https://github.com/nosqlbench/polydat/tree/main/crates/polydat/examples) also covers the programmatic
 assembler, modules, context layering, parameter-space projection, cursor
 partitions, traversal strategies, type safety, sharing a kernel across
 threads, and defining your own nodes.
 
 ## Engines
 
-One program compiles to any of three engines and gives the same values
-on each. The host picks with `Engine`; the default is the fastest the
-build has.
+One program compiles to any of four engines and gives the same values
+on each. The host picks with `Engine`; the default is native when the
+build has `jit`, and closures without it.
 
 | Engine | Mechanism | Feature |
 | --- | --- | --- |
 | Interpreter | Boxed nodes over typed value buffers | always |
 | Closures | One generated closure per node over a flat slot buffer | always |
 | Native | Cranelift machine code where a node has a lowering, its closure elsewhere | `jit` |
+| Pure native | The whole program as native code, calling a node's kit where it has no lowering | `jit` |
 
 ## Cargo features
 
@@ -86,7 +87,7 @@ binary:
 
 ```toml
 [dependencies]
-polydat = { version = "0.5", default-features = false }
+polydat = { version = "0.6", default-features = false }
 ```
 
 ## Why one subsystem
@@ -103,35 +104,38 @@ it comes from and how it is computed.
 ## Documentation
 
 The rustdoc on [docs.rs](https://docs.rs/polydat) covers the API. The
-[documentation index](docs/README.md) lists the narrative documentation
-by section.
+[documentation index](https://github.com/nosqlbench/polydat/blob/main/crates/polydat/docs/README.md)
+lists the narrative documentation by section.
 
 Tutorials, each backed by a runnable example:
 
-- [Illustrations](docs/tutorials/illustrations.md): the DSL and the
-  programmatic assembler, function graphs, libraries, parameter spaces,
-  partitions, traversal, and tiles.
-- [Polytile tutorial](docs/tutorials/polytile_tutorial.md): templates
-  whose holes are wires, rendering JSON, CSV, and text per cycle.
-- [A toy test definition](docs/tutorials/toy_test_definition.md): one
-  grammar for coordinates, a workload, and the documents it emits.
+- [Illustrations](https://github.com/nosqlbench/polydat/blob/main/crates/polydat/docs/tutorials/illustrations.md):
+  the DSL and the programmatic assembler, function graphs, libraries,
+  parameter spaces, partitions, traversal, and tiles.
+- [Polytile tutorial](https://github.com/nosqlbench/polydat/blob/main/crates/polydat/docs/tutorials/polytile_tutorial.md):
+  templates whose holes are wires, rendering JSON, CSV, and text per
+  cycle.
+- [A toy test definition](https://github.com/nosqlbench/polydat/blob/main/crates/polydat/docs/tutorials/toy_test_definition.md):
+  one grammar for coordinates, a workload, and the documents it emits.
 
 Guides:
 
-- [Embedding Polydat](docs/guides/embedding.md): what a host owns and
-  what Polydat owns, the APIs for compiling, driving, sharing, and
-  extending a kernel, and the extension points.
-- [Compilation](docs/guides/compilation.md): the three engines, how to
-  choose one, and the Cargo features.
-- [Engine-ladder performance](docs/guides/performance.md): one typed
-  graph measured on every engine.
+- [Embedding Polydat](https://github.com/nosqlbench/polydat/blob/main/crates/polydat/docs/guides/embedding.md):
+  what a host owns and what Polydat owns, the APIs for compiling,
+  driving, sharing, and extending a kernel, and the extension points.
+- [Compilation](https://github.com/nosqlbench/polydat/blob/main/crates/polydat/docs/guides/compilation.md):
+  the four engines, how to choose one, and the Cargo features.
+- [Engine-ladder performance](https://github.com/nosqlbench/polydat/blob/main/crates/polydat/docs/guides/performance.md):
+  one typed graph measured on every engine.
+- [Porting to 0.6.0](https://github.com/nosqlbench/polydat/blob/main/crates/polydat/docs/guides/porting_to_0_6_0.md):
+  every change a host sees from 0.5.
 
 Reference and design:
 
-- [Nodes](docs/reference/nodes.md): the built-in function nodes by
-  family.
-- [Design documents](docs/design): the specifications the code
-  implements, with their axioms.
+- [Nodes](https://github.com/nosqlbench/polydat/blob/main/crates/polydat/docs/reference/nodes.md):
+  the built-in function nodes by family.
+- [Design documents](https://github.com/nosqlbench/polydat/tree/main/crates/polydat/docs/design):
+  the specifications the code implements, with their axioms.
 
 ## Crates
 
@@ -150,4 +154,4 @@ and the docs.
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE).
+Apache-2.0. See [LICENSE](https://github.com/nosqlbench/polydat/blob/main/LICENSE).

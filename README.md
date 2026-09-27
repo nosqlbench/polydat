@@ -14,7 +14,7 @@ Add Polydat to a Rust 2024 project:
 
 ```toml
 [dependencies]
-polydat = "0.5"
+polydat = "0.6"
 ```
 
 Compile a graph from DSL source and pull named results:
@@ -165,7 +165,8 @@ steps for the rest, over one slot buffer. Segments follow the graph's
 connections, so pulling one output runs only its own cone's segments,
 however large the rest of the graph is. P1, P2, and P3 accept every program,
 so native eligibility is an optimization, not a requirement for a valid graph;
-only pure native refuses a program, and it names the node without a lowering.
+pure native calls a node's kit where the node has no lowering, and refuses only
+a program with a node that has neither, naming the node.
 The interpreter is the oracle the others are checked against.
 
 One eleven-node graph with three inputs and four outputs is measured on all
@@ -386,7 +387,7 @@ For an interpreter-and-closures library build without Cranelift or the binary:
 
 ```toml
 [dependencies]
-polydat = { version = "0.5", default-features = false }
+polydat = { version = "0.6", default-features = false }
 ```
 
 ## Workspace and development

@@ -24,7 +24,10 @@ The function's doc comment becomes the node's description and help.
 Each argument is classified by its type: per-cycle wires (scalars,
 strings, bytes, JSON, typed vectors, SIMD registers, host types),
 `Const<T>` workload constants captured at construction, `&[T]` variadic
-arguments, and setup state derived once from the constants. A single
+arguments, and setup state derived once from the constants. A setup
+that names `ctx` first in its `from` list also receives the node's
+`BuildContext`, so a node can capture the binding it serves or the
+resources of the kernel tree it is built in. A single
 return is one output, a tuple is several named outputs, `Result` runs
 once at construction, and `Value` is polymorphic.
 

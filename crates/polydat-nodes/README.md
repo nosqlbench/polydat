@@ -20,7 +20,8 @@ is a typed free function under the attribute; the macro derives the
 node's metadata, its evaluation adapters for the interpreter and for
 the closure steps of the compiled engines, and its link-time
 registration from the signature. A derived node has no native lowering,
-so the native engine runs it as a closure and pure native refuses it:
+so the native engine runs it as a closure step and pure native calls it
+through its kit:
 
 ```rust
 use polydat::dsl::compile_polydat_kernel;

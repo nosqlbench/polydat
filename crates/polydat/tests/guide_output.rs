@@ -580,6 +580,80 @@ fn documentation_links_resolve() {
     );
 }
 
+/// The README of every crate in the workspace, as crates.io and docs.rs
+/// show it, and the repository README.
+fn readmes() -> Vec<PathBuf> {
+    let crates = manifest_dir().join("..");
+    let mut files: Vec<PathBuf> = std::fs::read_dir(&crates)
+        .unwrap()
+        .map(|entry| entry.unwrap().path().join("README.md"))
+        .filter(|path| path.exists())
+        .collect();
+    files.sort();
+    files.push(manifest_dir().join("../../README.md"));
+    files
+}
+
+/// Every install line a README gives, `polydat… = "X.Y"` or
+/// `polydat… = { version = "X.Y", … }`, names the minor version the
+/// workspace is at, so a reader who copies it gets this release.
+#[test]
+fn readme_install_lines_name_the_current_release() {
+    let version = env!("CARGO_PKG_VERSION");
+    let minor = version.rsplit_once('.').unwrap().0;
+    let mut stale = Vec::new();
+    for file in readmes() {
+        let text = std::fs::read_to_string(&file).unwrap();
+        for (i, line) in text.lines().enumerate() {
+            let line = line.trim();
+            if !line.starts_with("polydat") || !line.contains('=') {
+                continue;
+            }
+            let Some(quoted) = line.split('"').nth(1) else {
+                continue;
+            };
+            if quoted != minor && quoted != version {
+                stale.push(format!("{}:{}: {line}", file.display(), i + 1));
+            }
+        }
+    }
+    assert!(
+        stale.is_empty(),
+        "install lines not at {minor}:\n{}",
+        stale.join("\n")
+    );
+}
+
+/// A crate README is shown on crates.io and docs.rs, which resolve a
+/// relative link against the repository root rather than the crate's
+/// directory, so every link in one is absolute.
+#[test]
+fn crate_readmes_link_absolutely() {
+    let mut relative = Vec::new();
+    let repository_readme = manifest_dir().join("../../README.md");
+    for file in readmes().into_iter().filter(|f| *f != repository_readme) {
+        let text = std::fs::read_to_string(&file).unwrap();
+        for (i, line) in text.lines().enumerate() {
+            for piece in line.split("](").skip(1) {
+                let target = piece.split(')').next().unwrap_or("");
+                if target.is_empty()
+                    || target.starts_with('#')
+                    || target.contains("://")
+                    || target.starts_with("mailto:")
+                {
+                    continue;
+                }
+                relative.push(format!("{}:{}: {target}", file.display(), i + 1));
+            }
+        }
+    }
+    assert!(
+        relative.is_empty(),
+        "relative links in crate READMEs:\n{}",
+        relative.join("\n")
+    );
+}
+
 /// The compilation guide's measured column cites the performance
 /// guide; every figure it quotes must appear in that guide's reference
 /// table, so the two cannot drift apart.

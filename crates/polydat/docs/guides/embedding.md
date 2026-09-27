@@ -434,7 +434,7 @@ be held in an `Arc`, and children may be bound and forks taken under it
 from many threads at once. Each thread then evaluates only its own
 child or fork. [Scope trees on all four engines](../design/native_scope_trees.md)
 is the design, and `tests/scope_trees.rs` walks a whole tree on every
-pair of the three engines P1, P2, and P3.
+pair of the four engines, both pure native modes included.
 
 ## 5. Host-defined nodes
 
@@ -882,8 +882,8 @@ engines, so a failure in it surfaces at build; a step that depends on
 an extern is computed at the first pull that needs it and kept until
 that extern changes. An extern without a default is `None` until the
 host sets it, and on the interpreter, the closure tier, and native
-(P3) every consumer reads `None` through it; pure native refuses at the
-pull instead (§3). The compile log names each such extern.
+(P3) every consumer reads `None` through it; pure native refuses a pull
+whose output depends on it instead (§3). The compile log names each such extern.
 
 On all four engines, `pull` returns an owned value: a string, JSON
 document, or rendered tile is copied out of the kernel's own storage,
