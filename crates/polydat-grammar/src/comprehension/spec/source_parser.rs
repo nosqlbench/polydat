@@ -363,6 +363,9 @@ fn parse_literal_value(s: &str) -> LiteralValue {
     if let Ok(n) = s.parse::<i64>() {
         return LiteralValue::Int(n);
     }
+    if let Ok(n) = s.parse::<u64>() {
+        return LiteralValue::UInt(n);
+    }
     // Float
     if let Ok(f) = s.parse::<f64>() {
         return LiteralValue::Float(f);
@@ -468,6 +471,9 @@ fn try_parse_bare_scalar(s: &str) -> Option<LiteralValue> {
     }
     if let Ok(n) = s.parse::<i64>() {
         return Some(LiteralValue::Int(n));
+    }
+    if let Ok(n) = s.parse::<u64>() {
+        return Some(LiteralValue::UInt(n));
     }
     if let Ok(f) = s.parse::<f64>() {
         return Some(LiteralValue::Float(f));

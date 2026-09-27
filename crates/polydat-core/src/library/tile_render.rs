@@ -821,14 +821,14 @@ fn bind_generators(
                         return LiteralValue::Json(json_of(v));
                     }
                     match v {
-                        Value::U64(n) => LiteralValue::Int(*n as i64),
+                        Value::U64(n) => LiteralValue::unsigned(*n),
                         Value::I64(n) => LiteralValue::Int(*n),
                         Value::F64(f) => LiteralValue::Float(*f),
                         Value::Bool(b) => LiteralValue::Bool(*b),
                         // JSON scalars carry their own kind.
                         Value::Json(j) => match j.as_ref() {
                             serde_json::Value::Number(n) if n.is_u64() => {
-                                LiteralValue::Int(n.as_u64().unwrap_or(0) as i64)
+                                LiteralValue::unsigned(n.as_u64().unwrap_or(0))
                             }
                             serde_json::Value::Number(n) if n.is_i64() => {
                                 LiteralValue::Int(n.as_i64().unwrap_or(0))

@@ -4,8 +4,8 @@
 //! Illustration: every named generator in source position. Each call
 //! is bound as a producer, `s := for x in <call>`, and the example
 //! prints the cardinality the producer reports and the values it
-//! yields. A call whose arguments are out of range fails when its
-//! stream opens.
+//! yields. A call whose arguments are out of range, or whose terms
+//! pass `u64::MAX`, is a compile error.
 
 use polydat::iteration::comprehension::strategies::TupleValue;
 
@@ -22,6 +22,7 @@ fn main() {
         "linear_steps(0, 1, 4)",
         "log_steps(1, 1000, 4)",
         "log_steps(0, 10, 3)",
+        "fib(94)",
     ] {
         let src = format!("input cycle: u64\ns := for x in {call}\n");
         let mut kernel = match polydat::dsl::compile_polydat_kernel(&src) {

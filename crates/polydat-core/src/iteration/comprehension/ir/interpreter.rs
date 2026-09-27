@@ -248,6 +248,7 @@ impl TupleStream for ClauseStream {
 fn literal_to_tuple_value(lv: &LiteralValue) -> TupleValue {
     match lv {
         LiteralValue::Int(n) => TupleValue::I64(*n),
+        LiteralValue::UInt(n) => TupleValue::U64(*n),
         LiteralValue::Float(f) => TupleValue::F64(*f),
         LiteralValue::String(s) => TupleValue::Str(s.clone()),
         LiteralValue::Bool(b) => TupleValue::Bool(*b),
@@ -990,11 +991,15 @@ impl TupleStream for OrderMaterializeStream {
     }
 }
 
-/// A traversal's value as the streams carry it: an integer as the
-/// `I64` a clause dispenses, and JSON as its text.
+/// A traversal's value as the streams carry it: an integer as a
+/// clause dispenses it, `I64` up to `i64::MAX` and `U64` above, and
+/// JSON as its text.
 fn stream_value(value: &Value) -> TupleValue {
     match value {
-        Value::U64(n) => TupleValue::I64(*n as i64),
+        Value::U64(n) => match i64::try_from(*n) {
+            Ok(n) => TupleValue::I64(n),
+            Err(_) => TupleValue::U64(*n),
+        },
         Value::I64(n) => TupleValue::I64(*n),
         Value::F64(f) => TupleValue::F64(*f),
         Value::Bool(b) => TupleValue::Bool(*b),

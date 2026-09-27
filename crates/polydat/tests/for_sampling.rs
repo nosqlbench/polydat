@@ -399,7 +399,7 @@ fn a_count_too_large_to_hold_is_refused_not_aborted() {
         body(&format!("x in 0.0..1.0 order sobol/{max}"), "x", "x"),
         body(&format!("x in 0.0..1.0 order lhs/{max}"), "x", "x"),
         body(&format!("x in 0.0..1.0 order shuffle/{max}"), "x", "x"),
-        format!("input cycle: u64\ns := for k in fib({max})\n"),
+        format!("input cycle: u64\ns := for k in log_steps(1.0, 2.0, {max})\n"),
         format!("input cycle: u64\ns := for k in geometric(1.0, 2.0, {max})\n"),
         format!("input cycle: u64\ns := for k in linear_steps(0.0, 1.0, {max})\n"),
         format!("input cycle: u64\np := partitions(\"linear:{max}\", 1000)\n"),
@@ -443,25 +443,25 @@ fn a_count_too_large_to_hold_is_refused_not_aborted() {
     }
 }
 
-/// A producer over a context-free generator that fails is refused when
-/// its stream opens, with the generator's own message, rather than
-/// dispensing nothing, which would read the same as a generator with
-/// no values.
+/// A streamer built from text over a context-free generator that fails
+/// is refused when its stream opens, with the generator's own message,
+/// rather than dispensing nothing, which would read the same as a
+/// generator with no values. A producer written in a program is refused
+/// earlier, by the compile (generator_sources.rs).
 #[test]
 fn a_producer_over_a_failing_generator_says_why() {
-    let src = "input cycle: u64\ns := for k in log_steps(-1.0, 1.0, 5)\n";
-    let mut k = polydat::dsl::compile_polydat_interpreter(src).unwrap();
-    k.set_inputs(&[0]);
-    let s = k.pull_ref("s").clone();
+    let s = polydat::iteration::comprehension::StreamerValue::parse_text(
+        "k in log_steps(-1.0, 1.0, 5)",
+    )
+    .unwrap();
     let err = s
-        .as_streamer()
-        .expect("a producer is a streamer")
         .coordinate_stream()
         .map(|_| ())
         .expect_err("a failing generator must not open as an empty stream")
         .to_string();
     assert!(
-        err.contains("clause 'k' cannot be evaluated") && err.contains("bounds must be positive"),
+        err.contains("clause 'k' cannot be evaluated")
+            && err.contains("log_steps.start: expected a positive number, got -1"),
         "{err}"
     );
 }

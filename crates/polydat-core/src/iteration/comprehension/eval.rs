@@ -1027,6 +1027,24 @@ impl NamedGenerator {
         Self::all().find(|g| g.name() == name)
     }
 
+    /// The generator `text` calls, when it is a call of one
+    /// (`fib({n})`, `log_steps(1, 1000, 4)`).
+    pub fn of_call(text: &str) -> Option<Self> {
+        parse_func_call(text).and_then(|(name, _)| Self::from_name(name))
+    }
+
+    /// Whether the generator's values are integers (`u64`); the others
+    /// yield floats (`f64`).
+    pub fn yields_integers(self) -> bool {
+        use NamedGenerator as G;
+        match self {
+            G::Fib | G::FibUntil | G::Pow2 | G::Pow2Until | G::Binomial => true,
+            G::Geometric | G::GeometricUntil | G::LinearStarts | G::LinearSteps | G::LogSteps => {
+                false
+            }
+        }
+    }
+
     /// Expand the call's argument texts into the generator's values.
     fn expand(self, args: &[&str]) -> Result<Vec<Value>, String> {
         use NamedGenerator as G;
@@ -1043,20 +1061,74 @@ impl NamedGenerator {
         let what = |i: usize| format!("{}.{}", self.name(), params[i]);
         let int = |i: usize| parse_u64_arg(args[i], &what(i));
         let num = |i: usize| parse_num_arg(args[i], &what(i));
+        let call = format!("{}({})", self.name(), args.join(", "));
         match self {
-            G::Fib => generate_fib_n(int(0)?),
+            G::Fib => generate_fib_n(int(0)?, &call),
             G::FibUntil => Ok(generate_fib_until(int(0)?)),
-            G::Pow2 => Ok(generate_pow2_n(int(0)?)),
+            G::Pow2 => generate_pow2_n(int(0)?, &call),
             G::Pow2Until => Ok(generate_pow2_until(int(0)?)),
-            G::Binomial => Ok(generate_binomial(int(0)?)),
-            G::Geometric => generate_geometric(num(0)?, num(1)?, int(2)?),
-            G::GeometricUntil => Ok(generate_geometric_until(num(0)?, num(1)?, num(2)?)),
+            G::Binomial => generate_binomial(int(0)?, &call),
+            G::Geometric => {
+                let (start, factor) = (num(0)?, num(1)?);
+                if !(factor.is_finite() && factor > 0.0) {
+                    return Err(format!(
+                        "{}: expected a positive, finite number, got {factor}",
+                        what(1)
+                    ));
+                }
+                generate_geometric(start, factor, int(2)?)
+            }
+            G::GeometricUntil => {
+                let (start, factor) = (num(0)?, num(1)?);
+                if !(factor.is_finite() && factor > 1.0) {
+                    return Err(format!(
+                        "{}: expected a finite number greater than 1, got {factor}",
+                        what(1)
+                    ));
+                }
+                Ok(generate_geometric_until(start, factor, num(2)?))
+            }
             G::LinearStarts => generate_linear_points(num(0)?, num(1)?, int(2)?, false),
             G::LinearSteps => generate_linear_points(num(0)?, num(1)?, int(2)?, true),
-            G::LogSteps => generate_log_steps(num(0)?, num(1)?, int(2)?),
+            G::LogSteps => {
+                let (start, end) = (num(0)?, num(1)?);
+                for (i, bound) in [(0, start), (1, end)] {
+                    if bound.is_nan() || bound <= 0.0 {
+                        return Err(format!(
+                            "{}: expected a positive number, got {bound}",
+                            what(i)
+                        ));
+                    }
+                }
+                generate_log_steps(start, end, int(2)?)
+            }
+        }
+    }
+
+    /// The largest argument a call yields every term of, for a
+    /// generator whose terms outgrow `u64` as its argument grows:
+    /// `fib` 93, `pow2` 64, `binomial` 67. `None` for the others.
+    pub fn largest_valid_argument(self) -> Option<u64> {
+        use NamedGenerator as G;
+        match self {
+            G::Fib => Some(FIB_MAX_N),
+            G::Pow2 => Some(POW2_MAX_N),
+            G::Binomial => Some(BINOMIAL_MAX_N),
+            _ => None,
         }
     }
 }
+
+/// The largest `n` whose first `n` Fibonacci numbers fit `u64`: term
+/// 94 is `19740274219868223167`, past `u64::MAX`.
+const FIB_MAX_N: u64 = 93;
+/// The largest `n` whose first `n` powers of two fit `u64`: term 65 is
+/// `2^64`.
+const POW2_MAX_N: u64 = 64;
+/// The largest row of Pascal's triangle whose coefficients all fit
+/// `u64`: `C(68, 31)` is the first coefficient of row 68 past
+/// `u64::MAX`.
+const BINOMIAL_MAX_N: u64 = 67;
 
 /// Expand a named generator call (`fib(8)`, `linear_steps(0, 1, 4)`)
 /// into its values. Returns `Ok(None)` when the text is not a call of
@@ -1072,50 +1144,77 @@ fn try_eval_generator(text: &str) -> Result<Option<Vec<Value>>, String> {
     generator.expand(&split_args_top_level(args)).map(Some)
 }
 
+/// The refusal of the first named generator call in `text` that fails,
+/// looking through the arguments of the calls that enclose it
+/// (`concat(fib(94), 1..3)`), after `{name}` interpolation against
+/// `kernel`. A named generator's values depend on nothing but its
+/// arguments, so once they are resolved its failure is the call's
+/// error wherever it is evaluated (comprehension_forms.md §3.1.3).
+/// `None` when every named generator call in `text` expands, when an
+/// interpolation does not resolve, or when `text` calls none.
+pub fn refused_generator_call(text: &str, kernel: &dyn Lookup) -> Option<String> {
+    let interpolated = crate::kernel::interp::interpolate_with_lookup(text, |name| {
+        kernel.lookup(name).map(|v| v.to_display_string())
+    })
+    .ok()?;
+    first_refused_call(&interpolated)
+}
+
+fn first_refused_call(text: &str) -> Option<String> {
+    let (name, args) = parse_func_call(text)?;
+    let args = split_args_top_level(args);
+    match NamedGenerator::from_name(name) {
+        Some(generator) => generator.expand(&args).err(),
+        None => args.iter().find_map(|a| first_refused_call(a)),
+    }
+}
+
 /// First `n` Fibonacci numbers: 1, 1, 2, 3, 5, 8, ...
 ///
-/// The count comes from the spec text, so the buffer is reserved
-/// fallibly (`try_buffer_for`): `fib(99999999999999)` is a compile
-/// error naming the generator, not an allocator abort.
-fn generate_fib_n(n: u64) -> Result<Vec<Value>, String> {
-    let mut out = crate::derive_support::try_buffer_for(n, "fib(n)")?;
-    let (mut a, mut b): (u64, u64) = (1, 1);
+/// Term 94 is past `u64::MAX`, so `n` above 93 is refused before any
+/// term is computed.
+fn generate_fib_n(n: u64, call: &str) -> Result<Vec<Value>, String> {
+    if n > FIB_MAX_N {
+        return Err(format!(
+            "{call}: term {} is past u64::MAX; fib.n is at most {FIB_MAX_N}",
+            FIB_MAX_N + 1
+        ));
+    }
+    let mut out = Vec::with_capacity(n as usize);
+    // The pair runs two terms ahead of the last one pushed, past
+    // `u64::MAX` at the end of `fib(93)`, so it is held in `u128`.
+    let (mut a, mut b): (u128, u128) = (1, 1);
     for _ in 0..n {
-        out.push(Value::U64(a));
-        let next = a.saturating_add(b);
-        a = b;
-        b = next;
+        out.push(Value::U64(a as u64));
+        (a, b) = (b, a + b);
     }
     Ok(out)
 }
 
 /// Fibonacci values up to and including the largest ≤ `max`.
+///
+/// The pair is held in `u128`, so the walk reaches the 93rd term,
+/// the largest in `u64`, even though the term after it does not fit.
 fn generate_fib_until(max: u64) -> Vec<Value> {
     let mut out = Vec::new();
-    let (mut a, mut b): (u64, u64) = (1, 1);
-    while a <= max {
-        out.push(Value::U64(a));
-        let next = a.checked_add(b);
-        a = b;
-        match next {
-            Some(v) => b = v,
-            None => break,
-        }
+    let (mut a, mut b): (u128, u128) = (1, 1);
+    while a <= u128::from(max) {
+        out.push(Value::U64(a as u64));
+        (a, b) = (b, a + b);
     }
     out
 }
 
-/// `1, 2, 4, ..., 2^(n-1)`.
-fn generate_pow2_n(n: u64) -> Vec<Value> {
-    // At most 64 terms, whatever `n` asks: the loop stops at 2^63.
-    let mut out = Vec::with_capacity(n.min(64) as usize);
-    for i in 0..n {
-        if i >= 64 {
-            break;
-        } // 2^64 overflows u64
-        out.push(Value::U64(1u64 << i));
+/// `1, 2, 4, ..., 2^(n-1)`. Term 65 is `2^64`, past `u64::MAX`, so `n`
+/// above 64 is refused.
+fn generate_pow2_n(n: u64, call: &str) -> Result<Vec<Value>, String> {
+    if n > POW2_MAX_N {
+        return Err(format!(
+            "{call}: term {}, 2^64, is past u64::MAX; pow2.n is at most {POW2_MAX_N}",
+            POW2_MAX_N + 1
+        ));
     }
-    out
+    Ok((0..n).map(|i| Value::U64(1u64 << i)).collect())
 }
 
 /// Powers of two ≤ max.
@@ -1146,13 +1245,13 @@ fn generate_geometric(start: f64, factor: f64, n: u64) -> Result<Vec<Value>, Str
     Ok(out)
 }
 
-/// `start, start*factor, …` ≤ max.
+/// `start, start*factor, …` ≤ max. The caller refuses a `factor` that
+/// is not a finite number above 1, so a positive `start` grows past
+/// `max`; a `start` of zero or less never does and yields nothing.
 fn generate_geometric_until(start: f64, factor: f64, max: f64) -> Vec<Value> {
     let mut out = Vec::new();
     let mut v = start;
-    if factor <= 1.0 || start <= 0.0 || max <= 0.0 {
-        // Defensive: avoid infinite loops with non-growing
-        // factors. The "until" semantics implies growth.
+    if start.is_nan() || start <= 0.0 {
         return out;
     }
     while v <= max {
@@ -1162,23 +1261,28 @@ fn generate_geometric_until(start: f64, factor: f64, max: f64) -> Vec<Value> {
     out
 }
 
-/// Binomial coefficients `C(n, 0), C(n, 1), …, C(n, n)`.
-fn generate_binomial(n: u64) -> Vec<Value> {
-    // A row is cut where its coefficients pass `u64::MAX`, and every
-    // coefficient of rows up to 67 fits, so no row holds more than 68
-    // terms however large `n` is. `binomial(10^12)` is a short list,
-    // not a request for a trillion.
-    let mut out = Vec::with_capacity(n.min(67) as usize + 1);
+/// Binomial coefficients `C(n, 0), C(n, 1), …, C(n, n)`. Every
+/// coefficient of rows up to 67 fits `u64`, and every later row has one
+/// past `u64::MAX`, so a row past 67 is refused, naming its first
+/// coefficient that does not fit. The walk reaches that coefficient
+/// within a few terms for any large `n`: `binomial(10^12)` fails at
+/// `C(n, 2)`, not after a trillion terms.
+fn generate_binomial(n: u64, call: &str) -> Result<Vec<Value>, String> {
+    let mut out = Vec::with_capacity(n.min(BINOMIAL_MAX_N) as usize + 1);
+    // `c ≤ u64::MAX` before each step, so `c · (n − k + 1)` fits u128.
     let mut c: u128 = 1;
     out.push(Value::U64(1));
     for k in 1..=n {
-        c = c * (n - k + 1) as u128 / k as u128;
-        if c > u64::MAX as u128 {
-            break;
+        c = c * u128::from(n - k + 1) / u128::from(k);
+        if c > u128::from(u64::MAX) {
+            return Err(format!(
+                "{call}: term C({n}, {k}) is past u64::MAX; binomial.n is at most \
+                 {BINOMIAL_MAX_N}"
+            ));
         }
         out.push(Value::U64(c as u64));
     }
-    out
+    Ok(out)
 }
 
 /// Kernel-aware partition comprehension sources
@@ -1479,17 +1583,18 @@ fn generate_linear_points(
     // spec text no machine can hold aborts the process.
     let mut out = crate::derive_support::try_buffer_for(n, "linear points")?;
     out.extend((0..n).map(|i| Value::F64(start + step * i as f64)));
+    // The inclusive form's last point is `end` itself, not the sum
+    // that rounds near it.
+    if inclusive && n >= 2 {
+        out[n as usize - 1] = Value::F64(end);
+    }
     Ok(out)
 }
 
-/// `n` log-spaced points from `start` to `end` (inclusive).
-/// Both bounds must be positive (log undefined otherwise).
+/// `n` log-spaced points from `start` to `end`, both emitted exactly
+/// as given; the points between are `exp` of evenly spaced logarithms.
+/// The caller refuses a bound that is not positive.
 fn generate_log_steps(start: f64, end: f64, n: u64) -> Result<Vec<Value>, String> {
-    if start <= 0.0 || end <= 0.0 {
-        return Err(format!(
-            "log_steps: bounds must be positive, got start={start}, end={end}"
-        ));
-    }
     if n == 0 {
         return Ok(Vec::new());
     }
@@ -1500,7 +1605,9 @@ fn generate_log_steps(start: f64, end: f64, n: u64) -> Result<Vec<Value>, String
     let log_e = end.ln();
     let step = (log_e - log_s) / (n - 1) as f64;
     let mut out = crate::derive_support::try_buffer_for(n, "log_steps(start, end, n)")?;
-    out.extend((0..n).map(|i| Value::F64((log_s + step * i as f64).exp())));
+    out.push(Value::F64(start));
+    out.extend((1..n - 1).map(|i| Value::F64((log_s + step * i as f64).exp())));
+    out.push(Value::F64(end));
     Ok(out)
 }
 
@@ -2700,7 +2807,7 @@ mod tests {
             assert!((a - 1.0).abs() < 1e-9);
             assert!((b - 10.0).abs() < 1e-9);
             assert!((c - 100.0).abs() < 1e-9);
-            assert!((d - 1000.0).abs() < 1e-9);
+            assert_eq!(*d, 1000.0);
         } else {
             panic!("got {v:?}");
         }
@@ -2711,7 +2818,188 @@ mod tests {
         let err = evaluate_spec("log_steps(0, 100, 5)", &empty_kernel())
             .unwrap_err()
             .to_string();
-        assert!(err.contains("must be positive"), "{err}");
+        assert!(
+            err.contains("log_steps.start: expected a positive number, got 0"),
+            "{err}"
+        );
+        let err = evaluate_spec("log_steps(1, -2, 5)", &empty_kernel())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("log_steps.end: expected a positive number, got -2"),
+            "{err}"
+        );
+    }
+
+    /// The last point of `linear_steps` and both ends of `log_steps` are
+    /// the given bounds exactly, not sums or `exp`s that round near them.
+    #[test]
+    fn inclusive_steps_end_exactly_at_their_bounds() {
+        let floats = |spec: &str| -> Vec<f64> {
+            evaluate_spec(spec, &empty_kernel())
+                .unwrap()
+                .iter()
+                .map(|v| match v {
+                    Value::F64(f) => *f,
+                    other => panic!("{spec}: {other:?}"),
+                })
+                .collect()
+        };
+        for (spec, start, end) in [
+            ("log_steps(1, 1000, 4)", 1.0, 1000.0),
+            ("log_steps(3, 7, 9)", 3.0, 7.0),
+            ("log_steps(0.1, 0.7, 13)", 0.1, 0.7),
+            ("log_steps(1000, 1, 4)", 1000.0, 1.0),
+            ("linear_steps(0, 1, 4)", 0.0, 1.0),
+            ("linear_steps(0.1, 0.7, 13)", 0.1, 0.7),
+            ("linear_steps(-3, 1e9, 7)", -3.0, 1e9),
+        ] {
+            let v = floats(spec);
+            assert_eq!(v.first(), Some(&start), "{spec}: {v:?}");
+            assert_eq!(v.last(), Some(&end), "{spec}: {v:?}");
+        }
+        assert_eq!(floats("linear_steps(2, 5, 1)"), vec![2.0]);
+        assert_eq!(floats("log_steps(2, 5, 1)"), vec![2.0]);
+    }
+
+    /// The largest valid argument of each generator whose terms outgrow
+    /// `u64`, found by computing the terms in `u128`: the first term
+    /// past `u64::MAX` is the one the refusal names.
+    #[test]
+    fn overflow_limits_are_where_the_terms_leave_u64() {
+        let max = u128::from(u64::MAX);
+        // Fibonacci: the first term past u64::MAX, 1-based.
+        let (mut a, mut b, mut term) = (1u128, 1u128, 1u64);
+        while a <= max {
+            (a, b, term) = (b, a + b, term + 1);
+        }
+        assert_eq!(term, 94);
+        assert_eq!(NamedGenerator::Fib.largest_valid_argument(), Some(term - 1));
+        // Powers of two: 2^64 is term 65.
+        assert_eq!(1u128 << 64, max + 1);
+        assert_eq!(NamedGenerator::Pow2.largest_valid_argument(), Some(64));
+        // Pascal's triangle: the first row with a coefficient past
+        // u64::MAX, and that coefficient.
+        let row_overflow = |n: u64| -> Option<u64> {
+            let mut c = 1u128;
+            (1..=n).find(|&k| {
+                c = c * u128::from(n - k + 1) / u128::from(k);
+                c > max
+            })
+        };
+        let first_row = (0..).find(|&n| row_overflow(n).is_some()).unwrap();
+        assert_eq!(first_row, 68);
+        assert_eq!(row_overflow(68), Some(31));
+        assert_eq!(
+            NamedGenerator::Binomial.largest_valid_argument(),
+            Some(first_row - 1)
+        );
+        assert_eq!(NamedGenerator::Geometric.largest_valid_argument(), None);
+    }
+
+    /// Each limit is the last argument that yields every term, and the
+    /// next is refused, naming the call, the first term past
+    /// `u64::MAX`, and the limit.
+    #[test]
+    fn a_call_past_its_limit_is_refused_by_its_first_overflowing_term() {
+        let k = empty_kernel();
+        let fib = evaluate_spec("fib(93)", &k).unwrap();
+        assert_eq!(fib.len(), 93);
+        assert_eq!(fib[92], Value::U64(12_200_160_415_121_876_738));
+        let pow2 = evaluate_spec("pow2(64)", &k).unwrap();
+        assert_eq!(pow2.last(), Some(&Value::U64(1 << 63)));
+        let row = evaluate_spec("binomial(67)", &k).unwrap();
+        assert_eq!(row.len(), 68);
+        assert_eq!(row[33], Value::U64(14_226_520_737_620_288_370));
+        for (spec, message) in [
+            (
+                "fib(94)",
+                "fib(94): term 94 is past u64::MAX; fib.n is at most 93",
+            ),
+            (
+                "fib(18446744073709551615)",
+                "fib(18446744073709551615): term 94 is past u64::MAX",
+            ),
+            (
+                "pow2(65)",
+                "pow2(65): term 65, 2^64, is past u64::MAX; pow2.n is at most 64",
+            ),
+            (
+                "binomial(68)",
+                "binomial(68): term C(68, 31) is past u64::MAX; binomial.n is at most 67",
+            ),
+            (
+                "binomial(70)",
+                "binomial(70): term C(70, 28) is past u64::MAX",
+            ),
+            (
+                "binomial(1000000000000)",
+                "binomial(1000000000000): term C(1000000000000, 2) is past u64::MAX",
+            ),
+        ] {
+            let err = evaluate_spec(spec, &k).unwrap_err().to_string();
+            assert!(err.contains(message), "{spec}: {err}");
+        }
+    }
+
+    /// `geometric` takes a positive, finite factor, and
+    /// `geometric_until` a finite factor above 1; the refusal names the
+    /// argument.
+    #[test]
+    fn a_geometric_factor_out_of_range_is_refused_by_name() {
+        let k = empty_kernel();
+        for (spec, message) in [
+            (
+                "geometric(1, 0, 4)",
+                "geometric.factor: expected a positive, finite number, got 0",
+            ),
+            (
+                "geometric(1, -2, 4)",
+                "geometric.factor: expected a positive, finite number, got -2",
+            ),
+            (
+                "geometric(1, inf, 4)",
+                "geometric.factor: expected a positive, finite number, got inf",
+            ),
+            (
+                "geometric_until(1, 1, 100)",
+                "geometric_until.factor: expected a finite number greater than 1, got 1",
+            ),
+            (
+                "geometric_until(1, 0.5, 100)",
+                "geometric_until.factor: expected a finite number greater than 1, got 0.5",
+            ),
+        ] {
+            let err = evaluate_spec(spec, &k).unwrap_err().to_string();
+            assert!(err.contains(message), "{spec}: {err}");
+        }
+        assert_eq!(
+            evaluate_spec("geometric(8, 0.5, 3)", &k).unwrap(),
+            vec![Value::F64(8.0), Value::F64(4.0), Value::F64(2.0)]
+        );
+        assert!(
+            evaluate_spec("geometric_until(0, 2, 100)", &k)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// The refusal of a named generator is found through the calls that
+    /// enclose it; a call that expands, and a call of anything else, is
+    /// not a refusal.
+    #[test]
+    fn refused_generator_call_looks_through_enclosing_calls() {
+        let k = empty_kernel();
+        let refused = refused_generator_call("concat(1..3, take(fib(94), 2))", &k).unwrap();
+        assert!(refused.starts_with("fib(94): term 94"), "{refused}");
+        assert_eq!(refused_generator_call("concat(fib(8), pow2(64))", &k), None);
+        assert_eq!(refused_generator_call("hash(3)", &k), None);
+        assert_eq!(refused_generator_call("1, 2, 3", &k), None);
+        let refused = refused_generator_call("fib(-1)", &k).unwrap();
+        assert!(
+            refused.contains("fib.n: expected non-negative integer, got '-1'"),
+            "{refused}"
+        );
     }
 
     // ── Set operators ──

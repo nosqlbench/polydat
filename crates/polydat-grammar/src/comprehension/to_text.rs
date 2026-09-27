@@ -112,7 +112,10 @@ fn literal_list_text(values: &[LiteralValue]) -> Option<String> {
 /// or a boolean instead.
 fn bare_value_is_unambiguous(v: &LiteralValue) -> bool {
     match v {
-        LiteralValue::Int(_) | LiteralValue::Float(_) | LiteralValue::Bool(_) => true,
+        LiteralValue::Int(_)
+        | LiteralValue::UInt(_)
+        | LiteralValue::Float(_)
+        | LiteralValue::Bool(_) => true,
         LiteralValue::String(s) => {
             let trimmed = s.trim();
             !trimmed.is_empty()
@@ -134,6 +137,7 @@ fn bare_value_is_unambiguous(v: &LiteralValue) -> bool {
 fn bare_value_text(v: &LiteralValue) -> Option<String> {
     Some(match v {
         LiteralValue::Int(i) => i.to_string(),
+        LiteralValue::UInt(u) => u.to_string(),
         LiteralValue::Float(f) => format!("{f:?}"),
         LiteralValue::Bool(b) => b.to_string(),
         LiteralValue::String(s) => s.clone(),
@@ -282,6 +286,13 @@ mod tests {
             },
             Source::Literal {
                 values: vec![LiteralValue::Int(1), LiteralValue::Int(2)],
+            },
+            Source::Literal {
+                values: vec![
+                    LiteralValue::Int(i64::MAX),
+                    LiteralValue::UInt(1 << 63),
+                    LiteralValue::UInt(u64::MAX),
+                ],
             },
             Source::Literal {
                 values: vec![LiteralValue::String("load".into())],

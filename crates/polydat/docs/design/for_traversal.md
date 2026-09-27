@@ -228,12 +228,15 @@ Element types are determined at compile time from the source:
 | String literal list or string comprehension | `Str` |
 | Boolean literal list | `Bool` |
 | `partitions(...)`, `subdivide(...)`, `<name>.partitions` | `Ext` carrying `Partition` |
+| A named generator call ([comprehension_forms.md](comprehension_forms.md) §3.1.3) | `u64` for `fib`, `fib_until`, `pow2`, `pow2_until`, and `binomial`; `f64` for the others |
 | A generator node call | The node's declared return type |
 | A generator expression naming a `Streamer` wire | `Ext` (the probe's type) |
 
 An integer among floats widens the element to `f64`; a list that mixes
-numbers and strings is a compile error. A generator call is typed by
-compiling a one-binding probe program, `__probe := <expr>`, with the
+numbers and strings is a compile error. A named generator call is typed
+by its generator, whatever its arguments reference, so a call over a
+wire (`fib({n})`) types as a call over constants does. Any other
+generator call is typed by compiling a one-binding probe program, `__probe := <expr>`, with the
 parent's library paths and module cache, and reading the binding's port
 type; the same probe types projection sources in tiles. The body is
 type-checked against these types before any activation exists, so a

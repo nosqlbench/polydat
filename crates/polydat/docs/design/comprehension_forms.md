@@ -250,28 +250,39 @@ named generator.
 
 | Call | Yields | Example | Ends | Count |
 |---|---|---|---|---|
-| `fib(n)` | the first `n` Fibonacci numbers, starting `1, 1`; a term past `u64::MAX` (the 94th on) is `u64::MAX` | `fib(8)` → 1, 1, 2, 3, 5, 8, 13, 21 | not applicable | `n` |
-| `fib_until(max)` | the Fibonacci numbers up to `max`, starting `1, 1` | `fib_until(50)` → 1, 1, 2, 3, 5, 8, 13, 21, 34 | `max` is yielded when it is a Fibonacci number | the number of terms up to `max`; 0 for `max` 0 |
-| `pow2(n)` | `2^0` through `2^(n-1)`, at most the 64 powers that fit a `u64` | `pow2(6)` → 1, 2, 4, 8, 16, 32 | not applicable | `min(n, 64)` |
+| `fib(n)` | the first `n` Fibonacci numbers, starting `1, 1`; `n` is at most 93 | `fib(8)` → 1, 1, 2, 3, 5, 8, 13, 21 | not applicable | `n` |
+| `fib_until(max)` | the Fibonacci numbers up to `max`, starting `1, 1` | `fib_until(50)` → 1, 1, 2, 3, 5, 8, 13, 21, 34 | `max` is yielded when it is a Fibonacci number | the number of terms up to `max`; 0 for `max` 0; 93 for `max` `u64::MAX` |
+| `pow2(n)` | `2^0` through `2^(n-1)`; `n` is at most 64 | `pow2(6)` → 1, 2, 4, 8, 16, 32 | not applicable | `n` |
 | `pow2_until(max)` | the powers of two up to `max` | `pow2_until(100)` → 1, 2, 4, 8, 16, 32, 64 | `max` is yielded when it is a power of two | `floor(log2(max)) + 1`; 0 for `max` 0 |
-| `binomial(n)` | row `n` of Pascal's triangle, `C(n, 0)` through `C(n, n)`; the row stops before its first coefficient past `u64::MAX`, which cuts every row past 67 | `binomial(4)` → 1, 4, 6, 4, 1 | both `C(n, 0)` and `C(n, n)` for `n` up to 67 | `n + 1` for `n` up to 67, fewer after |
-| `geometric(start, factor, n)` | `n` floats `start · factor^i`, for any `factor`, including zero and negative ones | `geometric(1, 10, 4)` → 1, 10, 100, 1000 | not applicable | `n` |
-| `geometric_until(start, factor, max)` | the floats `start · factor^i` up to `max`; nothing when `factor ≤ 1`, `start ≤ 0`, or `max ≤ 0` | `geometric_until(1, 10, 1000)` → 1, 10, 100, 1000 | `max` is yielded when a term equals it | the number of terms up to `max` |
+| `binomial(n)` | row `n` of Pascal's triangle, `C(n, 0)` through `C(n, n)`; `n` is at most 67 | `binomial(4)` → 1, 4, 6, 4, 1 | both `C(n, 0)` and `C(n, n)` | `n + 1` |
+| `geometric(start, factor, n)` | `n` floats `start · factor^i`; `factor` is positive and finite | `geometric(1, 10, 4)` → 1, 10, 100, 1000 | not applicable | `n` |
+| `geometric_until(start, factor, max)` | the floats `start · factor^i` up to `max`; `factor` is finite and greater than 1; nothing when `start ≤ 0` | `geometric_until(1, 10, 1000)` → 1, 10, 100, 1000 | `max` is yielded when a term equals it | the number of terms up to `max` |
 | `linear_starts(start, end, n)` | the starts of `n` equal steps from `start` to `end`: `start + i · (end − start) / n` | `linear_starts(0, 1, 4)` → 0, 0.25, 0.5, 0.75 | `start` included, `end` excluded | `n` |
-| `linear_steps(start, end, n)` | `n` evenly spaced floats from `start` to `end`: `start + i · (end − start) / (n − 1)`; `n` = 1 yields `start` | `linear_steps(0, 1, 4)` → 0, 1/3, 2/3, 1 | both included | `n` |
-| `log_steps(start, end, n)` | `n` floats evenly spaced in logarithm from `start` to `end`; `n` = 1 yields `start` | `log_steps(1, 1000, 4)` → 1, 9.999999999999998, 99.99999999999996, 999.9999999999998 | both included, to floating-point rounding | `n` |
+| `linear_steps(start, end, n)` | `n` evenly spaced floats from `start` to `end`: `start + i · (end − start) / (n − 1)`, with the last term `end` itself; `n` = 1 yields `start` | `linear_steps(0, 1, 4)` → 0, 1/3, 2/3, 1 | both included, exactly as given | `n` |
+| `log_steps(start, end, n)` | `n` floats evenly spaced in logarithm from `start` to `end`: the first term is `start` and the last is `end`, each exactly as given, and the terms between are `exp` of evenly spaced logarithms; `start` and `end` are positive; `n` = 1 yields `start` | `log_steps(1, 1000, 4)` → 1, 9.999999999999998, 99.99999999999996, 1000 | both included, exactly as given | `n` |
 
 `fib`, `fib_until`, `pow2`, `pow2_until`, and `binomial` yield
-integers; the other five yield floats. A `start` greater than `end`
-yields a descending sequence (`linear_starts(1, 0, 4)` → 1, 0.75,
-0.5, 0.25). A count of 0 yields nothing, and the clause is empty.
+integers of type `u64`; the other five yield floats of type `f64`. A
+generator integer above `i64::MAX` is a `u64` on every surface: the
+compile's literal of it is unsigned (§10.7.7), and a stream dispenses
+it as `U64`. A `start` greater than `end` yields a descending sequence
+(`linear_starts(1, 0, 4)` → 1, 0.75, 0.5, 0.25). A count of 0 yields
+nothing, and the clause is empty.
+
+The limits of `fib`, `pow2`, and `binomial` are where their terms
+leave `u64`. Term 93 of the Fibonacci sequence,
+12200160415121876738, is the largest that fits, and term 94 is past
+`u64::MAX`. The 64 powers `2^0` through `2^63` fit, and term 65,
+`2^64`, does not. Every coefficient of rows 0 through 67 fits, and row
+68 is the first with one past `u64::MAX`, `C(68, 31)`. A call past its
+limit is refused, never cut short or saturated.
 
 A call with no free names is evaluated at compile (§10.7.7), so its
 clause reports `Bounded(count)` with the count the table gives. A
 call whose arguments interpolate a coordinate or another name is
 `Unbounded` until the scope that binds the name evaluates it.
 
-A call is an error, reported where it is evaluated, when:
+A call is an error when:
 
 - it has the wrong number of arguments (`fib(n): expected 1 argument,
   got 2`);
@@ -279,14 +290,30 @@ A call is an error, reported where it is evaluated, when:
   (`fib.n: expected non-negative integer, got '-1'`), or another
   argument is not a number (`geometric.start: expected numeric, got
   'a'`);
-- the count cannot be allocated (`fib(99999999999999)`);
-- a bound of `log_steps` is zero or negative (`log_steps: bounds must
-  be positive`).
+- a term passes `u64::MAX`, naming the call, its first term past
+  `u64::MAX`, and the largest valid argument (`fib(94): term 94 is past
+  u64::MAX; fib.n is at most 93`, `pow2(65): term 65, 2^64, is past
+  u64::MAX; pow2.n is at most 64`, `binomial(70): term C(70, 28) is past
+  u64::MAX; binomial.n is at most 67`);
+- the `factor` of `geometric` is zero, negative, or not finite
+  (`geometric.factor: expected a positive, finite number, got 0`);
+- the `factor` of `geometric_until` is 1 or less, or not finite
+  (`geometric_until.factor: expected a finite number greater than 1,
+  got 1`);
+- a bound of `log_steps` is zero or negative (`log_steps.start:
+  expected a positive number, got 0`);
+- the count cannot be allocated (`geometric(1, 2, 99999999999999)`).
 
-A context-free call that fails at compile is kept as written, so its
-error is reported when a stream or traversal over it opens.
-[Illustrations](../tutorials/illustrations.md), "Named generators",
-runs every generator and one failing call.
+When the error is reported depends on where the arguments come from. A
+call whose arguments are constants once the compile's scope has
+interpolated them is evaluated when the comprehension compiles, and a
+failure is a compile error of the statement that holds it, naming the
+call and its argument; a call nested in another source call
+(`concat(1..3, pow2(65))`) is checked the same way. A call whose
+arguments interpolate a coordinate, a wire, or an extern is evaluated
+when the stream or traversal over it opens, and its error is reported
+then. [Illustrations](../tutorials/illustrations.md), "Named
+generators", runs every generator and two failing calls.
 
 #### 3.1.4 Bare identifiers are references; parse-bake vs. eval-defer
 
@@ -2789,7 +2816,10 @@ lowering and by `CompiledComprehension::from_ast`) evaluates every
 context-free generator once, in the empty scope
 (`kernel::interp::NoScope`, charged to the program tree's ledger),
 and rewrites its clause to the `Literal` of the values it produced.
-From there the clause is `Bounded(n)` by construction, so V4 and
+Each value keeps its type in the literal: an integer that fits `i64`
+is `LiteralValue::Int`, and a `u64` above `i64::MAX` is
+`LiteralValue::UInt`, which the traversal binds as `U64` and a stream
+dispenses as `TupleValue::U64`. From there the clause is `Bounded(n)` by construction, so V4 and
 V6 fire at compile against the real shape, the same evaluation
 the runtime would have repeated on every activation happens once,
 and the values are what the traversal binds.
@@ -2807,7 +2837,15 @@ Two cases keep the call:
 A context-free call the compile cannot evaluate (a node call the
 const evaluator does not fold; a tile binds such a call through its
 kernel) is left to the traversal, whose error it is if that cannot
-evaluate it either. A context-required call is untouched: its
+evaluate it either. A named generator (§3.1.3) is the exception: its
+values depend on its arguments alone, so a context-free call of one
+that refuses its arguments, alone or nested in another source call,
+fails at every evaluation, and the `for` lowering reports the refusal
+as the compile error of its statement
+(`flatten::first_refused_generator`). The scope-less compile
+(`CompiledComprehension::from_ast`) refuses every context-free call
+that fails, named generator or not, with `SourceFailed`. A
+context-required call is untouched: its
 cardinality is `Unbounded` until the traversal evaluates it in the scope that
 binds its names, exactly as §10.7.0 describes.
 

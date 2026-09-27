@@ -392,6 +392,13 @@ pub fn resolve_source_with(
     // §10.7.0): a generator that references no name is evaluated here,
     // charged to the program tree, and traversed as a literal.
     let comprehension = flatten_static_sources(&comprehension, scope);
+    // A named generator whose arguments resolve here and which refuses
+    // them is the compile's error (comprehension_forms.md §3.1.3).
+    if let Some((_, message)) =
+        crate::iteration::comprehension::flatten::first_refused_generator(&comprehension, scope)
+    {
+        return Err(at(&message));
+    }
     // Validation is a stage of the compile (comprehension_forms.md §5):
     // a comprehension that violates a V-axiom is refused at the
     // statement that names it, whether written inline or derived.
@@ -471,7 +478,7 @@ fn source_type(
             let mut ty: Option<PortType> = None;
             for v in values {
                 let t = match v {
-                    LiteralValue::Int(_) => PortType::U64,
+                    LiteralValue::Int(_) | LiteralValue::UInt(_) => PortType::U64,
                     LiteralValue::Float(_) => PortType::F64,
                     LiteralValue::String(_) => PortType::Str,
                     LiteralValue::Bool(_) => PortType::Bool,
@@ -503,6 +510,15 @@ fn source_type(
                 || head.ends_with(".partitions")
             {
                 return Ok(PortType::Ext);
+            }
+            // A named generator's values have its own type, whatever
+            // its arguments (comprehension_forms.md §3.1.3).
+            if let Some(g) = crate::iteration::comprehension::eval::NamedGenerator::of_call(head) {
+                return Ok(if g.yields_integers() {
+                    PortType::U64
+                } else {
+                    PortType::F64
+                });
             }
             probe(head)
                 .map_err(|e| format!("element '{name}': cannot type generator `{head}`: {e}"))

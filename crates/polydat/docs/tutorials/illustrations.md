@@ -469,9 +469,15 @@ This example binds each generator as a producer and prints the
 cardinality the producer reports and the values it yields:
 
 ```rust
-for call in ["fib(8)", "fib_until(50)", /* ... */ "log_steps(0, 10, 3)"] {
+for call in ["fib(8)", "fib_until(50)", /* ... */ "log_steps(0, 10, 3)", "fib(94)"] {
     let src = format!("input cycle: u64\ns := for x in {call}\n");
-    let mut kernel = polydat::dsl::compile_polydat_kernel(&src).expect("compile failed");
+    let mut kernel = match polydat::dsl::compile_polydat_kernel(&src) {
+        Ok(kernel) => kernel,
+        Err(e) => {
+            println!("{call:<30} error: {e}");
+            continue;
+        }
+    };
     kernel.set_inputs(&[0]);
     let value = kernel.pull("s");
     let producer = value.as_streamer().expect("a producer");
@@ -489,16 +495,18 @@ geometric(1, 10, 4)            Bounded(4)  1, 10, 100, 1000
 geometric_until(1, 10, 1000)   Bounded(4)  1, 10, 100, 1000
 linear_starts(0, 1, 4)         Bounded(4)  0, 0.25, 0.5, 0.75
 linear_steps(0, 1, 4)          Bounded(4)  0, 0.3333333333333333, 0.6666666666666666, 1
-log_steps(1, 1000, 4)          Bounded(4)  1, 9.999999999999998, 99.99999999999996, 999.9999999999998
-log_steps(0, 10, 3)            error: clause 'x' cannot be evaluated: source 'x in log_steps(0, 10, 3)': parse error in 'log_steps(0, 10, 3)': log_steps: bounds must be positive, got start=0, end=10
+log_steps(1, 1000, 4)          Bounded(4)  1, 9.999999999999998, 99.99999999999996, 1000
+log_steps(0, 10, 3)            error: `for x in log_steps(0, 10, 3)` at line 2, col 6: log_steps.start: expected a positive number, got 0
+fib(94)                        error: `for x in fib(94)` at line 2, col 6: fib(94): term 94 is past u64::MAX; fib.n is at most 93
 ```
 
 `linear_starts` yields the start of each of `n` equal steps and never
 reaches `end`, while `linear_steps` places `n` points with both ends
-included. A call with literal arguments is evaluated once, at compile,
-so its cardinality is exact. A call whose arguments are out of range
-compiles and fails when its stream opens. Every generator's arguments,
-ends, count, and errors are listed in
+included, each end exactly as given. A call with literal arguments is
+evaluated once, at compile, so its cardinality is exact, and a call
+whose arguments are out of range, or whose terms pass `u64::MAX`, is a
+compile error naming the call and the argument. Every generator's
+arguments, limits, ends, count, and errors are listed in
 [Comprehension Forms](../design/comprehension_forms.md) §3.1.3. See
 [`examples/named_generators.rs`](../../examples/named_generators.rs).
 

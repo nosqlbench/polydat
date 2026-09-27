@@ -323,7 +323,7 @@ fn source_kind(source: &Source) -> Option<ValueKind> {
         Source::ContinuousInterval { .. } | Source::Distribution { .. } => Some(ValueKind::Float),
         Source::Literal { values } => {
             let kind = |v: &LiteralValue| match v {
-                LiteralValue::Int(_) => Some(ValueKind::Int),
+                LiteralValue::Int(_) | LiteralValue::UInt(_) => Some(ValueKind::Int),
                 LiteralValue::Float(_) => Some(ValueKind::Float),
                 LiteralValue::String(_) => Some(ValueKind::Str),
                 LiteralValue::Bool(_) => Some(ValueKind::Bool),

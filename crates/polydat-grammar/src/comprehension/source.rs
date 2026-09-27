@@ -114,6 +114,11 @@ pub enum Source {
 pub enum LiteralValue {
     /// An integer.
     Int(i64),
+    /// An integer above `i64::MAX`, which only a `u64` holds. An
+    /// integer that fits `i64` is `Int`, so every integer has one
+    /// form ([`LiteralValue::unsigned`]). After `Int`, so an untagged
+    /// read takes an integer as `Int` when it fits.
+    UInt(u64),
     /// A float.
     Float(f64),
     /// A string.
@@ -125,6 +130,17 @@ pub enum LiteralValue {
     /// declared `json`. Last, so an untagged read tries the scalar
     /// forms first.
     Json(serde_json::Value),
+}
+
+impl LiteralValue {
+    /// The literal of an unsigned integer: `Int` when it fits `i64`,
+    /// `UInt` above.
+    pub fn unsigned(n: u64) -> Self {
+        match i64::try_from(n) {
+            Ok(n) => LiteralValue::Int(n),
+            Err(_) => LiteralValue::UInt(n),
+        }
+    }
 }
 
 impl Source {
@@ -243,6 +259,30 @@ mod tests {
             ],
         };
         assert!(matches!(s.cardinality(), CardinalityClass::Bounded(3)));
+    }
+
+    /// An integer has one literal form, `Int` up to `i64::MAX` and
+    /// `UInt` above, and its serialized form reads back as that form.
+    #[test]
+    fn an_unsigned_literal_keeps_its_value_through_serde() {
+        assert_eq!(
+            LiteralValue::unsigned(i64::MAX as u64),
+            LiteralValue::Int(i64::MAX)
+        );
+        assert_eq!(
+            LiteralValue::unsigned(u64::MAX),
+            LiteralValue::UInt(u64::MAX)
+        );
+        for v in [
+            LiteralValue::Int(-3),
+            LiteralValue::Int(i64::MAX),
+            LiteralValue::UInt(1 << 63),
+            LiteralValue::UInt(u64::MAX),
+        ] {
+            let json = serde_json::to_string(&v).unwrap();
+            let back: LiteralValue = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, v, "{json}");
+        }
     }
 
     #[test]

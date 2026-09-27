@@ -19,6 +19,11 @@
 //! the comprehension binds, or a name `scope` does not resolve, is
 //! left for the traversal, where the runtime's scope binds those
 //! names.
+//!
+//! A named generator's values depend on its arguments alone, so a
+//! context-free call of one that refuses its arguments fails at every
+//! evaluation. [`first_refused_generator`] finds such a call for the
+//! compile to report as its error (comprehension_forms.md §3.1.3).
 
 use std::collections::BTreeSet;
 
@@ -92,11 +97,7 @@ fn flatten_source(
     let Source::Generator { expr, .. } = source else {
         return source.clone();
     };
-    let references = source.referenced_names();
-    let context_required = references
-        .iter()
-        .any(|n| bound.contains(n) || scope.lookup(n).is_none());
-    if context_required {
+    if context_required(source, scope, bound) {
         return source.clone();
     }
     let ctx = EvalContext {
@@ -130,10 +131,59 @@ fn flatten_source(
     }
 }
 
+/// Whether `source` references a coordinate the comprehension binds or
+/// a name `scope` does not resolve.
+fn context_required(source: &Source, scope: &dyn Lookup, bound: &BTreeSet<String>) -> bool {
+    source
+        .referenced_names()
+        .iter()
+        .any(|n| bound.contains(n) || scope.lookup(n).is_none())
+}
+
+/// The first clause of `ast` whose source calls a named generator that
+/// refuses its arguments, with the refusal, when every name the source
+/// references resolves in `scope` (comprehension_forms.md §3.1.3). Such
+/// a call fails wherever it is evaluated, so a compile that flattens
+/// against `scope` reports it as its own error rather than keeping the
+/// call for the traversal. A source that references a coordinate the
+/// comprehension binds, or a name `scope` does not resolve, is checked
+/// when the traversal evaluates it.
+pub fn first_refused_generator(
+    ast: &Comprehension,
+    scope: &dyn Lookup,
+) -> Option<(String, String)> {
+    let bound: BTreeSet<String> = ast.coordinate_names().into_iter().collect();
+    refused_in(ast, scope, &bound)
+}
+
+fn refused_in(
+    c: &Comprehension,
+    scope: &dyn Lookup,
+    bound: &BTreeSet<String>,
+) -> Option<(String, String)> {
+    match c {
+        Comprehension::Clause { name, source } => match source {
+            Source::Generator { expr, .. } if !context_required(source, scope, bound) => {
+                crate::iteration::comprehension::eval::refused_generator_call(expr, scope)
+                    .map(|message| (name.clone(), message))
+            }
+            _ => None,
+        },
+        Comprehension::Cartesian { children }
+        | Comprehension::Zip { children, .. }
+        | Comprehension::Union { children } => {
+            children.iter().find_map(|c| refused_in(c, scope, bound))
+        }
+        Comprehension::Filter { child, .. } | Comprehension::Order { child, .. } => {
+            refused_in(child, scope, bound)
+        }
+    }
+}
+
 /// The literal a value binds as, when it has a literal form.
 fn literal_of(v: &Value) -> Option<LiteralValue> {
     Some(match v {
-        Value::U64(n) => LiteralValue::Int(i64::try_from(*n).ok()?),
+        Value::U64(n) => LiteralValue::unsigned(*n),
         Value::I64(n) => LiteralValue::Int(*n),
         Value::F64(x) => LiteralValue::Float(*x),
         Value::Bool(b) => LiteralValue::Bool(*b),
@@ -243,5 +293,48 @@ mod tests {
     fn a_call_the_compile_cannot_evaluate_is_left_to_the_traversal() {
         let out = flatten_static_sources(&generator("k", "fib(-1)"), &NoScope::new());
         assert_eq!(out, generator("k", "fib(-1)"));
+    }
+
+    /// A generator value above `i64::MAX` keeps its value as an
+    /// unsigned literal, so the clause is a literal like any other.
+    #[test]
+    fn a_value_above_i64_max_flattens_to_an_unsigned_literal() {
+        let out = flatten_static_sources(&generator("k", "pow2(64)"), &NoScope::new());
+        let Comprehension::Clause {
+            source: Source::Literal { values },
+            ..
+        } = out
+        else {
+            panic!("expected a literal clause, got {out:?}");
+        };
+        assert_eq!(values.len(), 64);
+        assert_eq!(values[62], LiteralValue::Int(1 << 62));
+        assert_eq!(values[63], LiteralValue::UInt(1 << 63));
+    }
+
+    /// A named generator that refuses its arguments is found, by clause,
+    /// when its arguments resolve; one that references a bound
+    /// coordinate or an unresolved name is left for the traversal.
+    #[test]
+    fn a_refused_generator_is_found_when_its_arguments_resolve() {
+        let scope = NoScope::new();
+        let ast = Comprehension::cartesian(vec![
+            generator("a", "fib(3)"),
+            generator("b", "binomial(70)"),
+        ]);
+        let flat = flatten_static_sources(&ast, &scope);
+        let (name, message) = first_refused_generator(&flat, &scope).unwrap();
+        assert_eq!(name, "b");
+        assert!(
+            message.starts_with("binomial(70): term C(70, "),
+            "{message}"
+        );
+        let dependent =
+            Comprehension::cartesian(vec![generator("k", "fib(3)"), generator("j", "fib({k})")]);
+        assert_eq!(first_refused_generator(&dependent, &scope), None);
+        assert_eq!(
+            first_refused_generator(&generator("k", "fib(n)"), &scope),
+            None
+        );
     }
 }

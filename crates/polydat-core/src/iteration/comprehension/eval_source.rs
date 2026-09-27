@@ -331,6 +331,7 @@ fn classify_observed_values(vals: &[Value]) -> IndexFn {
 fn literal_to_value(lv: &LiteralValue) -> Value {
     match lv {
         LiteralValue::Int(n) => Value::U64(*n as u64),
+        LiteralValue::UInt(n) => Value::U64(*n),
         LiteralValue::Float(f) => Value::F64(*f),
         LiteralValue::String(s) => Value::Str(Arc::from(s.as_str())),
         LiteralValue::Bool(b) => Value::Bool(*b),

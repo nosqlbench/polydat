@@ -93,6 +93,8 @@ mod fuzz_tile_syntax;
 mod fuzz_type_adapters;
 #[path = "generator_catalog.rs"]
 mod generator_catalog;
+#[path = "generator_sources.rs"]
+mod generator_sources;
 #[path = "guide_output.rs"]
 mod guide_output;
 #[path = "handle_boundaries.rs"]
