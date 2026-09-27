@@ -340,6 +340,44 @@ fn facet_answer(out: &str, c: u64) -> String {
 
 const FACET_OUTPUTS: [&str; 5] = ["meta", "pred", "meta_n", "meta_of", "pred_of"];
 
+/// A source string into a `Handle` port of a function with a default
+/// resolver compiles to the resolver call (type_system.md §1.8): the
+/// compiled graph holds a `dataset_open` node between the string and
+/// the accessor, reading the string and the facet the accessor names.
+#[test]
+fn a_source_string_compiles_to_the_resolver_call() {
+    use polydat::kernel::WireSource;
+    let src = "input cycle: u64\n\
+               extern source: str\n\
+               meta := metadata_value_at(source, cycle)\n";
+    let kernel = compile_polydat_interpreter(src).unwrap_or_else(|e| panic!("{e}\n{src}"));
+    let program = kernel.program();
+    let find = |name: &str| {
+        (0..program.node_count())
+            .find(|&i| program.node_meta(i).name == name)
+            .unwrap_or_else(|| panic!("the compiled graph has no {name} node"))
+    };
+    let accessor = find("metadata_value_at");
+    let WireSource::NodeOutput(resolver, 0) = program.node_wiring(accessor)[0] else {
+        panic!(
+            "the accessor's handle is not a node output: {:?}",
+            program.node_wiring(accessor)
+        );
+    };
+    assert_eq!(program.node_meta(resolver).name, "dataset_open");
+    let wiring = program.node_wiring(resolver);
+    assert!(
+        matches!(wiring[0], WireSource::Input(i) if program.input_name_by_idx(i) == Some("source")),
+        "the resolver reads the source string: {wiring:?}"
+    );
+    let WireSource::NodeOutput(facet, 0) = wiring[1] else {
+        panic!("the facet is not a node output: {wiring:?}");
+    };
+    let mut out = vec![polydat::ast::Value::None];
+    program.node_ref(facet).eval(&[], &mut out);
+    assert_eq!(out[0].to_display_string(), "metadata_content");
+}
+
 /// The accessors called with the dataset's source string, which
 /// promotes to the facet each one names. The value index wraps modulo
 /// the record count, and the counted values run past every value the

@@ -1,0 +1,5 @@
+error: a const list (`Const<&[C]>` or `Const<Vec<C>>`) does not combine with a variadic `&[T]` wire list; a node's arity is one variadic kind.
+ --> tests/ui/fail/const_list_with_wire_variadic.rs:2:27
+  |
+2 | fn f(xs: &[u64], weights: polydat::derive_support::Const<Vec<u64>>) -> u64 { xs.len() as u64 + weights.len() as u64 }
+  |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

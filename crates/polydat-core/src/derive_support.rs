@@ -57,10 +57,10 @@ use crate::ast::{PortType, ReflectedValue, SliceArc, Value};
 /// at the eval call site. This keeps the trait surface free of
 /// lifetime parameters.
 ///
-/// `extract` panics on type mismatch — the DSL type-checker is
-/// responsible for routing well-typed `Value`s to each slot
-/// before `eval` runs. A panic here is a "type-checker was
-/// lied to" bug, not a normal path.
+/// `extract` panics through [`extract_mismatch`] on a value its
+/// port type does not carry. The compiler's typing routes only
+/// well-typed `Value`s to each slot before `eval` runs, so the
+/// panic marks an internal error, never a workload error.
 pub trait Wire: Sized + 'static {
     /// Static port type for the DSL type-checker.
     const PORT: PortType;
@@ -84,6 +84,22 @@ pub trait Wire: Sized + 'static {
 
     /// Push a typed value back into the `Value` outputs stream.
     fn inject(self) -> Value;
+}
+
+/// The failure of a [`Wire::extract`] handed a value of a type its port
+/// does not carry. The compiler's typing routes only values of a port's
+/// type to that port, so reaching this is an internal error rather than
+/// a workload error. The message names the wire's Rust type, the port
+/// type, and the type of the value received; the engine that catches
+/// the panic adds the failing node's name (engines.md §3.4).
+#[cold]
+#[inline(never)]
+pub fn extract_mismatch(wire: &str, expected: PortType, got: &Value) -> ! {
+    panic!(
+        "Wire<{wire}>::extract: expected {expected}, got {}; the compiler's \
+         typing admits only {expected} to this port, so this is an internal error",
+        got.type_name()
+    )
 }
 
 // ── Scalar primitives ─────────────────────────────────────────
@@ -284,10 +300,7 @@ impl Wire for bool {
         match v {
             Value::Bool(b) => *b,
             Value::U64(n) => *n != 0,
-            other => panic!(
-                "Wire<bool>::extract: type-checker routed {other:?} \
-                 to a Bool slot"
-            ),
+            other => extract_mismatch("bool", Self::PORT, other),
         }
     }
     fn inject(self) -> Value {
@@ -298,15 +311,13 @@ impl Wire for bool {
 impl Wire for String {
     const PORT: PortType = PortType::Str;
     fn extract(v: &Value) -> Self {
-        // Panic on shape mismatch — the type-checker is
-        // responsible for routing well-typed values to each slot,
-        // and a non-Str input here is a "type system was lied to"
-        // bug, not a coercion opportunity. Nodes that want a
-        // display rendering of an arbitrary `Value` take a
-        // `Value`-typed (PolyWire) arg instead.
+        // A non-Str input is an internal error, not a coercion
+        // opportunity. Nodes that want a display rendering of an
+        // arbitrary `Value` take a `Value`-typed (PolyWire) arg
+        // instead.
         match v {
             Value::Str(s) => s.to_string(),
-            other => panic!("Wire<String>::extract: expected Str, got {other:?}"),
+            other => extract_mismatch("String", Self::PORT, other),
         }
     }
     fn inject(self) -> Value {
@@ -325,7 +336,7 @@ impl Wire for std::sync::Arc<str> {
     fn extract(v: &Value) -> Self {
         match v {
             Value::Str(s) => s.clone(),
-            other => panic!("Wire<Arc<str>>::extract: expected Str, got {other:?}"),
+            other => extract_mismatch("Arc<str>", Self::PORT, other),
         }
     }
     fn inject(self) -> Value {
@@ -343,7 +354,7 @@ impl Wire for std::sync::Arc<dyn std::any::Any + Send + Sync> {
     fn extract(v: &Value) -> Self {
         match v {
             Value::Handle(arc) => arc.clone(),
-            other => panic!("Wire<Arc<dyn Any>>::extract: expected Handle, got {other:?}"),
+            other => extract_mismatch("Arc<dyn Any>", Self::PORT, other),
         }
     }
     fn inject(self) -> Value {
@@ -360,7 +371,7 @@ impl Wire for Box<dyn ReflectedValue> {
     fn extract(v: &Value) -> Self {
         match v {
             Value::Ext(b) => b.clone_reflected(),
-            other => panic!("Wire<Box<dyn ReflectedValue>>::extract: expected Ext, got {other:?}"),
+            other => extract_mismatch("Box<dyn ReflectedValue>", Self::PORT, other),
         }
     }
     fn inject(self) -> Value {
@@ -375,7 +386,7 @@ impl Wire for Arc<[u8]> {
     fn extract(v: &Value) -> Self {
         match v {
             Value::Bytes(b) => b.clone(),
-            other => panic!("Wire<Arc<[u8]>>::extract: expected Bytes, got {other:?}"),
+            other => extract_mismatch("Arc<[u8]>", Self::PORT, other),
         }
     }
     fn inject(self) -> Value {
@@ -388,7 +399,7 @@ impl Wire for Vec<u8> {
     fn extract(v: &Value) -> Self {
         match v {
             Value::Bytes(b) => b.to_vec(),
-            other => panic!("Wire<Vec<u8>>::extract: expected Bytes, got {other:?}"),
+            other => extract_mismatch("Vec<u8>", Self::PORT, other),
         }
     }
     fn inject(self) -> Value {
@@ -403,7 +414,7 @@ impl Wire for Arc<serde_json::Value> {
     fn extract(v: &Value) -> Self {
         match v {
             Value::Json(j) => j.clone(),
-            other => panic!("Wire<Arc<Json>>::extract: expected Json, got {other:?}"),
+            other => extract_mismatch("Arc<Json>", Self::PORT, other),
         }
     }
     fn inject(self) -> Value {
@@ -420,15 +431,10 @@ macro_rules! impl_wire_vec {
             fn extract(v: &Value) -> Self {
                 match v {
                     Value::$variant(arc) => arc.clone(),
-                    other => panic!(
-                        concat!(
-                            "Wire<SliceArc<",
-                            stringify!($elem),
-                            ">>::extract: expected ",
-                            stringify!($variant),
-                            ", got {:?}"
-                        ),
-                        other
+                    other => extract_mismatch(
+                        concat!("SliceArc<", stringify!($elem), ">"),
+                        Self::PORT,
+                        other,
                     ),
                 }
             }
@@ -442,16 +448,9 @@ macro_rules! impl_wire_vec {
             fn extract(v: &Value) -> Self {
                 match v {
                     Value::$variant(arc) => arc.as_slice().to_vec(),
-                    other => panic!(
-                        concat!(
-                            "Wire<Vec<",
-                            stringify!($elem),
-                            ">>::extract: expected ",
-                            stringify!($variant),
-                            ", got {:?}"
-                        ),
-                        other
-                    ),
+                    other => {
+                        extract_mismatch(concat!("Vec<", stringify!($elem), ">"), Self::PORT, other)
+                    }
                 }
             }
             fn inject(self) -> Value {
@@ -526,7 +525,7 @@ impl<T: ReflectedValue + Clone + 'static> Wire for Ext<T> {
                     ),
                 }
             }
-            other => panic!("Wire<Ext>::extract: expected Ext, got {other:?}"),
+            other => extract_mismatch(std::any::type_name::<Self>(), Self::PORT, other),
         }
     }
     fn inject(self) -> Value {
@@ -700,7 +699,7 @@ impl<R: ResolverKind, T: 'static + Send + Sync> Wire for Resolved<R, T> {
                  fault when a workload runs on a system whose catalog is \
                  not configured for the source it asks for."
             ),
-            other => panic!("Wire<Resolved>::extract: expected Handle, got {other:?}"),
+            other => extract_mismatch(std::any::type_name::<Self>(), Self::PORT, other),
         }
     }
     fn inject(self) -> Value {

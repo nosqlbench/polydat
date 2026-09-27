@@ -1,0 +1,5 @@
+error: #[poly_const(... from = ... hi ...)] — `hi` is not declared as a `Const<T>` arg in the same function signature.
+ --> tests/ui/fail/poly_const_unknown_source.rs:6:37
+  |
+6 |     #[poly_const(build, from = (lo, hi))] span: &u64,
+  |                                     ^^

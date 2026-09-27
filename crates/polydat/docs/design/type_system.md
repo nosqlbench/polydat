@@ -289,6 +289,36 @@ never in the adapter catalog (§3).
   `Value::as_handle::<T>()`. Each evaluation that reads it costs one
   `Arc::clone` and no allocation.
 
+<a id="source-string-resolution"></a>
+**Source-string resolution.** A function may declare a default
+resolver for its `Handle` ports (`FuncSig.default_resolver`, set by a
+`Resolved<R, T>` argument). When a `Str` wire feeds a `Handle` port of
+such a function, the compiler rewrites the call at compile time so the
+string passes through the resolver, and the resolver node is part of
+the compiled graph like any other node. A facet resolver names the
+facet the port reads, so
+
+```polydat
+v := metadata_value_at("testdata:default", i)
+```
+
+compiles as
+
+```polydat
+v := metadata_value_at(dataset_open("testdata:default", "metadata_content"), i)
+```
+
+and a group resolver compiles the string into
+`dataset_group_open(<string>)`. The rewrite applies only to this
+pairing. Any other `Str` wire into a `Handle` port is a type error
+(`type mismatch: cannot connect String output to handle input`),
+because the adapter catalog has no conversion into `Handle` (§3). The
+resolvers are the dataset openers of the `vectordata` feature, so a
+build without that feature refuses the program with
+`input '<port>' of '<function>' needs the <resolver> source-string
+resolver, but polydat was built without the 'vectordata' feature`,
+where `<resolver>` reads `Facet("<facet>")` or `Group`.
+
 ---
 
 ## 2. Value — the runtime representation

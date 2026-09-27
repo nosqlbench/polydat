@@ -34,6 +34,11 @@ use crate::dsl::factory::ConstArg;
 /// constraint before `build_node` constructs the node. All variants
 /// are `Copy` so `ParamSpec` (and the static `FuncSig` arrays that
 /// embed it) stay `Copy`.
+///
+/// The library catalog (`library_catalog.md`, "Parameter resolution
+/// and validation") lists every variant with what it accepts and its
+/// error text; `tests/constraint_catalog.rs` in the `polydat` crate
+/// fails when a variant has no row there.
 #[derive(Debug, Clone, Copy)]
 pub enum ConstConstraint {
     /// Integer must satisfy `min ≤ v ≤ max`.

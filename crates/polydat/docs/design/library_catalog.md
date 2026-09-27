@@ -1,7 +1,7 @@
 ---
 type: specification
 title: Library Catalog
-timestamp: 2026-09-25
+timestamp: 2026-09-27
 description: What a node is, the authoring contract, cost classes, and why the node registry is open.
 tags: [library]
 ---
@@ -273,6 +273,44 @@ lowerings and dedicated fail helpers. Every engine adds the node, its
 outputs, and its inputs to the message through the shared failure
 contract ([Engines](engines.md)).
 
+A node's constant arguments are validated before the node exists. A
+parameter declares one constraint with `#[constraint(<variant>)]`, which
+names a variant of `ConstConstraint`
+(`polydat-core/src/dsl/const_constraints.rs`). When the factory builds a
+node, it checks every constant argument against its parameter's
+constraint, then runs the node's `validate` function, and only then
+constructs the node. A violation fails the build with the message
+`bad constant <function>: <error>`, where `<error>` is the variant's
+error text below with `<param>` replaced by the parameter's name. The
+constraint vocabulary is the following set, and every variant of the
+enum has a row here:
+
+| Constraint | Accepts | Error text |
+|---|---|---|
+| `RangeU64 { min, max }` | An integer `v` with `min <= v <= max`. | `<param> must be in [<min>, <max>], got <v>` |
+| `RangeF64 { min, max }` | A float `v` with `min <= v <= max`; NaN is rejected. | `<param> must be in [<min>, <max>], got <v>` |
+| `AllowedU64(set)` | An integer in the closed set, such as a radix in `[2, 8, 10, 16]`. | `<param> must be one of <set>, got <v>` |
+| `NonZeroU64` | Any integer except zero, as a divisor or modulus needs. | `<param> must be non-zero` |
+| `NonEmptyStr` | A string with at least one character that is not whitespace. | `<param> must be non-empty` |
+| `StrParser(f)` | A string the function `f: fn(&str) -> Result<(), String>` accepts, for a structured spec such as `"v1:w1;v2:w2"`. | `<param>: <message f returned>` |
+| `PositiveFiniteF64` | A finite float greater than zero. | `<param> must be a positive finite f64, got <v>` |
+| `FiniteF64` | Any float except NaN and the infinities. | `<param> must be a finite f64, got <v>` |
+
+For example, `n_of` declares its denominator
+`#[constraint(RangeU64 { min: 1, max: 65536 })] m: Const<u64>`, so
+`n_of(cycle, 1, 0)` fails with
+`bad constant n_of: m must be in [1, 65536], got 0`.
+
+The same set constrains wire ports. A `#[constraint(...)]` on a wire
+argument lands on the node's input port, and under `strict_values` the
+compiler inserts an `AssertValue` node in front of every constrained
+port whose source it cannot prove satisfies the constraint
+([Graph Compiler](graph_compiler.md) §2, "Strict-wire assertions"). The
+assertion checks each value as it arrives with the same variant, and a
+violation panics with `<assertion>: <error>`, where `<param>` reads
+`value` and `<assertion>` is the node's name, such as
+`assert_u64_range`.
+
 <a id="partition-values"></a>
 ### Partition values
 
@@ -338,7 +376,7 @@ the kit plans):
 | `Option<T>` | A carrier that may be `None` on the interpreter; a compiled slot never carries `None`, so the closure reads `Some` and the kernel's `None` mask skips the step (see [Compiled By-Reference Slots](compiled_handles.md) §5). |
 | `Ext<T>` | A host-defined value carried opaquely as `Value::Ext`. |
 | `Config<T>` | A carrier declared a configuration wire (`WIRE_COST = Config`). |
-| `Resolved<R, T>` | A value supplied by the default resolver `R` (`FuncSig.default_resolver`, read from `Wire::RESOLVER`) when the workload names none. |
+| `Resolved<R, T>` | A value supplied by the default resolver `R` (`FuncSig.default_resolver`, read from `Wire::RESOLVER`) when the workload names none: a `Str` wire into the port compiles to the resolver call ([Type System](type_system.md#source-string-resolution) §1.8). |
 
 **Return shapes:** a single `T: Wire`; a tuple with
 `output_names(...)` naming each element; `Value` (polymorphic);
@@ -347,6 +385,50 @@ construction from the node's one `Const<Vec<C>>` argument);
 `Result<T, E>` (a fallible body over const arguments
 only, run once at construction, whose cached value every evaluation
 returns).
+
+**Shape rules.** The macro reads six rules from a signature. It
+refuses a signature that breaks one with a compile error naming the
+argument, and each refusal has a case under `tests/ui/fail/`.
+
+1. **None acceptance.** An `Option<T>` or `Value` argument marks the
+   node as accepting None inputs (`accepts_none_inputs`), so the
+   kernel hands a `None` to the body rather than skipping the step.
+   `fn this_or(primary: Option<u64>, default: u64) -> u64` receives
+   `primary = None` and returns `default`.
+2. **Wire variadics.** A node declares at most two `&[T]` arguments.
+   One is a variadic wire list. Two are split halves: the call writes
+   one list, its first half binds to the first argument and its second
+   half to the second, and `variadic_min` counts pairs, so the
+   registry's `min_wires` is twice it. `fn pick(selectors: &[bool],
+   values: &[Value]) -> Value` with `variadic_min = 1` takes
+   `pick(b0, b1, v0, v1)` and needs at least two wires.
+3. **Const lists.** A `Const<&[C]>` or `Const<Vec<C>>` argument is a
+   const variadic (`Arity::VariadicConsts`) that takes the tail of the
+   constant arguments. A node has at most one, no scalar `Const<T>`
+   follows it, and it cannot appear with a `&[T]` wire variadic,
+   because a node's arity is one variadic kind.
+   `fn is_one_of(input: u64, allowed: Const<&[u64]>) -> u64` takes
+   `is_one_of(cycle, 3, 5, 8)`.
+4. **Multi-source setup.** `#[poly_const(path, from = (a, b, c))]`
+   computes the setup once at construction as `path(a, b, c)`, and
+   every name in the tuple is a `Const` argument of the same function.
+   `csv_field` declares
+   `#[poly_const(read_csv_column, from = (filename, column))] values:
+   &Vec<String>`, so the column is read once from its two constants.
+5. **Decomposition.** `decompose = path` emits the node's
+   `FusedNode::decomposed` as a call to `path(&self)`, which returns
+   the graph of nodes the fused form stands for. `weighted_pick`
+   declares `decompose = weighted_pick_decompose`, which rebuilds it
+   as the equivalent `weighted_u64`.
+6. **Extraction.** An owned argument is read through `Wire::extract`,
+   which panics on a value its port type does not carry. The
+   compiler's typing routes only values of a port's type to that
+   port, so the panic is an internal invariant that a typed program
+   never reaches. Its message names the argument's Rust type, the port
+   type, and the type received, and the engine's failure report adds
+   the node's name ([Engines](engines.md) §3.4), as in
+   ``Wire<String>::extract: expected String, got u64; … ↳ in node
+   `<node>` ``.
 
 **Attributes.** Registration: `category = <FuncCategory>` (required),
 `struct_name = <Ident>`. Semantics:

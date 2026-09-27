@@ -37,6 +37,8 @@ mod body_carrier;
 mod compile_events;
 #[path = "const_init.rs"]
 mod const_init;
+#[path = "constraint_catalog.rs"]
+mod constraint_catalog;
 #[path = "core_with_library.rs"]
 mod core_with_library;
 #[path = "cursor_tiers.rs"]

@@ -135,7 +135,8 @@ impl Compiler {
                     {
                         let _ = &resolver_name;
                         return Err(format!(
-                            "input '{}' needs the {resolver:?} source-string                              resolver, but polydat was built without the                              'vectordata' feature",
+                            "input '{}' of '{func_name}' needs the {resolver:?} source-string \
+                             resolver, but polydat was built without the 'vectordata' feature",
                             port.name
                         ));
                     }

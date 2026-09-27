@@ -1446,3 +1446,132 @@ fn a_kit_is_told_which_engine_it_is_built_for() {
         );
     }
 }
+
+/// An owned `String` argument, read through `Wire::extract`.
+#[polydat::polydat_node(category = String)]
+fn macro_pilot_owned_len(text: String) -> u64 {
+    text.len() as u64
+}
+
+/// A node that declares a `Str` output and writes a `u64`: the one way
+/// a value of the wrong type reaches a port, since the compiler types
+/// every wire it builds.
+struct DeclaresStrWritesU64 {
+    meta: polydat::ast::NodeMeta,
+}
+
+impl DeclaresStrWritesU64 {
+    fn new() -> Self {
+        Self {
+            meta: polydat::ast::NodeMeta {
+                name: "declares_str_writes_u64".into(),
+                ins: vec![Slot::Wire(polydat::ast::Port::new("n", PortType::U64))],
+                outs: vec![polydat::ast::Port::new("output", PortType::Str)],
+            },
+        }
+    }
+}
+
+impl PolydatNode for DeclaresStrWritesU64 {
+    fn meta(&self) -> &polydat::ast::NodeMeta {
+        &self.meta
+    }
+    fn eval(&self, inputs: &[Value], outputs: &mut [Value]) {
+        outputs[0] = inputs[0].clone();
+    }
+}
+
+/// `Wire::extract` handed a value its port does not carry fails as an
+/// internal error, and the failure names the node, the port type, and
+/// the type of the value received.
+#[test]
+fn an_extract_mismatch_names_the_node_and_both_types() {
+    use polydat::compile::assembly::{PolydatAssembler, WireRef};
+    let mut asm = PolydatAssembler::new(vec!["cycle".into()]);
+    asm.add_node(
+        "liar",
+        Box::new(DeclaresStrWritesU64::new()),
+        vec![WireRef::input("cycle")],
+    );
+    asm.add_node(
+        "len",
+        Box::new(MacroPilotOwnedLen::new()),
+        vec![WireRef::node("liar")],
+    );
+    asm.add_output("out", WireRef::node("len"));
+    let mut kernel = asm
+        .compile_with(polydat::Engine::Interpreter(polydat::JitMode::Off))
+        .expect("the graph builds");
+    kernel.set_inputs(&[7]);
+    let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = kernel.pull("out");
+    }))
+    .expect_err("a u64 in a Str port fails");
+    let message = payload
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
+        .unwrap_or_default();
+    for part in [
+        "macro_pilot_owned_len",
+        "Wire<String>::extract: expected String, got u64",
+        "internal error",
+    ] {
+        assert!(message.contains(part), "lacks {part:?}:\n{message}");
+    }
+}
+
+/// A raw `Handle` argument: no default resolver.
+#[polydat::polydat_node(category = Diagnostic)]
+fn macro_pilot_handle_probe(handle: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> u64 {
+    std::sync::Arc::strong_count(&handle) as u64
+}
+
+/// A `Str` wire into a `Handle` port of a function with no default
+/// resolver is a type error (type_system.md §1.8).
+#[test]
+fn a_string_into_a_handle_port_without_a_resolver_is_a_type_error() {
+    let src = "extern source: str\nout := macro_pilot_handle_probe(source)\n";
+    let err = match polydat::dsl::compile::compile_polydat_to_assembler(src)
+        .map_err(|e| e.to_string())
+        .and_then(|asm| {
+            asm.compile_with(polydat::Engine::Interpreter(polydat::JitMode::Off))
+                .map_err(|e| e.to_string())
+        }) {
+        Ok(_) => panic!("a Str wire into a Handle port builds"),
+        Err(e) => e,
+    };
+    assert!(
+        err.contains("type mismatch: cannot connect String output to handle input"),
+        "the error names both types: {err}"
+    );
+}
+
+/// A `Handle` argument whose default resolver opens the dataset group.
+#[polydat::polydat_node(category = Diagnostic)]
+fn macro_pilot_group_probe(
+    group: polydat::derive_support::Resolved<polydat::derive_support::GroupResolver, u64>,
+) -> u64 {
+    *group
+}
+
+/// The resolvers are dataset openers, so without the `vectordata`
+/// feature a source string into a resolved port fails to compile,
+/// naming the port, the function, and the resolver (type_system.md
+/// §1.8).
+#[cfg(not(feature = "vectordata"))]
+#[test]
+fn a_resolved_port_without_vectordata_names_the_missing_feature() {
+    let src = "extern source: str\nout := macro_pilot_group_probe(source)\n";
+    let err = match polydat::dsl::compile::compile_polydat_to_assembler(src) {
+        Ok(_) => panic!("the resolver splice builds without vectordata"),
+        Err(e) => e.to_string(),
+    };
+    assert!(
+        err.contains(
+            "input 'group' of 'macro_pilot_group_probe' needs the Group source-string \
+             resolver, but polydat was built without the 'vectordata' feature"
+        ),
+        "{err}"
+    );
+}

@@ -1962,6 +1962,29 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
         }
     }
 
+    // Every name a setup's `from = ...` lists is a const argument of
+    // the same function: the setup runs at construction, when only
+    // the consts are known.
+    for a in &args {
+        let ArgKind::Setup(spec) = &a.kind else {
+            continue;
+        };
+        for src in &spec.source_args {
+            let is_const = args.iter().any(|c| {
+                c.name == *src && matches!(c.kind, ArgKind::Const(_) | ArgKind::ConstVec(..))
+            });
+            if !is_const {
+                return Err(syn::Error::new(
+                    src.span(),
+                    format!(
+                        "#[poly_const(... from = ... {src} ...)] — `{src}` is not \
+                         declared as a `Const<T>` arg in the same function signature."
+                    ),
+                ));
+            }
+        }
+    }
+
     // Map a bare wire-arg type to a PortType expression.
     //
     // The canonical answer is `<#ty as Wire>::PORT` —
@@ -2523,6 +2546,20 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
             &func.sig,
             "`#[polydat_node]` supports at most two variadic `&[T]` args (split-halves shape). \
              Functions declaring more than two are not expressible in any `#[polydat_node]` shape.",
+        ));
+    }
+    // A node's arity is either a wire list or a const list: the
+    // registry's `Arity` names one, and each list takes the tail of
+    // its own argument kind.
+    if has_variadic
+        && let Some(list) = args
+            .iter()
+            .find(|a| matches!(a.kind, ArgKind::ConstVec(..)))
+    {
+        return Err(syn::Error::new_spanned(
+            &list.declared_ty,
+            "a const list (`Const<&[C]>` or `Const<Vec<C>>`) does not combine with \
+             a variadic `&[T]` wire list; a node's arity is one variadic kind.",
         ));
     }
     let is_split_halves = variadic_count == 2;
