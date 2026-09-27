@@ -549,10 +549,14 @@ A child that mentions all four gets them as follows:
 
 This is the value-copy, cell, and transit classification of
 CF3, applied to the parent's binding kinds. T1 and T2
-(type-checked slots) are enforced as each input is filled: the
-input's declared `PortType` is checked against the parent
-binding's value type, and a value copy that does not match goes
-through the boundary adapter catalog (T2).
+(type-checked slots) are enforced as each input is filled. A
+value copy whose type differs from the input's declared
+`PortType` is converted through the boundary adapter catalog
+(T2) and then written under the same rule as a host write
+([evaluation_model.md](evaluation_model.md)). A value the catalog
+cannot convert to the declared type is refused, and binding fails
+with `KernelError::Write`, naming the input, the value's type, the
+declared type, and that the value came from the parent.
 
 ---
 
