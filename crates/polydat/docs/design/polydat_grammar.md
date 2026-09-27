@@ -414,17 +414,25 @@ does not change it until the host calls `Kernel::init`
 <a id="sec-modifier-combos"></a>
 ### 5.1 Valid and rejected combinations
 
-`shared const` and `shared volatile` are valid combinations. The
-combination **`const volatile` is rejected at parse time** (the two are
-contradictory: one evaluates once per kernel, the other at every read),
-as is a **duplicate modifier**. A `const` whose expression reads a
+`shared volatile` is a valid combination. Two combinations are
+**rejected at parse time** because their modifiers contradict each
+other. `const volatile` pairs a value evaluated once per kernel with one
+evaluated at every read. `shared const` pairs a value fixed for the
+kernel's life with a register that other scopes write. A **duplicate
+modifier** is rejected as well. A `const` whose expression reads a
 volatile wire or a nondeterministic node is valid: it captures that
 value once, at initialization.
 
+A `shared` binding's starting value may be any expression that reads no
+coordinate. The declaring scope evaluates it once, at initialization,
+and a scope that attaches to the register does not evaluate it again
+([Scope Model](scope_model.md) §6).
+
 ```text
-const volatile x := 1    # REJECTED: contradictory modifiers
-const const y := 2       # REJECTED: duplicate modifier
-shared const z := 100    # OK: a shared cell whose initial value folds
+const volatile x := 1       # REJECTED: contradictory modifiers
+const const y := 2          # REJECTED: duplicate modifier
+shared const z := 100       # REJECTED: contradictory modifiers
+shared w := hash(42) % 10   # OK: starting value computed at initialization
 ```
 
 > There are no `init` or `final` modifiers; `const` covers both roles,
