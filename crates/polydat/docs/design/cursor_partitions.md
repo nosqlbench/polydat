@@ -360,9 +360,14 @@ The built-in factories both rewind:
 | `RangeSourceFactory`, for `range(a, b)` | The cursor returns to `a`, and the round serves `[a, b)` again. The cursor is the factory's only shared state and every reservation is one atomic add on it, so the rewind is a single atomic store in the same modification order as the reservations. |
 | `ExtendingRangeSourceFactory`, for the `until_*` constructors | The cursor returns to the start, and the end returns to the start plus the base chunk, capped by the partition bound `max_end` when `over` narrows the cursor. The extension policy grows the end again as the round reaches it. The rewind and every decision to extend or end the round run under the factory's round lock, and the rewind writes the end before the cursor, so no reader acts on a partly rewound pair. A reservation below the end takes no lock. |
 
-An extension policy reads the elapsed time from the factory's construction,
-and a rewind does not reset that baseline. A time-based policy whose time has
-run out therefore ends every later round at the base chunk.
+An extension policy reads the elapsed time from the start of the current
+round: the factory's construction for the first round, and the latest
+`rewind_for_poll()` for every round after it. The rewind resets this baseline
+under the round lock, together with the cursor and the end, and every reader
+of the factory measures from the same baseline. A time-based policy therefore
+grows each round as it grew the first: `until_elapsed(64, 40)` extends past
+its base chunk of 64 ordinals for 40 ms after the factory is built, and again
+for 40 ms after each rewind.
 
 ## 9. Error policy
 

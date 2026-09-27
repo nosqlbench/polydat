@@ -522,8 +522,9 @@ impl DataSource for RangeSource {
 /// clocks or counters.
 #[derive(Clone, Copy, Debug)]
 pub struct ExtensionContext {
-    /// Wall-clock milliseconds since the source factory was
-    /// constructed (typically phase start).
+    /// Wall-clock milliseconds since the current round started: the
+    /// source factory's construction (typically phase start) for the
+    /// first round, and the latest `rewind_for_poll()` after that.
     pub elapsed_ms: u64,
     /// Global ordinals consumed so far — `cursor.load() - start`.
     /// Pass count is `consumed / base`.
@@ -584,12 +585,49 @@ pub struct ExtendingRangeSourceFactory {
     /// exhausted, whichever comes first. `None` = unbounded
     /// (the policy alone decides).
     max_end: Option<u64>,
-    /// Wall-clock baseline. Captured at factory construction
-    /// so per-phase factories yield per-phase elapsed numbers
-    /// without external clock plumbing.
-    started: std::time::Instant,
+    /// The round's wall-clock baseline, which every reader of the
+    /// factory shares ([`RoundClock`]).
+    clock: RoundClock,
     policy: Arc<dyn ExtensionPolicy>,
     schema: SourceSchema,
+}
+
+/// The wall-clock baseline an extension policy's elapsed time is
+/// measured from. The baseline is the start of the current round:
+/// the factory's construction for the first round, and each
+/// `rewind_for_poll()` for the rounds after it. It is written and
+/// read under the factory's round lock, so every reader of the
+/// factory measures from the same instant.
+#[derive(Clone)]
+struct RoundClock {
+    /// The instant the factory was constructed.
+    epoch: std::time::Instant,
+    /// Nanoseconds from `epoch` to the start of the current round.
+    round_start_ns: Arc<AtomicU64>,
+}
+
+impl RoundClock {
+    fn new() -> Self {
+        Self {
+            epoch: std::time::Instant::now(),
+            round_start_ns: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    fn now_ns(&self) -> u64 {
+        u64::try_from(self.epoch.elapsed().as_nanos()).unwrap_or(u64::MAX)
+    }
+
+    /// Start a new round at the current instant.
+    fn restart(&self) {
+        self.round_start_ns.store(self.now_ns(), Ordering::Relaxed);
+    }
+
+    /// Whole milliseconds since the current round started.
+    fn elapsed_ms(&self) -> u64 {
+        let start = self.round_start_ns.load(Ordering::Relaxed);
+        self.now_ns().saturating_sub(start) / 1_000_000
+    }
 }
 
 impl ExtendingRangeSourceFactory {
@@ -611,7 +649,7 @@ impl ExtendingRangeSourceFactory {
             start,
             base: initial_extent,
             max_end: None,
-            started: std::time::Instant::now(),
+            clock: RoundClock::new(),
             policy,
             schema: SourceSchema {
                 name: name.to_string(),
@@ -648,7 +686,7 @@ impl DataSourceFactory for ExtendingRangeSourceFactory {
             start: self.start,
             base: self.base,
             max_end: self.max_end,
-            started: self.started,
+            clock: self.clock.clone(),
             consumed: 0,
             schema: self.schema.clone(),
         })
@@ -670,8 +708,10 @@ impl DataSourceFactory for ExtendingRangeSourceFactory {
 
     fn rewind_for_poll(&self) -> bool {
         // A new round starts over: the end at the base chunk, capped by
-        // a partition bound (`max_end`), and the cursor at the start.
-        // Under the round lock no reader extends the end meanwhile. The
+        // a partition bound (`max_end`), the cursor at the start, and
+        // the policy's elapsed time at zero, so the round extends as
+        // the first one did. Under the round lock no reader extends
+        // the end or reads the clock meanwhile. The
         // end is written before the cursor, and the cursor with
         // release, so a reader whose acquire load sees the new cursor
         // also sees the new end; a reader that still sees the old
@@ -684,6 +724,7 @@ impl DataSourceFactory for ExtendingRangeSourceFactory {
         if let Some(cap) = self.max_end {
             end = end.min(cap);
         }
+        self.clock.restart();
         self.end.store(end, Ordering::Relaxed);
         self.cursor.store(self.start, Ordering::Release);
         true
@@ -712,7 +753,7 @@ struct ExtendingRangeSource {
     /// Partition cap — see
     /// [`ExtendingRangeSourceFactory::bounded`].
     max_end: Option<u64>,
-    started: std::time::Instant,
+    clock: RoundClock,
     consumed: u64,
     schema: SourceSchema,
 }
@@ -762,7 +803,7 @@ impl DataSource for ExtendingRangeSource {
                 return None;
             }
             let ctx = ExtensionContext {
-                elapsed_ms: self.started.elapsed().as_millis() as u64,
+                elapsed_ms: self.clock.elapsed_ms(),
                 consumed: end.saturating_sub(self.start),
                 base: self.base,
             };
@@ -1863,5 +1904,37 @@ mod rewind_tests {
         )
         .bounded(250);
         rewind_under_concurrent_readers(Arc::new(bounded), 5..250, 7);
+    }
+
+    /// A rewind restarts the policy's elapsed time, so a time-based
+    /// policy grows the second round past the base chunk just as it
+    /// grew the first. The first round runs until its time is spent;
+    /// measured from the factory's construction, the second round
+    /// would start with no time left and end at the base chunk.
+    #[test]
+    fn a_rewind_restarts_the_elapsed_time_of_a_time_based_policy() {
+        const BASE: u64 = 64;
+        let factory = ExtendingRangeSourceFactory::new(
+            "rows",
+            0,
+            BASE,
+            Arc::new(TimeElapsedPolicy::new(BASE, 40)),
+        );
+        fn round(reader: &mut dyn DataSource) -> u64 {
+            let mut claimed = 0u64;
+            while let Some(r) = reader.reserve(BASE as usize) {
+                claimed += r.end - r.start;
+            }
+            claimed
+        }
+        let mut reader = factory.create_reader();
+        let first = round(reader.as_mut());
+        assert!(first > BASE, "the first round ends at the base chunk");
+        assert!(factory.rewind_for_poll());
+        let second = round(reader.as_mut());
+        assert!(
+            second > BASE,
+            "the second round claimed {second} ordinals, only the base chunk"
+        );
     }
 }

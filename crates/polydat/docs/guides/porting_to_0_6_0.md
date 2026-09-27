@@ -395,8 +395,10 @@ a rule the specifications now state and every engine follows.
   count.
 - **Source factories are specified.** `rewind_for_poll` restarts a
   source between polling phases; the range source rewinds to its
-  start, and the extending range to its start and base chunk. A rewind
-  is safe while other threads read the source
+  start, and the extending range to its start and base chunk, with its
+  extension policy's elapsed time restarted, so a time-based policy
+  grows every round as it grew the first. A rewind is safe while other
+  threads read the source
   ([cursor_partitions.md](../design/cursor_partitions.md) §8).
 
 ## Not breaking, though it looks it
@@ -444,8 +446,6 @@ when its change lands.
 
 - Named generators are specified.
 - Local matter inclusion copies a tuple-target statement once.
-- Rewinding an extending source resets its extension policy's
-  elapsed-time baseline.
 
 ## Checklist
 
