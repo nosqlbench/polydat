@@ -335,6 +335,68 @@ fn a_for_body_reads_through_its_parents_accessor() {
     assert_eq!(act.kernel.pull("s"), Value::U64(4));
 }
 
+/// A skeleton with one projection over `k in 0..3` whose body reads
+/// the tree's `session` resource, rendered as text.
+fn resource_skeleton() -> String {
+    use polydat::library::tile_render::{ChildSpec, HoleSource, TileOp, TileSpec};
+    TileSpec {
+        name: "t".into(),
+        encoding: "text".into(),
+        ops: vec![TileOp::Repeat {
+            stream: polydat::iteration::comprehension::StreamerValue::parse_text("k in 0..3")
+                .expect("comprehension")
+                .to_json(),
+            child: 0,
+            sep: ",".into(),
+            body: vec![TileOp::Hole(HoleSource::Child {
+                name: "s".into(),
+                spec: "text|text".into(),
+            })],
+            generators: Vec::new(),
+        }],
+        children: vec![ChildSpec {
+            source: "input cycle: u64\nextern k: u64\ns := host_resource(\"session\")\n".into(),
+            cascade: Vec::new(),
+        }],
+    }
+    .to_json()
+}
+
+/// Every piece of a rendered projection, which is one value per tuple.
+fn pieces(rendered: &str) -> Vec<&str> {
+    assert!(!rendered.is_empty(), "the projection renders its tuples");
+    rendered.split(',').collect()
+}
+
+#[test]
+fn a_tile_loaded_for_a_kernel_reads_its_trees_accessor_and_records_on_its_ledger() {
+    use polydat::library::tile_render::{BodyKernels, TileProgram};
+    let k = interpreter(READS, Some(scope_holding("session", 4)));
+    let before = k.ledger().programs();
+    let tile = TileProgram::from_json_for(&resource_skeleton(), k.as_ref());
+    assert!(
+        k.ledger().programs() > before,
+        "the loaded body's program is recorded on the kernel's ledger"
+    );
+    let rendered = tile.render(&[], &mut BodyKernels::default());
+    assert!(pieces(&rendered).iter().all(|p| *p == "4"), "{rendered}");
+}
+
+#[test]
+fn a_standalone_tile_has_a_tree_of_its_own() {
+    use polydat::library::tile_render::{BodyKernels, TileProgram};
+    let k = interpreter(READS, Some(scope_holding("session", 4)));
+    let before = k.ledger().programs();
+    let tile = TileProgram::from_json(&resource_skeleton());
+    assert_eq!(
+        k.ledger().programs(),
+        before,
+        "no kernel's ledger records it"
+    );
+    let rendered = tile.render(&[], &mut BodyKernels::default());
+    assert!(pieces(&rendered).iter().all(|p| *p == "0"), "{rendered}");
+}
+
 #[test]
 fn every_engine_carries_the_trees_scope_to_its_children() {
     let src = "input cycle: u64\nh := hash(cycle)\nfor k in 1..3 {\n    g := u64_add(k, h)\n}\n";

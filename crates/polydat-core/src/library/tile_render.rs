@@ -458,8 +458,35 @@ impl TileProgram {
     /// The route for a skeleton that reaches the runtime as text — a
     /// host that stored one, a test that wrote one. The compiler's own
     /// path is [`Self::from_parts`], which hands the bodies over
-    /// rather than describing them.
+    /// rather than describing them. A standalone skeleton is a tree of
+    /// its own: its bodies share a fresh compile ledger and resource
+    /// scope. [`Self::from_json_for`] loads one for a kernel's tree.
     pub fn from_json(json: &str) -> Self {
+        Self::from_json_in(
+            json,
+            crate::kernel::CompileLedger::new(),
+            crate::resource::ResourceScope::new(),
+        )
+    }
+
+    /// A program from a serialized skeleton, loaded for `kernel`, the
+    /// kernel that renders it: its projection bodies compile in the
+    /// kernel's tree as an inline tile's bodies do, recording their
+    /// programs on the kernel's [`CompileLedger`](crate::kernel::CompileLedger)
+    /// and reaching the host resources through the kernel's
+    /// [`ResourceScope`](crate::resource::ResourceScope)
+    /// (polytile.md §7.1).
+    pub fn from_json_for(json: &str, kernel: &dyn crate::Kernel) -> Self {
+        Self::from_json_in(json, kernel.ledger().clone(), kernel.resources().clone())
+    }
+
+    /// A program from a serialized skeleton whose bodies belong to the
+    /// tree of `ledger` and `resources`.
+    fn from_json_in(
+        json: &str,
+        ledger: Arc<crate::kernel::CompileLedger>,
+        resources: crate::resource::ResourceScope,
+    ) -> Self {
         let spec: TileSpec = serde_json::from_str(json)
             .unwrap_or_else(|e| panic!("tile_render: malformed skeleton payload: {e}"));
         let name = spec.name.clone();
@@ -469,9 +496,11 @@ impl TileProgram {
             .enumerate()
             .map(|(i, c)| {
                 Arc::new(
-                    crate::dsl::traversal::BodySource::from_source(
+                    crate::dsl::traversal::BodySource::from_source_in(
                         &c.source,
                         &format!("tile '{name}' :: projection body {i}"),
+                        ledger.clone(),
+                        resources.clone(),
                     )
                     .unwrap_or_else(|e| {
                         panic!(

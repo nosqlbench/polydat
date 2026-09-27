@@ -687,6 +687,17 @@ by the skeleton's bytes: two identical tiles in different programs have
 separate tile programs, and each program's bodies are compiled under
 that program's own settings.
 
+**Skeletons loaded from text.** A host that holds a skeleton as text
+(`TileSpec::to_json`) rebuilds the tile program from it, and each
+projection body compiles from the source the skeleton carries, under
+the default settings. A skeleton loaded for a kernel
+(`TileProgram::from_json_for`) belongs to that kernel's tree, as an
+inline tile's bodies do: its bodies' nodes reach the host resources
+through the kernel's resource scope, and every program built for them
+is recorded on the kernel's compile ledger. A skeleton loaded
+standalone (`TileProgram::from_json`) is a tree of its own, with a
+fresh resource scope and a fresh ledger that its bodies share.
+
 ### 7.2 Tiers
 
 The tiers differ only in how the hole values arrive and where the

@@ -152,8 +152,27 @@ impl BodySource {
     /// The route for a body that reaches the runtime as text rather
     /// than from the compiler that lowered it — a tile skeleton's
     /// projection body, which travels in the `tile_render` node's
-    /// serialized spec. `context_label` names it in a diagnostic.
+    /// serialized spec. `context_label` names it in a diagnostic. The
+    /// body is a tree of its own, with a fresh compile ledger and
+    /// resource scope.
     pub fn from_source(source: &str, context_label: &str) -> Result<Self, String> {
+        Self::from_source_in(
+            source,
+            context_label,
+            crate::kernel::CompileLedger::new(),
+            crate::resource::ResourceScope::new(),
+        )
+    }
+
+    /// A body from its source text, under the default settings, in the
+    /// tree that `ledger` and `resources` belong to: its programs record
+    /// on that ledger, and its nodes reach that scope.
+    pub(crate) fn from_source_in(
+        source: &str,
+        context_label: &str,
+        ledger: Arc<crate::kernel::CompileLedger>,
+        resources: crate::resource::ResourceScope,
+    ) -> Result<Self, String> {
         let tokens = super::lexer::lex(source)?;
         let file = super::parser::parse(tokens)?;
         Ok(BodySource {
@@ -167,8 +186,8 @@ impl BodySource {
             pragmas: super::pragmas::PragmaSet::default(),
             modules: HashMap::new(),
             programs: Mutex::new(HashMap::new()),
-            ledger: Arc::new(crate::kernel::CompileLedger::default()),
-            resources: crate::resource::ResourceScope::new(),
+            ledger,
+            resources,
         })
     }
 }
