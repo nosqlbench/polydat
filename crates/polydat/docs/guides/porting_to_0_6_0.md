@@ -56,6 +56,11 @@ The release makes three things true that a host builds on:
 | New variants: `KernelError::ConstInit`, `AssemblyError::ConstInit`, `AssemblyError::NativeCone`, `WriteError::ConstSlot`, `WriteError::FromParent`, `ContractViolation::Bind`, `RuntimeError::ZipLengthMismatch`, `ValidationError::PredicateContextRequired`, `InputKind::Const` | an exhaustive `match` on any of these enums (E0004) | add the arm or a wildcard |
 | The node types `SessionStartMillis` and `ElapsedMillis` are removed | code that named them | a const capture; see the next table |
 | `polydat_grammar::PragmaSet` loses its `parent` field, `attach_to`, and `PragmaConflict` | code that chained pragma sets by hand | `PragmaSet::nested` builds a nested scope's set from its enclosing one ([polydat_grammar.md](../design/polydat_grammar.md) §14.1) |
+| `NodeBuildFn` takes a `&BuildContext` first: `fn(&BuildContext, &str, &[WireRef], &[PortType], &[ConstArg])`, and `build_node` takes it first too | a host factory function or a direct `build_node` call | add the parameter; read the enclosing binding from `ctx.binding()` (or `ctx.bindings()`, outermost first) and host resources from `ctx.resources()` ([library_catalog.md](../design/library_catalog.md), "Host-registered nodes") |
+| `dsl::factory::compile_ctx` (`current_binding`, `scoped_binding`, `BindingScope`) is removed | a factory that read the binding it was built for | `ctx.binding()` on the `BuildContext` it receives, which is correct under nesting and across threads |
+| `RESOURCE_ACCESSOR` and `resource_lookup(key)` are removed | a host that installed a process-wide accessor, and a node that looked resources up | install the accessor per kernel tree with `CompileOptions::resources` or `kernel.resources().install(acc)`; a node keeps `ctx.resources().clone()` and calls `.lookup(key)` when it evaluates |
+| `CompileOptions` gains the field `resources: Option<ResourceScope>` | a `CompileOptions { … }` literal that names every field | add `resources: None`, or build from `CompileOptions::default()` |
+| `ScopedExpr::set` returns `Result<&mut Self, WriteError>` | a chained or ignored call | handle the error: an unknown name, a coordinate, or a value that does not convert is now refused as `set_input` refuses it ([polydat_grammar_programmatic.md](../design/polydat_grammar_programmatic.md) §11) |
 | `#[polydat_node]` refuses a signature that mixes a const list (`Const<Vec<C>>`) with a wire variadic (`&[T]`), and an unknown `from = (…)` setup source | a host node written that way, which the macro accepted before | split it into two nodes, or pass the constants as individual `Const` arguments ([library_catalog.md](../design/library_catalog.md), "Shapes") |
 
 A healing write becomes a conversion the host asks for:
@@ -116,6 +121,8 @@ returns it again on every later `advance`.
 | `is_stable` takes a window: `is_stable(samples: vec_f64, margin, min_samples)` | the 0.5.0 form `is_stable(value, margin, min_samples, horizon)` | keep the recent samples in the host and pass them, for example as JSON through `str_to_vec_f64` ([evaluation_model.md](../design/evaluation_model.md), "Non-Deterministic Nodes") |
 | A predicate compiled without a scope may name only what its tuples bind | a coordinate stream whose `where` names an enclosing wire, now `ValidationError::PredicateContextRequired` | traverse it with `for`, which captures those names when it opens |
 | `order reverse_lex` over a filter is refused on streams, as it was on traversals | a stream of such an order (V4) | order before filtering, or use `lex` ([comprehension_forms.md](../design/comprehension_forms.md) §5, V4) |
+| A non-Lex order over a truncated `lex` order is refused at compile | `order(order(c, lex, 10), halton, 3)`, which was accepted before; a truncated order has no position function to select from | apply the non-Lex order first, or truncate after it ([comprehension_forms.md](../design/comprehension_forms.md) §5, V4) |
+| V6's bound check reads every zip operand, including one inside a wrapper | a zip whose unbounded operand was hidden by a rewrite and accepted | bound the operand, or use a cycle zip ([comprehension_forms.md](../design/comprehension_forms.md) §5, V6) |
 | Under `pragma strict_values`, a constant that violates the constraint of the port it feeds fails the build | a program such as `mod_wire(cycle, 0)`, which compiled before because a constant source was skipped unchecked | pass a value the constraint accepts; the error names the port, the constraint, and the constant ([graph_compiler.md](../design/graph_compiler.md) §2.3) |
 
 ## Part 2: what changes quietly
@@ -261,9 +268,12 @@ a rule the specifications now state and every engine follows.
   Outside predicates nothing changes: in an ordinary expression `!` is
   bitwise NOT and `&&` and `||` evaluate both sides
   ([polydat_grammar.md](../design/polydat_grammar.md) §6.3, §7).
-- **A bare word in a predicate is one identifier.** `{region} == us-east`
-  parses as `us - east`; quote it: `{region} == "us-east"`. Bare words
-  without a hyphen, such as `load`, still compare as text.
+- **A bare word in a predicate is a name.** Predicates follow the rest of
+  the language: text is quoted. `{region} == us-east` parses as
+  `us - east`, and the error for the unresolved names suggests quoting
+  it: `{region} == "us-east"`. A bare word without a hyphen, such as
+  `load`, is a name too, and no longer compares as text
+  ([polydat_grammar.md](../design/polydat_grammar.md) §16.2).
 - **A stream evaluates predicates and orders as a traversal does.**
   `"s0" != 2` holds on a stream, a predicate that calls a function
   filters instead of passing every tuple, and an order over a continuous
@@ -299,6 +309,27 @@ a rule the specifications now state and every engine follows.
   product
   ([for_traversal.md](../design/for_traversal.md) §5.2, "Opening
   cost").
+- **An order over a filter ranks the survivors.** A non-Lex order over
+  a filter is accepted on every path. The strategy ranks the tuples the
+  filter keeps, by their positions in the unfiltered input, and keeps n
+  of them, so `extrema/1` yields the most extreme surviving stratum and
+  `halton/n` yields n survivors when that many exist. 0.5.0 refused it
+  on traversals and selected before filtering on streams
+  ([comprehension_forms.md](../design/comprehension_forms.md) §5, V5;
+  §11.2).
+- **An order over an order folds only when the outer order ignores
+  sequence.** `order(order(c, shuffle), halton, 3)` means
+  `order(c, halton, 3)`, since halton selects from the input's shape;
+  `lex/2` after `shuffle` runs both orders and keeps the first two
+  shuffled tuples. The optimizer dropped the inner order in both cases
+  before ([comprehension_forms.md](../design/comprehension_forms.md)
+  §7.4, O1).
+- **Acceptance is decided on the comprehension as written.** Validity
+  rules run before any optimizer rewrite, so a stream and a traversal of
+  the same text accept and refuse the same programs, and a filter moves
+  toward its sources only when its predicate cannot fail on the values
+  it would newly see ([comprehension_forms.md](../design/comprehension_forms.md)
+  §5, §7).
 
 ### Pragmas
 
@@ -314,6 +345,20 @@ a rule the specifications now state and every engine follows.
   nondeterministic or volatile source, such as `counter()`, gets the
   runtime assertion every other wire gets
   ([graph_compiler.md](../design/graph_compiler.md) §2.3).
+- **A module compiles under its own pragmas only.** A host's
+  `pragma strict_values` no longer checks the bindings or tile bodies of
+  a module that declares no pragma, whether the module is local to the
+  program or loaded from a library; a tile body follows the pragmas of
+  the scope it is written in, as a `for` body does
+  ([module_system.md](../design/module_system.md) §7).
+
+### Program identity
+
+- **`canonical_hash` values change.** The hash is taken before any
+  engine folds or fuses, so one program hashes to one value on all four
+  engines, and it now covers extern defaults and `for` bodies, which it
+  missed. A checkpoint keyed by a 0.5 hash does not match; re-key it
+  ([scope_model.md](../design/scope_model.md) §8).
 
 ### Release requirements
 
@@ -376,14 +421,20 @@ a rule the specifications now state and every engine follows.
   names the node. The compiler's typing keeps it from firing; only the
   text of a report changes.
 
+- **`Kernel` and `KernelProgram` gained `resources` and
+  `canonical_hash`.** Both traits are sealed, so only callers see the
+  change, and they gain methods.
+- **A typed extern built through `ScopedExpr` defaults to its own
+  type's zero.** `extern_wire_typed` gave a `str` or `bool` extern an
+  integer default, which failed to compile; `u64`, `f64`, `str`, and
+  `bool` externs now default to their own zero, and other types have no
+  default.
+
 ## Known issues
 
 - **The known issue of 0.5.0 is resolved.** The scope binder no longer
   converts a copy into a declared input, and the write-through commit no
   longer widens a numeric type.
-- **`ScopedExpr::set` ignores a value it cannot write.** A name the
-  expression does not read, a coordinate, and a value that does not
-  convert are dropped without an error.
 
 ## Pending for 0.6.0
 
@@ -391,15 +442,10 @@ a rule the specifications now state and every engine follows.
 this guide was written against. Each bullet is completed, or removed,
 when its change lands.
 
-- Optimizer rules: O1 restricted, validation before rewrite, R5 pushdown
-  only for total predicates, and an order over a filter ranks the
-  survivors.
-- Binding attribution moves from `compile_ctx::current_binding()` to the
-  construction context.
-- The resource accessor moves from a process global to the kernel tree.
-- `ScopedExpr::set` returns a `Result`.
-- Extern defaults are typed.
 - Named generators are specified.
+- Local matter inclusion copies a tuple-target statement once.
+- Rewinding an extending source resets its extension policy's
+  elapsed-time baseline.
 
 ## Checklist
 
