@@ -209,6 +209,17 @@ impl ConePlan {
         self.unit_of[step] as usize
     }
 
+    /// The unit whose step writes `slot`; `None` for a slot no step
+    /// writes (an input, an extern, or a value folded at build).
+    fn unit_of_slot(&self, slot: usize) -> Option<usize> {
+        let step = self
+            .producer
+            .get(slot)
+            .copied()
+            .filter(|&p| p != usize::MAX)?;
+        Some(self.unit_of[step] as usize)
+    }
+
     /// Every unit, in order.
     pub(super) fn all(&self) -> &[u32] {
         &self.all
@@ -296,10 +307,9 @@ impl Clone for JitCore {
 }
 
 impl JitCore {
-    /// Nothing to mark here: a cell another holder published to is
-    /// handled where the pending write is applied, where the kernels
-    /// mark every step dirty, since the dependents lists do not name a
-    /// cell's readers.
+    /// Nothing to mark here: a bound cell's value arrives at the next
+    /// refresh, which dirties the slot's readers (or every unit, on the
+    /// raw kernel) when it takes the value.
     fn dirty_input(&mut self, _slot: usize) {}
 
     /// The program's identity: the node list, which every kernel created
@@ -308,12 +318,38 @@ impl JitCore {
         std::sync::Arc::as_ptr(&self._nodes) as *const () as usize
     }
 
-    /// The pure tier broadcasts nothing. It is the differential oracle
-    /// behind the hybrid and Tier-1's carrier, not a surface a host
-    /// composes under (engines.md §1, §8), so no descendant binds to
-    /// one of its outputs and it makes no cell to bind to.
-    fn output_cell_for(&self, _name: &str) -> Option<crate::kernel::SharedCell> {
-        None
+    /// The broadcast cell for a named output, created on the first ask,
+    /// as the other compiled engines make theirs. An output whose unit
+    /// has not run in this round starts the cell at `None`, as the
+    /// interpreter's does, until the first pull publishes.
+    fn output_cell_for(&self, name: &str) -> Option<crate::kernel::SharedCell> {
+        let slot = *self.output_map.get(name)?;
+        let uncomputed = self
+            .cones
+            .unit_of_slot(slot)
+            .is_some_and(|u| self.unit_clean[u] == 0);
+        let initial = if uncomputed {
+            crate::ast::Value::None
+        } else {
+            let ty = self
+                .output_types
+                .get(name)
+                .copied()
+                .unwrap_or(crate::ast::PortType::U64);
+            self.slot_value(slot, ty)
+        };
+        Some(self.externs.output_cell(slot, initial))
+    }
+
+    /// Publish the value at `slot` through its broadcast cell, if a
+    /// descendant asked for one. Out of line: only a program composed
+    /// under reaches it, and the pull path keeps only the flag check.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn publish_slot(&self, slot: usize, value: &crate::ast::Value) {
+        if let Some(cell) = self.externs.published_output(slot) {
+            cell.publish(value.clone());
+        }
     }
 
     /// Axiom S2 typed accessor core (borrow ties to `&self`), as the
@@ -437,8 +473,8 @@ impl JitCore {
         });
     }
 
-    /// Every unit is dirty: a new round, or a cell another holder
-    /// published to, whose readers no dependents list names.
+    /// Every unit is dirty: a new round on the raw kernel, which keeps
+    /// no dependents lists.
     pub(super) fn dirty_all_units(&mut self) {
         self.unit_clean.fill(0);
     }
@@ -533,24 +569,24 @@ impl JitCore {
         Ok(())
     }
 
-    /// Run one native evaluation: take what cells other holders
-    /// published, refuse an unset extern (native code cannot carry a
-    /// `None`; engines.md §3.3), run inside the longjmp catch.
+    /// Take what cells other holders published: each changed slot is
+    /// written through, and the slots come back for the caller to dirty
+    /// what reads them. Out of line, as a refresh is rare; the caller
+    /// checks `cells_dirty` first.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn take_refreshed(&mut self) -> Vec<usize> {
+        self.externs.refresh_cells(&mut self.buffer);
+        self.externs.take_changed()
+    }
+
+    /// Run one native evaluation: refuse an unset extern (native code
+    /// cannot carry a `None`; engines.md §3.3), run inside the longjmp
+    /// catch. The caller has taken what cells other holders published.
     #[inline]
     pub(super) fn run(&mut self, native: impl FnOnce()) {
-        if self.externs.cells_dirty() {
-            self.externs.refresh_cells(&mut self.buffer);
-        }
-        if let Some((name, ty)) = self.externs.first_unset() {
-            panic!(
-                "extern '{name}' ({ty}) has no value on the pure native tier, which \
-                 cannot carry a `None`: every step is native code and there is no \
-                 closure to propagate one through. Either it was declared without a \
-                 default and never set, or a host cleared it after the build. Set it \
-                 with set_input before pulling, or run this program on `native`, which \
-                 answers a cleared extern with `None` as the interpreter does \
-                 (docs/design/engines.md §3.3)"
-            );
+        if self.externs.any_unset_read() {
+            self.refuse_unset();
         }
         // Code that calls no helper cannot fail: it runs bare. Otherwise
         // native code names the step it is in before each helper call;
@@ -574,6 +610,25 @@ impl JitCore {
         }
         #[cfg(debug_assertions)]
         self.validate_refs();
+    }
+
+    /// The refusal of a run over an unset extern, naming it.
+    #[cold]
+    #[inline(never)]
+    fn refuse_unset(&self) -> ! {
+        let (name, ty) = self
+            .externs
+            .first_unset()
+            .expect("the unset count names an unset extern");
+        panic!(
+            "extern '{name}' ({ty}) has no value on the pure native tier, which \
+             cannot carry a `None`: every step is native code and there is no \
+             closure to propagate one through. Either it was declared without a \
+             default and never set, or a host cleared it after the build. Set it \
+             with set_input before pulling, or run this program on `native`, which \
+             answers a cleared extern with `None` as the interpreter does \
+             (docs/design/engines.md §3.3)"
+        );
     }
 
     /// The compile-constant fold of the runtime model on this tier: a
@@ -763,7 +818,8 @@ macro_rules! jit_accessors {
 
         /// The named output through the `Kernel` trait: the pending
         /// writes are applied and the output's cone runs, and nothing
-        /// else (engines.md §3.1).
+        /// else (engines.md §3.1). The value is published through the
+        /// output's broadcast cell when a descendant asked for one.
         fn pull_value(&mut self, name: &str) -> crate::ast::Value {
             let slot = self.core.output_map[name];
             let ty = self
@@ -772,13 +828,26 @@ macro_rules! jit_accessors {
                 .get(name)
                 .copied()
                 .unwrap_or(crate::ast::PortType::U64);
-            self.pull_slot(slot, ty)
+            self.pull_publishing(slot, ty)
         }
 
         /// [`Self::pull_value`] by output index, through the index's
         /// slot and type rather than its name.
         fn pull_value_at(&mut self, index: usize) -> crate::ast::Value {
             let (slot, ty) = self.core.output_at(index);
+            self.pull_publishing(slot, ty)
+        }
+
+        /// A pull, then the publish when a descendant is bound. The flag
+        /// is checked before the pull, so a program nobody composed
+        /// under pays one load and holds no value across it.
+        #[inline]
+        fn pull_publishing(&mut self, slot: usize, ty: crate::ast::PortType) -> crate::ast::Value {
+            if self.core.externs.broadcasts() {
+                let value = self.pull_slot(slot, ty);
+                self.core.publish_slot(slot, &value);
+                return value;
+            }
             self.pull_slot(slot, ty)
         }
 
@@ -832,6 +901,7 @@ impl JitKernelRaw {
             self.write_coords(&coords);
             self.core.drive.coords = coords;
             self.core.drive.stale = false;
+            self.refresh_cells();
             self.core.dirty_all_units();
         } else if self.core.has_volatile() {
             self.core.dirty_volatile_units();
@@ -868,8 +938,20 @@ impl JitKernelRaw {
     #[inline]
     pub fn eval(&mut self, coords: &[u64]) {
         self.write_coords(coords);
+        self.refresh_cells();
         self.core.dirty_all_units();
         self.core.run_units(None);
+    }
+
+    /// Take what cells other holders published. Raw keeps no dependents
+    /// lists, and every caller begins a round that dirties every unit,
+    /// so the changed slots are only drained.
+    #[inline]
+    fn refresh_cells(&mut self) {
+        if self.core.externs.cells_dirty() {
+            let changed = self.core.take_refreshed();
+            self.core.externs.return_changed(changed);
+        }
     }
 
     /// Evaluate and return the value at the given buffer slot index.
@@ -953,11 +1035,7 @@ impl JitKernelPushPull {
             self.core.drive.coords = coords;
             self.core.drive.stale = false;
         }
-        // A cell another holder published to is a changed input whose
-        // readers the dependents lists do not name: every unit reruns.
-        if self.core.externs.cells_dirty() {
-            self.core.dirty_all_units();
-        }
+        self.refresh_cells();
         // Every read re-evaluates the volatile units its cone reaches.
         if self.core.has_volatile() {
             self.core.dirty_volatile_units();
@@ -970,8 +1048,28 @@ impl JitKernelPushPull {
     #[inline]
     pub fn eval(&mut self, coords: &[u64]) {
         self.set_inputs(coords);
+        self.refresh_cells();
         self.force_run = false;
         self.core.run_units(None);
+    }
+
+    /// A cell another holder published to is a changed input: take its
+    /// value and dirty the units that read the slot, as a write does.
+    #[inline]
+    fn refresh_cells(&mut self) {
+        if self.core.externs.cells_dirty() {
+            self.dirty_refreshed();
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn dirty_refreshed(&mut self) {
+        let changed = self.core.take_refreshed();
+        for &slot in &changed {
+            self.mark_input_changed(slot);
+        }
+        self.core.externs.return_changed(changed);
     }
 
     /// Evaluate and return the value at the given buffer slot index,
@@ -979,6 +1077,7 @@ impl JitKernelPushPull {
     #[inline]
     pub fn eval_for_slot(&mut self, coords: &[u64], slot: usize) -> u64 {
         self.set_inputs(coords);
+        self.refresh_cells();
         if !self.force_run
             && slot < self.slot_provenance.len()
             && !self.slot_provenance[slot].intersects(&self.changed_mask)

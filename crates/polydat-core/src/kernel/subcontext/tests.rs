@@ -1581,19 +1581,24 @@ fn a_child_follows_its_parents_computed_output() {
 /// can be expressed over `dyn Kernel` without the link silently
 /// becoming a copy on three engines out of four.
 ///
-/// Asked through the trait, on every engine a host composes under. The
-/// pure tier is the differential oracle rather than a host surface and
-/// answers `None`, which is also asserted so that stays deliberate.
+/// Asked through the trait, on all four engines, both provenance modes
+/// of pure native included.
 #[test]
 fn a_computed_output_broadcasts_on_every_engine_a_host_composes_under() {
     use crate::compile::select::{Engine, Provenance};
 
     let src = "input cycle: u64\nseed := hash(cycle)\n";
-    for engine in [
+    let mut engines = vec![
         Engine::Interpreter(crate::JitMode::Off),
         Engine::Closures(Provenance::PushPull),
         Engine::Native(Provenance::PushPull),
-    ] {
+    ];
+    // The pure tier exists only where there is a JIT to build it.
+    if cfg!(feature = "jit") {
+        engines.push(Engine::PureNative(Provenance::PushPull));
+        engines.push(Engine::PureNative(Provenance::Raw));
+    }
+    for engine in engines {
         let mut k = crate::dsl::compile::compile_polydat_with(src, engine)
             .unwrap_or_else(|e| panic!("{engine:?}: {e}"));
         let cell = k
@@ -1617,19 +1622,6 @@ fn a_computed_output_broadcasts_on_every_engine_a_host_composes_under() {
         assert!(
             k.output_cell("no_such_output").is_none(),
             "{engine:?}: a name that is not an output has no cell"
-        );
-    }
-
-    // The pure tier exists only where there is a JIT to build it.
-    #[cfg(feature = "jit")]
-    {
-        let pure = crate::dsl::compile::compile_polydat_to_assembler(src)
-            .unwrap()
-            .compile_slots(Engine::PureNative(Provenance::PushPull))
-            .expect("the pure tier runs this program");
-        assert!(
-            pure.output_cell("seed").is_none(),
-            "the pure tier is not a surface a host composes under"
         );
     }
 }

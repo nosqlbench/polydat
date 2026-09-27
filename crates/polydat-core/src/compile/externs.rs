@@ -64,6 +64,10 @@ pub(crate) struct ExternSlot {
     /// The slot holds a `const` binding's value, which only
     /// initialization writes.
     pub is_const: bool,
+    /// Only initialization reads the slot, from Rust: a const's slot or
+    /// a const's fallback input. Native code reads the rest, so only
+    /// the rest count toward `Externs::unset_read`.
+    pub init_only: bool,
 }
 
 /// The parts of an extern set that only a *composed* program uses:
@@ -130,6 +134,10 @@ pub(crate) struct Externs {
     /// How many buffer slots the coordinates occupy, from slot 0: what
     /// `set_inputs` writes, a word per slot.
     coordinate_slots: u32,
+    /// How many externs that native code reads have no value: kept
+    /// current by every write and cell refresh, so a pure native run
+    /// checks this one count rather than scanning the externs.
+    unset_read: u32,
     /// Per input index, the extern slot it names; `None` for a
     /// coordinate. The index-keyed set (SRD 117 step 3).
     by_index: Vec<Option<usize>>,
@@ -178,6 +186,7 @@ impl Clone for Externs {
             input_names: self.input_names.clone(),
             coordinates: self.coordinates,
             coordinate_slots: self.coordinate_slots,
+            unset_read: self.unset_read,
             by_index: self.by_index.clone(),
             output_names: self.output_names.clone(),
             cursors: self.cursors.clone(),
@@ -238,6 +247,7 @@ impl Externs {
                 cell: None,
                 seen: None,
                 is_const: def.kind == crate::kernel::InputKind::Const,
+                init_only: def.kind == crate::kernel::InputKind::Const,
             });
         }
         let mut externs = Self {
@@ -251,6 +261,7 @@ impl Externs {
                 .take(coord_count)
                 .map(|d| crate::ast::SlotShape::slot_width(&d.port_type))
                 .sum::<usize>() as u32,
+            unset_read: 0,
             by_index,
             output_names: Vec::new(),
             cursors: cursors.to_vec(),
@@ -268,6 +279,7 @@ impl Externs {
                 externs.slots[i].cell = Some(cell);
             }
         }
+        externs.recount_unset();
         // One compiled program of the tree, whichever engine it is on.
         externs.ledger.record();
         Ok(externs)
@@ -513,8 +525,10 @@ impl Externs {
                 continue;
             }
             let (value, revision) = cell.snapshot();
+            let was_unset = s.value == Value::None;
             s.value = value;
             s.seen = Some(revision);
+            self.unset_read = track_unset(self.unset_read, s, was_unset);
             write_through(s, buffer);
             self.changed.push(s.slot);
         }
@@ -561,8 +575,26 @@ impl Externs {
     }
 
     /// Record the const bindings a kernel initializes.
+    /// Marks each const's slot and fallback input as read only by
+    /// initialization.
     pub(crate) fn set_const_inits(&mut self, inits: &[crate::kernel::ConstInit]) {
         self.scope.const_inits = inits.to_vec();
+        for s in &mut self.slots {
+            s.init_only = s.is_const
+                || inits
+                    .iter()
+                    .any(|c| c.slot == s.name || c.fallback.as_deref() == Some(s.name.as_str()));
+        }
+        self.recount_unset();
+    }
+
+    /// Count the unset externs native code reads, from scratch.
+    fn recount_unset(&mut self) {
+        self.unset_read = self
+            .slots
+            .iter()
+            .filter(|s| !s.init_only && s.value == Value::None)
+            .count() as u32;
     }
 
     /// The const bindings a kernel initializes, in dependency order.
@@ -729,25 +761,24 @@ impl Externs {
         self.slots.iter().any(|s| s.value == Value::None)
     }
 
-    /// The name and type of an unset extern, for a native kernel's
-    /// refusal.
-    /// The first extern native code reads that has no value. A const's
-    /// slot and its fallback input are not among them: only
-    /// initialization reads or writes those, from Rust, and every reader
-    /// of the const reads the passthrough of its slot once it is set.
+    /// Whether an extern native code reads has no value: one load, what
+    /// a pure native run checks before it runs.
+    #[cfg(feature = "jit")]
+    #[inline]
+    pub(crate) fn any_unset_read(&self) -> bool {
+        self.unset_read != 0
+    }
+
+    /// The name and type of the first extern native code reads that has
+    /// no value, for a native kernel's refusal. A const's slot and its
+    /// fallback input are not among them: only initialization reads or
+    /// writes those, from Rust, and every reader of the const reads the
+    /// passthrough of its slot once it is set.
     #[cfg(feature = "jit")]
     pub(crate) fn first_unset(&self) -> Option<(&str, PortType)> {
         self.slots
             .iter()
-            .find(|s| {
-                s.value == Value::None
-                    && !s.is_const
-                    && !self
-                        .scope
-                        .const_inits
-                        .iter()
-                        .any(|c| c.fallback.as_deref() == Some(s.name.as_str()))
-            })
+            .find(|s| s.value == Value::None && !s.init_only)
             .map(|s| (s.name.as_str(), s.ty))
     }
 
@@ -818,6 +849,7 @@ impl Externs {
                 got: value.port_type(),
             });
         }
+        let was_unset = s.value == Value::None;
         s.value = value;
         // A `shared` binding's slot writes through its cell, so every
         // holder of the cell reads this value; the revision is this
@@ -827,6 +859,8 @@ impl Externs {
             s.seen = Some(cell.revision.load(std::sync::atomic::Ordering::Acquire));
         }
         write_through(s, buffer);
+        let s = &self.slots[i];
+        self.unset_read = track_unset(self.unset_read, s, was_unset);
         Ok((s.slot, s.value == Value::None))
     }
 
@@ -843,6 +877,7 @@ impl Externs {
             s.seen = None;
             write_through(s, buffer);
         }
+        self.recount_unset();
         self.reseed_cells();
     }
 
@@ -905,6 +940,18 @@ impl Externs {
             .iter()
             .map(|s| (s.name.as_str(), s.reported))
             .collect()
+    }
+}
+
+/// `count`, the unset externs native code reads, after `s` changed from
+/// unset (`was_unset`) or set to what it holds now.
+#[inline]
+fn track_unset(count: u32, s: &ExternSlot, was_unset: bool) -> u32 {
+    let unset = s.value == Value::None;
+    match (s.init_only, was_unset, unset) {
+        (false, false, true) => count + 1,
+        (false, true, false) => count - 1,
+        _ => count,
     }
 }
 
