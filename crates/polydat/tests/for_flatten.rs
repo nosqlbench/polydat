@@ -55,7 +55,7 @@ fn a_producer_over_a_context_free_generator_is_bounded_by_its_values() {
     );
     let mut stream = streamer.coordinate_stream().unwrap();
     let mut n = 0;
-    while stream.advance().is_some() {
+    while stream.advance().unwrap().is_some() {
         n += 1;
     }
     assert_eq!(n, 8);

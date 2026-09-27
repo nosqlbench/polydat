@@ -30,7 +30,7 @@ fn dispense(ast: &Comprehension) -> Vec<Vec<(String, TupleValue)>> {
     let prog = compile(&opt);
     let mut stream = interpret(&prog);
     let mut out = Vec::new();
-    while let Some(t) = stream.advance() {
+    while let Some(t) = stream.advance().unwrap() {
         out.push(t.bindings);
     }
     out
@@ -202,8 +202,8 @@ fn spec_11_9_derived_streamers_independent() {
 
     let s1 = compiled.coordinate_stream();
     let s2 = compiled.coordinate_stream();
-    let tuples1: Vec<_> = s1.collect();
-    let tuples2: Vec<_> = s2.collect();
+    let tuples1: Vec<_> = s1.collect::<Result<_, _>>().unwrap();
+    let tuples2: Vec<_> = s2.collect::<Result<_, _>>().unwrap();
     assert_eq!(tuples1, tuples2);
     assert_eq!(tuples1.len(), 6);
 }

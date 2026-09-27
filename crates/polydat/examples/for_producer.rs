@@ -13,6 +13,7 @@ fn show(label: &str, s: &polydat::iteration::comprehension::StreamerValue) {
         .unwrap()
         .map(|t| {
             let cells: Vec<String> = t
+                .expect("the comprehension dispenses")
                 .bindings
                 .iter()
                 .map(|(_, v)| match v {

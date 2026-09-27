@@ -46,16 +46,16 @@ fn two_coordinate_streams_advance_independently() {
     let mut b = compiled.coordinate_stream();
 
     // Pull 2 from a — b is untouched.
-    a.advance();
-    a.advance();
+    a.advance().unwrap();
+    a.advance().unwrap();
 
     // b still produces the full sequence from the start.
-    let b_tuples: Vec<Tuple> = b.by_ref().collect();
+    let b_tuples: Vec<Tuple> = b.by_ref().collect::<Result<_, _>>().unwrap();
     assert_eq!(b_tuples.len(), 5);
     assert_eq!(b_tuples[0].bindings[0].1, TupleValue::I64(1));
 
     // a continues from where it left off.
-    let a_remaining: Vec<Tuple> = a.collect();
+    let a_remaining: Vec<Tuple> = a.collect::<Result<_, _>>().unwrap();
     assert_eq!(a_remaining.len(), 3);
     assert_eq!(a_remaining[0].bindings[0].1, TupleValue::I64(3));
 }
@@ -69,11 +69,11 @@ fn cross_surface_independence_coord_then_scoped() {
     let mut scoped = compiled.scoped_kernel_stream(parent);
 
     // Drain coord fully — scoped untouched.
-    let coord_tuples: Vec<Tuple> = coord.by_ref().collect();
+    let coord_tuples: Vec<Tuple> = coord.by_ref().collect::<Result<_, _>>().unwrap();
     assert_eq!(coord_tuples.len(), 3);
 
     // Scoped still produces full sequence.
-    let scoped_instances: Vec<_> = scoped.by_ref().collect();
+    let scoped_instances: Vec<_> = scoped.by_ref().collect::<Result<_, _>>().unwrap();
     assert_eq!(scoped_instances.len(), 3);
 }
 
@@ -86,11 +86,11 @@ fn cross_surface_independence_scoped_then_coord() {
     let mut coord = compiled.coordinate_stream();
 
     // Drain scoped first.
-    let scoped_first: Vec<_> = scoped.by_ref().collect();
+    let scoped_first: Vec<_> = scoped.by_ref().collect::<Result<_, _>>().unwrap();
     assert_eq!(scoped_first.len(), 3);
 
     // Coord still produces full sequence.
-    let coord_after: Vec<Tuple> = coord.by_ref().collect();
+    let coord_after: Vec<Tuple> = coord.by_ref().collect::<Result<_, _>>().unwrap();
     assert_eq!(coord_after.len(), 3);
     assert_eq!(coord_after[0].bindings[0].1, TupleValue::I64(10));
 }
@@ -100,8 +100,14 @@ fn scope_once_consistency_with_scoped_stream() {
     let compiled = compile(&clause("k", &[7, 14, 21])).unwrap();
     let parent = MockKernel("p".into());
 
-    let stream_instances: Vec<_> = compiled.scoped_kernel_stream(parent.clone()).collect();
-    let coord_tuples: Vec<Tuple> = compiled.coordinate_stream().collect();
+    let stream_instances: Vec<_> = compiled
+        .scoped_kernel_stream(parent.clone())
+        .collect::<Result<_, _>>()
+        .unwrap();
+    let coord_tuples: Vec<Tuple> = compiled
+        .coordinate_stream()
+        .collect::<Result<_, _>>()
+        .unwrap();
 
     assert_eq!(stream_instances.len(), coord_tuples.len());
     for (stream_inst, tuple) in stream_instances.iter().zip(coord_tuples.iter()) {
@@ -125,7 +131,7 @@ fn ir_sharing_across_many_streamers() {
 
     // Each should produce 6 tuples (3 * 2 cartesian).
     for stream in streams {
-        let tuples: Vec<Tuple> = stream.collect();
+        let tuples: Vec<Tuple> = stream.collect::<Result<_, _>>().unwrap();
         assert_eq!(tuples.len(), 6);
     }
 }
@@ -148,7 +154,7 @@ fn concurrent_pulls_no_data_races() {
         let cc: Arc<CompiledComprehension> = Arc::clone(&compiled);
         let h = thread::spawn(move || {
             let stream = cc.coordinate_stream();
-            let tuples: Vec<Tuple> = stream.collect();
+            let tuples: Vec<Tuple> = stream.collect::<Result<_, _>>().unwrap();
             assert_eq!(tuples.len(), 6);
             tuples
         });
@@ -179,9 +185,13 @@ fn many_streamers_all_produce_identical_sequences() {
     ]))
     .unwrap();
 
-    let s1: Vec<Tuple> = compiled.coordinate_stream().collect();
-    let s2: Vec<Tuple> = compiled.coordinate_stream().collect();
-    let s3: Vec<Tuple> = compiled.coordinate_stream().collect();
+    let all = || -> Vec<Tuple> {
+        compiled
+            .coordinate_stream()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    };
+    let (s1, s2, s3) = (all(), all(), all());
     assert_eq!(s1, s2);
     assert_eq!(s2, s3);
 }
@@ -197,6 +207,6 @@ fn scope_once_does_not_advance_any_cursor() {
     let _ = compiled.scope_once(&parent, &manual_coords);
 
     // Stream cursor untouched — should still produce all 3.
-    let tuples: Vec<Tuple> = stream.by_ref().collect();
+    let tuples: Vec<Tuple> = stream.by_ref().collect::<Result<_, _>>().unwrap();
     assert_eq!(tuples.len(), 3);
 }

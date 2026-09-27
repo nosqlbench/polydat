@@ -140,6 +140,13 @@ pub enum RuntimeError {
     /// The runtime evaluator encountered an algebra-AST shape
     /// it doesn't support (e.g., nested Filter under Order).
     UnsupportedShape(String),
+    /// A strict zip's operands have different lengths. The traversal
+    /// evaluators report it at open; a stream reports it when one
+    /// operand ends before the others, after the tuples before it.
+    ZipLengthMismatch {
+        /// Each operand's tuple count, in operand order.
+        lengths: Vec<u64>,
+    },
 }
 
 impl std::fmt::Display for RuntimeError {
@@ -164,6 +171,9 @@ impl std::fmt::Display for RuntimeError {
                  (V4: per-strategy IndexFn contract; see spec §3.6's strategy table)"
             ),
             RuntimeError::UnsupportedShape(msg) => write!(f, "{msg}"),
+            RuntimeError::ZipLengthMismatch { lengths } => {
+                write!(f, "zip strict: child lengths differ ({lengths:?})")
+            }
         }
     }
 }
@@ -956,9 +966,9 @@ impl EvalState<'_> {
             ZipMode::Strict => {
                 let first = lengths.first().copied().unwrap_or(0);
                 if lengths.iter().any(|&n| n != first) {
-                    return Err(RuntimeError::UnsupportedShape(format!(
-                        "zip strict: child lengths differ ({lengths:?})"
-                    )));
+                    return Err(RuntimeError::ZipLengthMismatch {
+                        lengths: lengths.iter().map(|&n| n as u64).collect(),
+                    });
                 }
                 first
             }
@@ -1477,9 +1487,7 @@ impl EvalState<'_> {
             ZipMode::Strict => {
                 let first = lengths[0];
                 if lengths.iter().any(|&n| n != first) {
-                    return Err(RuntimeError::UnsupportedShape(format!(
-                        "zip strict: child lengths differ ({lengths:?})"
-                    )));
+                    return Err(RuntimeError::ZipLengthMismatch { lengths });
                 }
                 first
             }

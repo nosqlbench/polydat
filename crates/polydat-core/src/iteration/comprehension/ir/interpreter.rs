@@ -25,6 +25,7 @@
 //! computes only the selected tuples (spec §6.2, §10.2 R2).
 
 use crate::iteration::comprehension::metadata::{CycleOperand, IndexFn, cycle_length};
+use crate::iteration::comprehension::runtime::RuntimeError;
 use crate::iteration::comprehension::source::{LiteralValue, Source};
 use crate::iteration::comprehension::strategies::{Selection, Tuple, TupleValue};
 use crate::iteration::comprehension::strategy::{StrategyName, ZipMode};
@@ -32,11 +33,14 @@ use crate::iteration::comprehension::strategy::{StrategyName, ZipMode};
 use super::op::{Op, OrderStreamingKind};
 use super::program::Program;
 
-/// A lazy tuple stream — `advance` returns the next tuple or
-/// `None` when the stream is exhausted.
+/// A lazy tuple stream — `advance` returns the next tuple, `None`
+/// when the stream is exhausted, or the error it found, at the point
+/// it finds it: a strict zip whose operands end apart fails after the
+/// tuples before the mismatch.
 pub trait TupleStream {
-    /// The next tuple, or `None` once the stream is exhausted.
-    fn advance(&mut self) -> Option<Tuple>;
+    /// The next tuple, `None` once the stream is exhausted, or the
+    /// error that ends it.
+    fn advance(&mut self) -> Result<Option<Tuple>, RuntimeError>;
 
     /// Restart at the first tuple: the stream dispenses the same
     /// tuples again, keeping whatever it built the first time.
@@ -192,10 +196,12 @@ impl ClauseStream {
 }
 
 impl TupleStream for ClauseStream {
-    fn advance(&mut self) -> Option<Tuple> {
-        let t = self.tuple_at(self.pos)?;
-        self.pos += 1;
-        Some(t)
+    fn advance(&mut self) -> Result<Option<Tuple>, RuntimeError> {
+        let t = self.tuple_at(self.pos);
+        if t.is_some() {
+            self.pos += 1;
+        }
+        Ok(t)
     }
 
     fn rewind(&mut self) {
@@ -263,8 +269,11 @@ struct CartesianStream {
     /// Cursor positions for axes 1..N.
     cursors: Vec<usize>,
     /// True once we've initialized — first advance() needs to
-    /// cache children 1..N and pull initial child 0.
+    /// cache children 1..N.
     initialized: bool,
+    /// True when axis 0's next value is still to be pulled: at the
+    /// start and after a rewind.
+    pull_a0: bool,
     done: bool,
 }
 
@@ -288,29 +297,28 @@ impl CartesianStream {
             current_a0: None,
             cursors: vec![0; n.saturating_sub(1)],
             initialized: false,
+            pull_a0: true,
             done: false,
         }
     }
 
-    fn initialize(&mut self) {
-        if self.children.is_empty() {
-            self.done = true;
-            return;
-        }
-        // Cache all children 1..N to exhaustion.
+    /// Cache children 1..N to exhaustion, in order, stopping at the
+    /// first empty one: the product is empty, and the axes after it are
+    /// never evaluated, as in the traversal.
+    fn initialize(&mut self) -> Result<(), RuntimeError> {
+        self.cached.clear();
         for i in 1..self.children.len() {
             let mut v = Vec::new();
-            while let Some(t) = self.children[i].advance() {
+            while let Some(t) = self.children[i].advance()? {
                 v.push(t);
             }
+            let empty = v.is_empty();
             self.cached.push(v);
+            if empty {
+                break;
+            }
         }
-        // Pull first axis 0 value.
-        self.current_a0 = self.children[0].advance();
-        if self.current_a0.is_none() || self.cached.iter().any(|v| v.is_empty()) {
-            // Any empty axis → empty cartesian.
-            self.done = true;
-        }
+        Ok(())
     }
 }
 
@@ -345,22 +353,48 @@ impl TupleStream for CartesianStream {
         }
         self.children[0].rewind();
         self.cursors.iter_mut().for_each(|c| *c = 0);
-        self.current_a0 = self.children[0].advance();
-        self.done = self.current_a0.is_none() || self.cached.iter().any(|v| v.is_empty());
+        self.current_a0 = None;
+        self.pull_a0 = true;
+        self.done = false;
     }
 
-    fn advance(&mut self) -> Option<Tuple> {
+    fn advance(&mut self) -> Result<Option<Tuple>, RuntimeError> {
         if self.lens.is_some() {
-            let t = self.tuple_at(self.pos)?;
-            self.pos += 1;
-            return Some(t);
+            let t = self.tuple_at(self.pos);
+            if t.is_some() {
+                self.pos += 1;
+            }
+            return Ok(t);
         }
         if !self.initialized {
-            self.initialize();
+            // The first axis is pulled before the later axes are
+            // cached: with no first value the product is empty and the
+            // later axes are never evaluated, as in the traversal.
+            if self.children.is_empty() {
+                self.done = true;
+            } else {
+                self.current_a0 = self.children[0].advance()?;
+                self.pull_a0 = false;
+                if self.current_a0.is_none() {
+                    self.done = true;
+                } else {
+                    self.initialize()?;
+                    self.done = self.cached.iter().any(|v| v.is_empty());
+                }
+            }
             self.initialized = true;
         }
         if self.done {
-            return None;
+            return Ok(None);
+        }
+        if self.pull_a0 {
+            self.current_a0 = self.children[0].advance()?;
+            self.pull_a0 = false;
+            if self.current_a0.is_none() || self.cached.iter().any(|v| v.is_empty()) {
+                // Any empty axis → empty cartesian.
+                self.done = true;
+                return Ok(None);
+            }
         }
         // Compose current cursor + current axis-0 value.
         let mut out = Tuple::new();
@@ -388,20 +422,22 @@ impl TupleStream for CartesianStream {
             self.cursors[i] = 0;
         }
         if overflow {
-            // Advance axis 0.
-            self.current_a0 = self.children[0].advance();
-            if self.current_a0.is_none() {
-                self.done = true;
-            }
+            // Axis 0 advances on the next pull, which reports the end
+            // or an error at that point.
+            self.pull_a0 = true;
         }
-        Some(out)
+        Ok(Some(out))
     }
 }
 
 // ---- ZipStream ----
 
 /// Lockstep over N child streams. Strict and Truncate pull one tuple
-/// from each child and stop when any child runs out. Cycle runs to its
+/// from each child. Truncate stops when any child runs out; Strict
+/// stops when every child runs out together, and when one runs out
+/// before another it fails with the operands' lengths, the error the
+/// traversal evaluators give at open, after the tuples before the
+/// mismatch. Cycle runs to its
 /// longest operand and holds each operand as its plan says
 /// ([`CycleOperand`]): an indexed operand is read at `i mod |operand|`,
 /// a buffered one is drained once and replayed, and the streamed one
@@ -422,10 +458,13 @@ struct ZipStream {
     streamed_len: Option<u64>,
     /// The longest indexed or buffered operand's length.
     known_len: u64,
-    /// Under Cycle, the position of the next tuple.
+    /// Under Strict and Cycle, the position of the next tuple.
     step: u64,
     /// Under Cycle, an indexed or buffered operand was found empty.
     empty: bool,
+    /// Under Strict, the length mismatch found, returned again on
+    /// every later pull until a rewind.
+    failed: Option<RuntimeError>,
     initialized: bool,
     done: bool,
 }
@@ -452,6 +491,7 @@ impl ZipStream {
             known_len: 0,
             step: 0,
             empty: false,
+            failed: None,
             initialized: false,
             done: false,
         }
@@ -464,7 +504,7 @@ impl ZipStream {
     /// indexed operands' lengths are checked first and the buffered
     /// operands are drained in ascending bound, stopping at the first
     /// empty one before any other is held.
-    fn initialize_cycle(&mut self) {
+    fn initialize_cycle(&mut self) -> Result<(), RuntimeError> {
         let planned = self.plan.len() == self.children.len();
         let mut holds: Vec<Option<Hold>> = Vec::with_capacity(self.children.len());
         let mut buffered: Vec<(usize, Option<u64>)> = Vec::new();
@@ -498,19 +538,19 @@ impl ZipStream {
         if holds.iter().any(|h| matches!(h, Some(Hold::Indexed(0)))) {
             self.empty = true;
             self.done = true;
-            return;
+            return Ok(());
         }
         buffered.sort_by_key(|&(i, bound)| (bound.is_none(), bound, i));
         for (i, _) in buffered {
             let child = &mut self.children[i];
             let mut buf = Vec::new();
-            while let Some(t) = child.advance() {
+            while let Some(t) = child.advance()? {
                 buf.push(t);
             }
             if buf.is_empty() {
                 self.empty = true;
                 self.done = true;
-                return;
+                return Ok(());
             }
             holds[i] = Some(Hold::Buffered(buf));
         }
@@ -524,83 +564,129 @@ impl ZipStream {
             self.known_len = self.known_len.max(len);
         }
         self.holds = holds;
+        Ok(())
     }
 
-    fn advance_cycle(&mut self) -> Option<Tuple> {
+    fn advance_cycle(&mut self) -> Result<Option<Tuple>, RuntimeError> {
         let i = self.step;
         if let Some(len) = self.streamed_len
             && i >= len.max(self.known_len)
         {
             self.done = true;
-            return None;
+            return Ok(None);
         }
         let mut pulled = None;
         match self.streamed {
             Some(s) => {
-                pulled = self.children[s].advance();
+                pulled = self.children[s].advance()?;
                 if pulled.is_none() {
                     // The first run-out is the streamed operand's length.
                     let len = *self.streamed_len.get_or_insert(i);
                     if len == 0 || i >= len.max(self.known_len) {
                         self.done = true;
-                        return None;
+                        return Ok(None);
                     }
                     self.children[s].rewind();
-                    pulled = self.children[s].advance();
+                    pulled = self.children[s].advance()?;
                     if pulled.is_none() {
                         self.done = true;
-                        return None;
+                        return Ok(None);
                     }
                 }
             }
             None => {
                 if i >= self.known_len {
                     self.done = true;
-                    return None;
+                    return Ok(None);
                 }
             }
         }
         let mut out = Tuple::new();
         for (child, hold) in self.children.iter().zip(&self.holds) {
             let t = match hold {
-                Hold::Indexed(len) => child.tuple_at(i % len)?,
-                Hold::Buffered(buf) => buf[(i % buf.len() as u64) as usize].clone(),
-                Hold::Streamed => pulled.take()?,
+                Hold::Indexed(len) => child.tuple_at(i % len),
+                Hold::Buffered(buf) => Some(buf[(i % buf.len() as u64) as usize].clone()),
+                Hold::Streamed => pulled.take(),
+            };
+            let Some(t) = t else {
+                return Ok(None);
             };
             extend(&mut out, t);
         }
         self.step += 1;
-        Some(out)
+        Ok(Some(out))
+    }
+
+    /// One strict lockstep step: every child's next tuple, the end when
+    /// every child ends here, or the length mismatch when some end and
+    /// others do not. The mismatch counts each operand's length by
+    /// draining the ones that continue, so it names the lengths the
+    /// traversal evaluators name.
+    fn advance_strict(&mut self) -> Result<Option<Tuple>, RuntimeError> {
+        let mut pulled = Vec::with_capacity(self.children.len());
+        for child in &mut self.children {
+            pulled.push(child.advance()?);
+        }
+        if pulled.iter().all(Option::is_some) {
+            let mut out = Tuple::new();
+            for t in pulled.into_iter().flatten() {
+                extend(&mut out, t);
+            }
+            self.step += 1;
+            return Ok(Some(out));
+        }
+        self.done = true;
+        if pulled.iter().all(Option::is_none) {
+            return Ok(None);
+        }
+        let mut lengths = Vec::with_capacity(self.children.len());
+        for (child, t) in self.children.iter_mut().zip(&pulled) {
+            let mut len = self.step;
+            if t.is_some() {
+                len += 1;
+                while child.advance()?.is_some() {
+                    len += 1;
+                }
+            }
+            lengths.push(len);
+        }
+        let error = RuntimeError::ZipLengthMismatch { lengths };
+        self.failed = Some(error.clone());
+        Err(error)
     }
 }
 
 impl TupleStream for ZipStream {
-    fn advance(&mut self) -> Option<Tuple> {
+    fn advance(&mut self) -> Result<Option<Tuple>, RuntimeError> {
+        if let Some(error) = &self.failed {
+            return Err(error.clone());
+        }
         if self.done {
-            return None;
+            return Ok(None);
         }
         match self.mode {
-            ZipMode::Strict | ZipMode::Truncate => {
+            ZipMode::Strict => self.advance_strict(),
+            ZipMode::Truncate => {
                 // Pull one tuple from each child; if any returns
                 // None, this stream is exhausted.
                 let mut out = Tuple::new();
                 for child in &mut self.children {
-                    match child.advance() {
+                    match child.advance()? {
                         Some(t) => extend(&mut out, t),
                         None => {
                             self.done = true;
-                            return None;
+                            return Ok(None);
                         }
                     }
                 }
-                Some(out)
+                Ok(Some(out))
             }
             ZipMode::Cycle => {
                 if !self.initialized {
-                    self.initialize_cycle();
+                    self.initialize_cycle()?;
                     self.initialized = true;
                     if self.done {
-                        return None;
+                        return Ok(None);
                     }
                 }
                 self.advance_cycle()
@@ -612,6 +698,8 @@ impl TupleStream for ZipStream {
         match self.mode {
             ZipMode::Strict | ZipMode::Truncate => {
                 self.children.iter_mut().for_each(|c| c.rewind());
+                self.step = 0;
+                self.failed = None;
                 self.done = false;
             }
             ZipMode::Cycle => {
@@ -636,10 +724,13 @@ impl TupleStream for ZipStream {
             .iter()
             .map(|c| c.indexed_len())
             .collect::<Option<_>>()?;
-        Some(match self.mode {
-            ZipMode::Strict | ZipMode::Truncate => lens.iter().copied().min().unwrap_or(0),
-            ZipMode::Cycle => cycle_length(&lens),
-        })
+        match self.mode {
+            // Operands of different lengths are a mismatch, which only
+            // a pull reports, so the zip is not addressable.
+            ZipMode::Strict => lens.iter().all(|&n| n == lens[0]).then_some(lens[0]),
+            ZipMode::Truncate => lens.iter().copied().min(),
+            ZipMode::Cycle => Some(cycle_length(&lens)),
+        }
     }
 
     fn tuple_at(&self, i: u64) -> Option<Tuple> {
@@ -676,13 +767,13 @@ impl UnionStream {
 }
 
 impl TupleStream for UnionStream {
-    fn advance(&mut self) -> Option<Tuple> {
+    fn advance(&mut self) -> Result<Option<Tuple>, RuntimeError> {
         loop {
             if self.active_idx >= self.children.len() {
-                return None;
+                return Ok(None);
             }
-            if let Some(t) = self.children[self.active_idx].advance() {
-                return Some(t);
+            if let Some(t) = self.children[self.active_idx].advance()? {
+                return Ok(Some(t));
             }
             // Advance to next child.
             self.active_idx += 1;
@@ -727,13 +818,13 @@ impl FilterStream {
 }
 
 impl TupleStream for FilterStream {
-    fn advance(&mut self) -> Option<Tuple> {
-        loop {
-            let candidate = self.inner.advance()?;
+    fn advance(&mut self) -> Result<Option<Tuple>, RuntimeError> {
+        while let Some(candidate) = self.inner.advance()? {
             if evaluate_predicate(&self.predicate, &candidate) {
-                return Some(candidate);
+                return Ok(Some(candidate));
             }
         }
+        Ok(None)
     }
 
     fn rewind(&mut self) {
@@ -762,15 +853,17 @@ impl OrderStreamingStream {
 }
 
 impl TupleStream for OrderStreamingStream {
-    fn advance(&mut self) -> Option<Tuple> {
+    fn advance(&mut self) -> Result<Option<Tuple>, RuntimeError> {
         if let Some(cap) = self.truncation
             && self.emitted >= cap
         {
-            return None;
+            return Ok(None);
         }
         let t = self.inner.advance()?;
-        self.emitted += 1;
-        Some(t)
+        if t.is_some() {
+            self.emitted += 1;
+        }
+        Ok(t)
     }
 
     fn rewind(&mut self) {
@@ -836,12 +929,12 @@ impl OrderMaterializeStream {
         }
     }
 
-    fn select(&mut self) {
+    fn select(&mut self) -> Result<(), RuntimeError> {
         let cardinality = match (&self.input_index_fn, self.inner.indexed_len()) {
             (Some(_), Some(len)) => len,
             _ => {
                 let mut buf = Vec::new();
-                while let Some(t) = self.inner.advance() {
+                while let Some(t) = self.inner.advance()? {
                     buf.push(t);
                 }
                 let len = buf.len() as u64;
@@ -855,20 +948,23 @@ impl OrderMaterializeStream {
         let dispatched = crate::iteration::comprehension::strategies::for_name(self.strategy);
         self.selection =
             Some(dispatched.select(&index_fn, cardinality, self.truncation, self.seed));
+        Ok(())
     }
 }
 
 impl TupleStream for OrderMaterializeStream {
-    fn advance(&mut self) -> Option<Tuple> {
+    fn advance(&mut self) -> Result<Option<Tuple>, RuntimeError> {
         if self.selection.is_none() {
-            self.select();
+            self.select()?;
         }
-        let p = self.selection.as_ref()?.get(self.pos)?;
+        let Some(p) = self.selection.as_ref().and_then(|s| s.get(self.pos)) else {
+            return Ok(None);
+        };
         self.pos += 1;
-        match &self.buffer {
+        Ok(match &self.buffer {
             Some(buf) => buf.get(p as usize).cloned(),
             None => self.inner.tuple_at(p),
-        }
+        })
     }
 
     fn rewind(&mut self) {
@@ -1176,7 +1272,7 @@ mod tests {
 
     fn collect(stream: &mut BoxedStream) -> Vec<Tuple> {
         let mut out = Vec::new();
-        while let Some(t) = stream.advance() {
+        while let Some(t) = stream.advance().unwrap() {
             out.push(t);
         }
         out

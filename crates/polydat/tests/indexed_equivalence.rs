@@ -16,14 +16,18 @@
 //! and sampled continuous spaces. On a shape with discrete sources and
 //! constant filters that the scope-less streaming surface compiles,
 //! every tuple binds every name of the shape and that surface yields
-//! the same count of tuples binding the same names.
+//! the same count of tuples binding the same names; where the traversal
+//! refuses a shape, a stream that reaches the fault fails with the same
+//! error after the tuples before it.
 
 use polydat::iteration::comprehension::ast::Comprehension;
 use polydat::iteration::comprehension::cardinality::{Interval, ProductMeasure};
 use polydat::iteration::comprehension::runtime::{
-    evaluate_for_iteration_materialized, evaluate_for_iteration_reported, evaluate_indexed,
+    RuntimeError, evaluate_for_iteration_materialized, evaluate_for_iteration_reported,
+    evaluate_indexed,
 };
 use polydat::iteration::comprehension::source::{LiteralValue, Source};
+use polydat::iteration::comprehension::strategies::Tuple;
 use polydat::iteration::comprehension::strategy::{StrategyName, ZipMode};
 
 fn scope() -> polydat::kernel::PolydatKernel {
@@ -61,7 +65,12 @@ fn assert_equivalent(ast: &Comprehension, scope: &polydat::kernel::PolydatKernel
                 "clause yields differ for {ast:?}"
             );
             assert_eq!(reported.tuples, reference.tuples);
-            if let Some(streamed) = constant_filters(ast).then(|| streamed_names(ast)).flatten() {
+            if let Some(streamed) = constant_filters(ast).then(|| streamed(ast)).flatten() {
+                assert!(
+                    streamed.error.is_none(),
+                    "the streaming surface failed where the traversal did not, for {ast:?}: {:?}",
+                    streamed.error
+                );
                 let names = shape_names(ast);
                 for tuple in &reference.tuples {
                     assert_eq!(
@@ -71,12 +80,12 @@ fn assert_equivalent(ast: &Comprehension, scope: &polydat::kernel::PolydatKernel
                     );
                 }
                 assert_eq!(
-                    streamed.len(),
+                    streamed.tuples.len(),
                     reference.tuples.len(),
                     "the streaming surface's tuple count differs for {ast:?}"
                 );
                 assert!(
-                    streamed.iter().all(|t| *t == names),
+                    streamed.names().iter().all(|t| *t == names),
                     "a streamed tuple does not bind every name of {ast:?}"
                 );
             }
@@ -88,6 +97,14 @@ fn assert_equivalent(ast: &Comprehension, scope: &polydat::kernel::PolydatKernel
                 reference.to_string(),
                 "errors differ for {ast:?}"
             );
+            // A strict mismatch is the one refusal the streaming surface
+            // shares; others (a strategy refusing its input's shape)
+            // are the traversal's alone.
+            if matches!(reference, RuntimeError::ZipLengthMismatch { .. })
+                && let Some(streamed) = constant_filters(ast).then(|| streamed(ast)).flatten()
+            {
+                assert_stream_failure(ast, &streamed, &reference);
+            }
             0
         }
         (reference, indexed) => panic!(
@@ -109,17 +126,134 @@ fn tuple_names<'a>(names: impl Iterator<Item = &'a String>) -> Vec<String> {
     names
 }
 
-/// The sorted names of each tuple the scope-less streaming surface
-/// dispenses for `ast`, or `None` when that surface refuses it: an
-/// invalid shape, or a source that needs a scope.
-fn streamed_names(ast: &Comprehension) -> Option<Vec<Vec<String>>> {
-    let compiled = polydat::iteration::comprehension::surfaces::compile(ast).ok()?;
-    Some(
-        compiled
-            .coordinate_stream()
+/// What the scope-less streaming surface dispensed: its tuples, and the
+/// error that ended it, if one did.
+struct Streamed {
+    tuples: Vec<Tuple>,
+    error: Option<RuntimeError>,
+}
+
+impl Streamed {
+    /// The sorted names of each tuple.
+    fn names(&self) -> Vec<Vec<String>> {
+        self.tuples
+            .iter()
             .map(|t| tuple_names(t.bindings.iter().map(|(n, _)| n)))
-            .collect(),
-    )
+            .collect()
+    }
+}
+
+/// Drain the scope-less streaming surface over `ast`, or `None` when
+/// that surface refuses it: an invalid shape, or a source that needs a
+/// scope.
+fn streamed(ast: &Comprehension) -> Option<Streamed> {
+    let compiled = polydat::iteration::comprehension::surfaces::compile(ast).ok()?;
+    let mut stream = compiled.coordinate_stream();
+    let mut tuples = Vec::new();
+    loop {
+        match stream.advance() {
+            Ok(Some(t)) => tuples.push(t),
+            Ok(None) => {
+                return Some(Streamed {
+                    tuples,
+                    error: None,
+                });
+            }
+            Err(e) => {
+                // A failed stream keeps failing.
+                assert!(stream.advance().is_err(), "the failure did not persist");
+                return Some(Streamed {
+                    tuples,
+                    error: Some(e),
+                });
+            }
+        }
+    }
+}
+
+fn strict_zips(c: &Comprehension) -> usize {
+    match c {
+        Comprehension::Clause { .. } => 0,
+        Comprehension::Zip { children, mode } => {
+            usize::from(*mode == ZipMode::Strict) + children.iter().map(strict_zips).sum::<usize>()
+        }
+        Comprehension::Cartesian { children } | Comprehension::Union { children } => {
+            children.iter().map(strict_zips).sum()
+        }
+        Comprehension::Filter { child, .. } | Comprehension::Order { child, .. } => {
+            strict_zips(child)
+        }
+    }
+}
+
+/// `ast` with every strict zip made truncating: the same tuples up to
+/// the point a strict zip's operands end apart.
+fn truncated(c: &Comprehension) -> Comprehension {
+    match c {
+        Comprehension::Clause { .. } => c.clone(),
+        Comprehension::Cartesian { children } => {
+            Comprehension::cartesian(children.iter().map(truncated).collect())
+        }
+        Comprehension::Zip { children, mode } => Comprehension::zip(
+            children.iter().map(truncated).collect(),
+            match mode {
+                ZipMode::Strict => ZipMode::Truncate,
+                other => *other,
+            },
+        ),
+        Comprehension::Union { children } => {
+            Comprehension::union(children.iter().map(truncated).collect())
+        }
+        Comprehension::Filter { child, predicate } => {
+            Comprehension::filter(truncated(child), predicate.clone())
+        }
+        Comprehension::Order {
+            child,
+            strategy,
+            truncation,
+            seed,
+        } => Comprehension::order_seeded(truncated(child), *strategy, *truncation, *seed),
+    }
+}
+
+/// A stream over a shape the traversal refuses with `expected`: when it
+/// fails, it fails with the same kind of error, after a prefix of the
+/// tuples the shape dispenses with every strict zip truncating. A stream
+/// reports a mismatch only where it pulls one, so a stream that never
+/// reaches the mismatch ends without it; with several strict zips, the
+/// traversal, which evaluates every operand at open, and the stream,
+/// which pulls, can reach different ones first, so the lengths the
+/// error names must match only when the shape has one strict zip.
+/// Returns whether the stream failed.
+fn assert_stream_failure(
+    ast: &Comprehension,
+    streamed: &Streamed,
+    expected: &RuntimeError,
+) -> bool {
+    let Some(error) = &streamed.error else {
+        return false;
+    };
+    assert_eq!(
+        std::mem::discriminant(error),
+        std::mem::discriminant(expected),
+        "the stream's error kind differs for {ast:?}: {error} and {expected}"
+    );
+    if strict_zips(ast) == 1 {
+        assert_eq!(
+            error.to_string(),
+            expected.to_string(),
+            "the stream's error differs for {ast:?}"
+        );
+    }
+    let reference = self::streamed(&truncated(ast))
+        .expect("the truncated shape compiles")
+        .tuples;
+    assert!(
+        streamed.tuples.len() <= reference.len()
+            && streamed.tuples[..] == reference[..streamed.tuples.len()],
+        "the stream delivered other tuples before its error for {ast:?}"
+    );
+    true
 }
 
 /// Whether every filter in `c` is the constant `true` or `false` and
@@ -350,10 +484,13 @@ fn an_empty_operand_empties_a_cycle_zip() {
         // The streaming surface yields nothing where it compiles the
         // shape; it refuses a non-Lex order over an operand that is not
         // addressable.
-        let streamed = streamed_names(shape);
+        let streamed = streamed(shape);
         assert!(
-            streamed.as_ref().is_none_or(Vec::is_empty),
-            "{streamed:?} for {shape:?}"
+            streamed
+                .as_ref()
+                .is_none_or(|s| s.tuples.is_empty() && s.error.is_none()),
+            "{:?} for {shape:?}",
+            streamed.as_ref().map(Streamed::names)
         );
         if !matches!(shape, Comprehension::Order { .. }) {
             assert!(
@@ -406,6 +543,166 @@ fn an_empty_operand_empties_a_cycle_zip() {
     let streamer = sweep.as_streamer().unwrap();
     assert_eq!(streamer.cardinality(), CardinalityClass::Bounded(0));
     assert_eq!(streamer.coordinate_stream().unwrap().count(), 0);
+}
+
+/// A strict zip whose operands end apart fails on every path with the
+/// same error naming each operand's length. The traversal evaluators
+/// fail at open; a stream delivers the tuples before the mismatch and
+/// fails where it finds it. An empty operand is a mismatch unless every
+/// operand is empty.
+#[test]
+fn a_strict_mismatch_fails_on_every_path() {
+    let scope = scope();
+    let strict = |children| Comprehension::zip(children, ZipMode::Strict);
+    let names = || ints("c", &[10, 20]);
+    // Each shape, the lengths its error names, and the tuples a stream
+    // delivers before the error.
+    let cases: Vec<(Comprehension, &str, usize)> = vec![
+        (strict(vec![range("k", 1, 5, 1), names()]), "[4, 2]", 2),
+        (strict(vec![names(), range("k", 1, 5, 1)]), "[2, 4]", 2),
+        (
+            strict(vec![ints("a", &[1, 2, 3]), ints("b", &[4, 5, 6]), names()]),
+            "[3, 3, 2]",
+            2,
+        ),
+        (strict(vec![ints("a", &[]), names()]), "[0, 2]", 0),
+        (strict(vec![names(), ints("a", &[])]), "[2, 0]", 0),
+        (
+            strict(vec![
+                range("k", 0, 4, 1),
+                Comprehension::filter(range("f", 0, 6, 1), "{f} > 2"),
+            ]),
+            "[4, 3]",
+            3,
+        ),
+        (
+            strict(vec![
+                range("k", 0, 4, 1),
+                Comprehension::filter(range("f", 0, 6, 1), "false"),
+            ]),
+            "[4, 0]",
+            0,
+        ),
+        // A cartesian caches its later axes before it emits, so a
+        // mismatch there fails before any tuple; as its first axis the
+        // zip's tuples come first.
+        (
+            Comprehension::cartesian(vec![
+                ints("p", &[1, 2]),
+                strict(vec![range("k", 1, 5, 1), names()]),
+            ]),
+            "[4, 2]",
+            0,
+        ),
+        (
+            Comprehension::cartesian(vec![
+                strict(vec![range("k", 1, 5, 1), names()]),
+                ints("p", &[1, 2]),
+            ]),
+            "[4, 2]",
+            4,
+        ),
+        (
+            Comprehension::union(vec![
+                strict(vec![ints("k", &[1, 2]), ints("c", &[3, 4])]),
+                strict(vec![ints("k", &[5, 6, 7]), ints("c", &[8])]),
+            ]),
+            "[3, 1]",
+            3,
+        ),
+        (
+            Comprehension::filter(strict(vec![range("k", 1, 5, 1), names()]), "true"),
+            "[4, 2]",
+            2,
+        ),
+        (
+            Comprehension::order(
+                strict(vec![range("k", 1, 5, 1), names()]),
+                StrategyName::Shuffle,
+                Some(3),
+            ),
+            "[4, 2]",
+            0,
+        ),
+        (
+            Comprehension::zip(
+                vec![
+                    strict(vec![range("k", 1, 5, 1), names()]),
+                    ints("z", &[1, 2, 3]),
+                ],
+                ZipMode::Cycle,
+            ),
+            "[4, 2]",
+            0,
+        ),
+    ];
+    for (shape, lengths, before) in &cases {
+        let expected = format!("zip strict: child lengths differ ({lengths})");
+        let traversal = evaluate_for_iteration_materialized(shape, &scope).unwrap_err();
+        assert!(
+            matches!(traversal, RuntimeError::ZipLengthMismatch { .. }),
+            "{traversal:?}"
+        );
+        assert_eq!(traversal.to_string(), expected, "{shape:?}");
+        assert_eq!(assert_equivalent(shape, &scope), 0);
+        let streamed = streamed(shape).expect("the streaming surface compiles");
+        assert!(
+            assert_stream_failure(shape, &streamed, &traversal),
+            "the stream did not fail for {shape:?}"
+        );
+        assert_eq!(streamed.tuples.len(), *before, "{shape:?}");
+        assert_eq!(
+            streamed.error.as_ref().map(ToString::to_string),
+            Some(expected),
+            "{shape:?}"
+        );
+    }
+
+    // Operands that end together, empty ones included, end the zip
+    // without an error.
+    for shape in [
+        strict(vec![ints("a", &[]), ints("b", &[])]),
+        strict(vec![range("k", 1, 3, 1), names()]),
+        strict(vec![
+            Comprehension::filter(range("k", 0, 4, 1), "{k} > 1"),
+            names(),
+        ]),
+    ] {
+        let count = assert_equivalent(&shape, &scope);
+        let streamed = streamed(&shape).unwrap();
+        assert!(streamed.error.is_none(), "{shape:?}");
+        assert_eq!(streamed.tuples.len(), count);
+    }
+
+    // The same zip written in the language: the traversal fails at
+    // open, and the producer's stream after two tuples.
+    let src = "input cycle: u64\n\
+               sweep := for (k, c) in (1..5, 5..7)\n";
+    let mut kernel = polydat::dsl::compile_polydat_interpreter(src).unwrap();
+    kernel.set_inputs(&[0]);
+    let sweep = kernel.pull_ref("sweep").clone();
+    let mut stream = sweep.as_streamer().unwrap().coordinate_stream().unwrap();
+    assert!(stream.advance().unwrap().is_some());
+    assert!(stream.advance().unwrap().is_some());
+    assert_eq!(
+        stream.advance().unwrap_err().to_string(),
+        "zip strict: child lengths differ ([4, 2])"
+    );
+    let src = "input cycle: u64\n\
+               for (k, c) in (1..5, 5..7) {\n    \
+               s := u64_add(k, c)\n}\n";
+    let mut kernel = polydat::dsl::compile_polydat_interpreter(src).unwrap();
+    kernel.set_inputs(&[0]);
+    let error = kernel
+        .traverse(0)
+        .err()
+        .expect("the traversal fails at open");
+    assert!(
+        error
+            .to_string()
+            .contains("zip strict: child lengths differ ([4, 2])"),
+        "{error}"
+    );
 }
 
 /// A small PRNG, so the generated shapes are the same on every run.
@@ -577,7 +874,8 @@ fn bound(c: &Comprehension) -> u64 {
 }
 
 /// Seeded compositions of every constructor: the two evaluators agree
-/// on each one.
+/// on each one, and the streaming surface agrees with them, failing
+/// where a strict zip's operands end apart.
 #[test]
 fn generated_shapes_index_as_they_materialize() {
     let scope = scope();
@@ -585,7 +883,7 @@ fn generated_shapes_index_as_they_materialize() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(1500);
-    let (mut compared, mut tuples, mut emptied) = (0u64, 0usize, 0u64);
+    let (mut compared, mut tuples, mut emptied, mut mismatched) = (0u64, 0usize, 0u64, 0u64);
     for case in 0..cases {
         let mut shapes = Shapes {
             rng: Rng(0x5EED_0000 + case),
@@ -599,12 +897,24 @@ fn generated_shapes_index_as_they_materialize() {
         tuples += assert_equivalent(&shape, &scope);
         compared += 1;
         emptied += shapes.emptied;
+        // Strict zips over operands of random lengths often end apart;
+        // count the streams that reached such a mismatch.
+        if constant_filters(&shape)
+            && streamed(&shape)
+                .is_some_and(|s| matches!(s.error, Some(RuntimeError::ZipLengthMismatch { .. })))
+        {
+            mismatched += 1;
+        }
     }
     assert!(compared > cases / 2, "only {compared} of {cases} compared");
     assert!(tuples > 0, "no generated shape produced a tuple");
     assert!(
         emptied >= cases / 100,
         "only {emptied} compared cycle zips had an emptied operand"
+    );
+    assert!(
+        mismatched >= cases / 100,
+        "only {mismatched} compared streams reached a strict mismatch"
     );
 }
 

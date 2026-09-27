@@ -14,7 +14,7 @@ fn show(label: &str, ast: &Comprehension) {
     let prog = compile(&optimize(ast.clone()));
     let mut stream = interpret(&prog);
     let mut out = Vec::new();
-    while let Some(t) = stream.advance() {
+    while let Some(t) = stream.advance().expect("the comprehension dispenses") {
         let cells: Vec<String> = t
             .bindings
             .iter()

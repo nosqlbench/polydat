@@ -426,7 +426,7 @@ fn a_count_too_large_to_hold_is_refused_not_aborted() {
                     // stream opens.
                     if let Some(s) = v.as_streamer() {
                         let mut stream = s.coordinate_stream().map_err(|e| e.to_string())?;
-                        while stream.advance().is_some() {}
+                        while stream.advance().map_err(|e| e.to_string())?.is_some() {}
                     }
                 }
                 if !k.program().traversals().is_empty() {

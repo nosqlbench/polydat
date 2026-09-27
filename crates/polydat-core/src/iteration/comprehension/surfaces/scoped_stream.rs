@@ -22,9 +22,11 @@ use crate::iteration::comprehension::ir::Program;
 use super::coord_stream::CoordinateStream;
 use super::instance::{KernelScope, ScopedKernelInstance};
 use super::scope_once::scope_once_with;
+use crate::iteration::comprehension::runtime::RuntimeError;
 
 /// Second-order stream. Each `advance()` yields one
-/// `ScopedKernelInstance<K::Scoped>` or `None`.
+/// `ScopedKernelInstance<K::Scoped>`, `None`, or the coordinate
+/// stream's error.
 ///
 /// Construct via [`crate::iteration::comprehension::surfaces::CompiledComprehension::scoped_kernel_stream`].
 pub struct ScopedKernelStream<K: KernelScope> {
@@ -51,17 +53,25 @@ impl<K: KernelScope> ScopedKernelStream<K> {
     /// 2. Apply `parent.scope(&coords)` (spec §9.5.3's
     ///    `scope_once` semantic).
     /// 3. Return the wrapped instance.
-    pub fn advance(&mut self) -> Option<ScopedKernelInstance<K::Scoped>> {
-        let coords = self.coord_stream.advance()?;
-        let instance = scope_once_with(&self.parent, &coords);
-        Some(instance)
+    ///
+    /// The coordinate stream's error, where it is found, ends this
+    /// stream the same way.
+    pub fn advance(&mut self) -> Result<Option<ScopedKernelInstance<K::Scoped>>, RuntimeError> {
+        Ok(self
+            .coord_stream
+            .advance()?
+            .map(|coords| scope_once_with(&self.parent, &coords)))
     }
 }
 
 impl<K: KernelScope> Iterator for ScopedKernelStream<K> {
-    type Item = ScopedKernelInstance<K::Scoped>;
+    type Item = Result<ScopedKernelInstance<K::Scoped>, RuntimeError>;
+
+    /// The next instance or the error that ends the stream; after an
+    /// error, `None`.
     fn next(&mut self) -> Option<Self::Item> {
-        self.advance()
+        let coords = self.coord_stream.next()?;
+        Some(coords.map(|coords| scope_once_with(&self.parent, &coords)))
     }
 }
 
@@ -98,7 +108,7 @@ mod tests {
         let parent = MockKernel("p".into());
         let mut stream = compiled.scoped_kernel_stream(parent);
         let mut count = 0;
-        while let Some(inst) = stream.advance() {
+        while let Some(inst) = stream.advance().unwrap() {
             assert_eq!(inst.scoped.0, "p");
             assert_eq!(inst.coords.bindings.len(), 1);
             count += 1;
@@ -112,11 +122,11 @@ mod tests {
         let parent = MockKernel("p".into());
         let coord_values: Vec<TupleValue> = compiled
             .coordinate_stream()
-            .map(|t| t.bindings[0].1.clone())
+            .map(|t| t.unwrap().bindings[0].1.clone())
             .collect();
         let scoped_values: Vec<TupleValue> = compiled
             .scoped_kernel_stream(parent)
-            .map(|inst| inst.coords.bindings[0].1.clone())
+            .map(|inst| inst.unwrap().coords.bindings[0].1.clone())
             .collect();
         assert_eq!(coord_values, scoped_values);
     }

@@ -17,7 +17,8 @@ fn compile(src: &str) -> polydat::kernel::PolydatKernel {
 fn tuples(stream: polydat::iteration::comprehension::surfaces::CoordinateStream) -> Vec<Vec<i64>> {
     stream
         .map(|t| {
-            t.bindings
+            t.unwrap()
+                .bindings
                 .iter()
                 .map(|(_, v)| match v {
                     TupleValue::I64(n) => *n,

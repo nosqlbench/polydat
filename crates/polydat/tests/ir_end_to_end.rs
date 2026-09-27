@@ -26,7 +26,7 @@ fn dispense(ast: Comprehension) -> Vec<Vec<(String, TupleValue)>> {
     let prog = compile(&optimized);
     let mut stream = interpret(&prog);
     let mut tuples = Vec::new();
-    while let Some(t) = stream.advance() {
+    while let Some(t) = stream.advance().unwrap() {
         tuples.push(t.bindings);
     }
     tuples
@@ -38,7 +38,7 @@ fn dispense_naive(ast: Comprehension) -> Vec<Vec<(String, TupleValue)>> {
     let prog = compile(&ast);
     let mut stream = interpret(&prog);
     let mut tuples = Vec::new();
-    while let Some(t) = stream.advance() {
+    while let Some(t) = stream.advance().unwrap() {
         tuples.push(t.bindings);
     }
     tuples

@@ -193,25 +193,29 @@ impl AstGen {
 
 // ---- Harness ----
 
-fn dispense_naive(ast: &Comprehension) -> Vec<Vec<(String, TupleValue)>> {
-    let prog = compile(ast);
-    let mut stream = interpret(&prog);
+/// The tuples a program dispenses, and the error that ends the stream,
+/// if one does, as a last entry naming it.
+fn drain(ast: &Comprehension) -> Vec<Vec<(String, TupleValue)>> {
+    let mut stream = interpret(&compile(ast));
     let mut out = Vec::new();
-    while let Some(t) = stream.advance() {
-        out.push(t.bindings);
+    loop {
+        match stream.advance() {
+            Ok(Some(t)) => out.push(t.bindings),
+            Ok(None) => return out,
+            Err(e) => {
+                out.push(vec![("error".into(), TupleValue::Str(e.to_string()))]);
+                return out;
+            }
+        }
     }
-    out
+}
+
+fn dispense_naive(ast: &Comprehension) -> Vec<Vec<(String, TupleValue)>> {
+    drain(ast)
 }
 
 fn dispense_optimized(ast: &Comprehension) -> Vec<Vec<(String, TupleValue)>> {
-    let opt = optimize(ast.clone());
-    let prog = compile(&opt);
-    let mut stream = interpret(&prog);
-    let mut out = Vec::new();
-    while let Some(t) = stream.advance() {
-        out.push(t.bindings);
-    }
-    out
+    drain(&optimize(ast.clone()))
 }
 
 /// `n_cases` random ASTs at each `depth`. Returns the count
