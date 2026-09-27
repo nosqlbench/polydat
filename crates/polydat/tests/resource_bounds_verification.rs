@@ -143,10 +143,8 @@ fn two_orders_two_barriers() {
         Some(2),
     );
     let b = bounds_for(ast);
-    // R7 should fold the inner shuffle (no truncation? No —
-    // shuffle HAS truncation, so R7 doesn't fire per O2).
-    // Wait — inner DOES have truncation, so R7 leaves the
-    // two-stage form. Expect 2 barriers.
+    // The inner order truncates, so R7 keeps the two-stage form
+    // (comprehension_forms.md §7.4 O2) and both orders are barriers.
     assert_eq!(b.barriers.len(), 2);
     // total = 3 (inner) + 2 (outer)
     assert_eq!(b.total_barrier_working_set(), Some(5));

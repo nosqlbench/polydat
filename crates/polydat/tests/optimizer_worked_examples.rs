@@ -66,9 +66,9 @@ fn spec_section_11_5_filter_distribution_shrinking() {
 
 #[test]
 fn optimizer_eliminates_redundant_inner_order() {
-    // R7: inner untruncated order is redundant; outer wins.
-    // Then R0a eliminates the now-redundant outer Lex/None
-    // wrapper if applicable.
+    // R7: Halton selects from its input's shape, so the untruncated
+    // shuffle under it has no effect and is dropped
+    // (comprehension_forms.md §7.4 O1).
     let inner_order =
         Comprehension::order(clause("k", &[1, 2, 3, 4, 5]), StrategyName::Shuffle, None);
     let outer_order = Comprehension::order(inner_order, StrategyName::Halton, Some(3));

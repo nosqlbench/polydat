@@ -67,6 +67,11 @@ impl Strategy for Halton {
         StrategyName::Halton
     }
 
+    /// The sequence samples the index space.
+    fn selects_from_shape(&self) -> bool {
+        true
+    }
+
     fn accepts_input(&self, idx: Option<&IndexFn>) -> bool {
         idx.is_some()
     }

@@ -40,6 +40,11 @@ impl Strategy for Shells {
         StrategyName::Shells
     }
 
+    /// The shells are distances in the index space.
+    fn selects_from_shape(&self) -> bool {
+        true
+    }
+
     fn accepts_input(&self, idx: Option<&IndexFn>) -> bool {
         match idx {
             None => false,

@@ -27,6 +27,7 @@
 //! Strategies are selected by [`StrategyName`]; [`for_name`]
 //! dispatches a strategy name to its boxed [`Strategy`] impl.
 
+use super::ast::Comprehension;
 use super::metadata::{IndexFn, cycle_length};
 use super::strategy::StrategyName;
 
@@ -203,6 +204,19 @@ pub trait Strategy {
     /// The strategy's name. Mirrors [`StrategyName`].
     fn name(&self) -> StrategyName;
 
+    /// Whether the strategy selects from its input's shape rather than
+    /// from the sequence the input's tuples arrive in
+    /// (comprehension_forms.md §7.4 O1). A strategy that selects from
+    /// the shape places each tuple by its position in the input's index
+    /// space: it samples that space or walks its geometry. It chooses
+    /// the same tuples, in the same order, whatever permutation an
+    /// untruncated order applied to its input first, so that inner
+    /// order has no effect and is dropped (R7). A strategy that selects
+    /// from the sequence (a prefix, a reversal, a permutation of the
+    /// positions it is given) chooses differently after a permutation,
+    /// and both orders run.
+    fn selects_from_shape(&self) -> bool;
+
     /// V4 input-shape check (spec §3.6). `None` represents an
     /// input with no closed-form index function; only `Lex`
     /// accepts that. Concrete `IndexFn` variants are accepted
@@ -281,6 +295,28 @@ pub fn for_name(name: StrategyName) -> Box<dyn Strategy + Send + Sync> {
         StrategyName::Diagonal => Box::new(diagonal::Diagonal),
         StrategyName::Antidiagonal => Box::new(antidiagonal::Antidiagonal),
     }
+}
+
+/// The comprehension an order under `strategy` selects from, given its
+/// operand `child` (comprehension_forms.md §7.4 O1). A strategy that
+/// selects from its input's shape ([`Strategy::selects_from_shape`])
+/// reads through every untruncated order directly under it, since such
+/// an order only permutes the tuples of the shape beneath it; any other
+/// strategy selects from `child` itself.
+pub fn shape_input(child: &Comprehension, strategy: StrategyName) -> &Comprehension {
+    if !for_name(strategy).selects_from_shape() {
+        return child;
+    }
+    let mut input = child;
+    while let Comprehension::Order {
+        child,
+        truncation: None,
+        ..
+    } = input
+    {
+        input = child;
+    }
+    input
 }
 
 /// Resolve a [`MultiIndex`] to a flat position in the

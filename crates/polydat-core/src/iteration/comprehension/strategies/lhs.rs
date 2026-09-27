@@ -53,6 +53,11 @@ impl Strategy for Lhs {
         StrategyName::Lhs
     }
 
+    /// The hypercube stratifies each axis of the index space.
+    fn selects_from_shape(&self) -> bool {
+        true
+    }
+
     fn accepts_input(&self, idx: Option<&IndexFn>) -> bool {
         idx.is_some()
     }

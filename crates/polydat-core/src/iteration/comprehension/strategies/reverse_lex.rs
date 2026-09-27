@@ -27,6 +27,11 @@ impl Strategy for ReverseLex {
         StrategyName::ReverseLex
     }
 
+    /// The reversal is of the sequence as it arrives.
+    fn selects_from_shape(&self) -> bool {
+        false
+    }
+
     fn accepts_input(&self, idx: Option<&IndexFn>) -> bool {
         match idx {
             None => false,

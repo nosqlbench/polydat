@@ -39,6 +39,11 @@ impl Strategy for Extrema {
         StrategyName::Extrema
     }
 
+    /// The strata are of the index space's faces.
+    fn selects_from_shape(&self) -> bool {
+        true
+    }
+
     fn accepts_input(&self, idx: Option<&IndexFn>) -> bool {
         // Per spec §3.6: discrete Lattice (any axis count;
         // 1-axis is degenerate but defined) OR continuous box.

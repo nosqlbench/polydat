@@ -1,24 +1,34 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! R7 — order chain folding (spec §7.4 O1).
+//! R7 — order chain folding (comprehension_forms.md §7.4 O1).
 //!
-//! `order(order(c, s1, None), s2, t) → order(c, s2, t)`
+//! `order(order(c, s1, None), s2, t) → order(c, s2, t)` when `s2`
+//! selects from its input's shape.
 //!
-//! The inner full-permutation is wasted when the outer
-//! reorders the whole result. The inner's `truncation` MUST
-//! be `None` for the rule to fire — `order(order(c, s1, Some(n)), s2, t)`
-//! is meaningful (O2: pick n in s1, then reorder those n in s2)
-//! and the optimizer must NOT collapse it.
+//! A strategy that selects from the shape (`halton`, `sobol`, `lhs`,
+//! `extrema`, `shells`, `diagonal`, `antidiagonal`) places each tuple
+//! by its position in the index space beneath the inner order, which
+//! only permutes those tuples, so the inner order has no effect and
+//! the outer strategy applies its own truncation. A strategy that
+//! selects from the sequence (`lex`, `reverse_lex`, `shuffle`) chooses
+//! other tuples after a permutation: `lex/2` after `shuffle` is two
+//! shuffled tuples, not the first two. The rule leaves such a chain
+//! as written, and both orders run.
+//!
+//! An inner truncation keeps the rule dormant too:
+//! `order(order(c, s1, Some(n)), s2, t)` picks n tuples in `s1` and
+//! then orders those (O2).
 //!
 //! Guard:
-//! - Outer is `Order`.
+//! - Outer is `Order` whose strategy selects from the shape.
 //! - Child is `Order` with `truncation: None`.
 
 use crate::iteration::comprehension::ast::Comprehension;
+use crate::iteration::comprehension::strategies::for_name;
 
-/// Drop an untruncated order under another order; `None` when the shape
-/// differs.
+/// Drop an untruncated order under an order whose strategy selects
+/// from the shape; `None` otherwise.
 pub fn apply(ast: &Comprehension) -> Option<Comprehension> {
     let Comprehension::Order {
         child: outer_child,
@@ -29,6 +39,9 @@ pub fn apply(ast: &Comprehension) -> Option<Comprehension> {
     else {
         return None;
     };
+    if !for_name(*outer_strat).selects_from_shape() {
+        return None;
+    }
     let Comprehension::Order {
         child: inner_child,
         truncation: None,
@@ -100,11 +113,26 @@ mod tests {
     fn fold_keeps_the_outer_seed() {
         let inner = clause("k", &[1, 2, 3]);
         let o1 = Comprehension::order_seeded(inner.clone(), StrategyName::Shuffle, None, Some(1));
-        let o2 = Comprehension::order_seeded(o1, StrategyName::Shuffle, Some(2), Some(42));
+        let o2 = Comprehension::order_seeded(o1, StrategyName::Lhs, Some(2), Some(42));
         let result = apply(&o2).unwrap();
         assert_eq!(
             result,
-            Comprehension::order_seeded(inner, StrategyName::Shuffle, Some(2), Some(42))
+            Comprehension::order_seeded(inner, StrategyName::Lhs, Some(2), Some(42))
         );
+    }
+
+    /// An outer strategy that selects from the sequence keeps the inner
+    /// order: `lex/2` after `shuffle` is two shuffled tuples.
+    #[test]
+    fn a_sequence_strategy_keeps_the_inner_order() {
+        for outer in [
+            StrategyName::Lex,
+            StrategyName::ReverseLex,
+            StrategyName::Shuffle,
+        ] {
+            let o1 = Comprehension::order(clause("k", &[1, 2, 3]), StrategyName::Shuffle, None);
+            let o2 = Comprehension::order(o1, outer, Some(2));
+            assert_eq!(apply(&o2), None, "{outer:?}");
+        }
     }
 }

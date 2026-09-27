@@ -57,10 +57,6 @@ struct Compared {
 /// The rewrites known to change a shape's outcome.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Rewrite {
-    /// R7 folds `order(order(c, s1), s2, t)` into `order(c, s2, t)`
-    /// (§7.4 O1), dropping the inner permutation the outer strategy
-    /// selects positions from.
-    OrderChain,
     /// R5 pushes a filter onto one axis of a cartesian, where it tests
     /// values the shape as written never tests when another axis is
     /// empty, and fails on one.
@@ -131,10 +127,10 @@ fn compare(ast: &Comprehension, scope: &polydat::kernel::PolydatKernel) -> Compa
     // the optimizer's rewrite keeps the shape's outcome, the stream is
     // held to the traversal of the shape as written; where it does not,
     // to the traversal of the tree it compiles, and the rewrite must be
-    // one known to change an outcome: R7 folding an order chain (§7.4
-    // O1), a filter pushed onto one axis (R5) testing values the shape
-    // as written never tests, or a rewrite of an order's input changing
-    // whether its strategy accepts the input's shape (V4).
+    // one known to change an outcome: a filter pushed onto one axis
+    // (R5) testing values the shape as written never tests, or a
+    // rewrite of an order's input changing whether its strategy accepts
+    // the input's shape (V4).
     let optimized_ast = polydat::iteration::comprehension::optimize::optimize(ast.clone());
     let optimized = evaluate_indexed(&optimized_ast, scope).map(|t| t.to_vec());
     let rewritten = (!same_outcome(&outcome, &optimized)).then(|| {
@@ -143,9 +139,7 @@ fn compare(ast: &Comprehension, scope: &polydat::kernel::PolydatKernel) -> Compa
                 .iter()
                 .any(|r| r.as_ref().err().is_some_and(kind))
         };
-        if has_order_chain(ast) {
-            Rewrite::OrderChain
-        } else if fails(|e| matches!(e, RuntimeError::FilterEval { .. })) {
+        if fails(|e| matches!(e, RuntimeError::FilterEval { .. })) {
             Rewrite::PushedPredicate
         } else if fails(|e| matches!(e, RuntimeError::StrategyRejectsInput { .. })) {
             Rewrite::StrategyAdmission
@@ -247,27 +241,6 @@ fn same_outcome(
         (Ok(a), Ok(b)) => a == b,
         (Err(a), Err(b)) => std::mem::discriminant(a) == std::mem::discriminant(b),
         _ => false,
-    }
-}
-
-/// Whether `c` orders an untruncated order: the site of R7, which folds
-/// the pair into the outer order (comprehension_forms.md §7.4 O1).
-fn has_order_chain(c: &Comprehension) -> bool {
-    match c {
-        Comprehension::Clause { .. } => false,
-        Comprehension::Cartesian { children }
-        | Comprehension::Zip { children, .. }
-        | Comprehension::Union { children } => children.iter().any(has_order_chain),
-        Comprehension::Filter { child, .. } => has_order_chain(child),
-        Comprehension::Order { child, .. } => {
-            matches!(
-                child.as_ref(),
-                Comprehension::Order {
-                    truncation: None,
-                    ..
-                }
-            ) || has_order_chain(child)
-        }
     }
 }
 
@@ -660,6 +633,11 @@ fn every_shape_indexes_as_it_materializes() {
                     union(),
                     Comprehension::filter(product(), "{b} != 6"),
                     Comprehension::order(product(), StrategyName::Shuffle, Some(9)),
+                    // An untruncated order under the order: a strategy
+                    // that selects from the shape reads through it, and
+                    // any other runs after it (§7.4 O1).
+                    Comprehension::order(product(), StrategyName::Shuffle, None),
+                    Comprehension::order_seeded(product(), StrategyName::Lhs, None, Some(3)),
                 ] {
                     shapes.push(Comprehension::order_seeded(
                         input, strategy, truncation, seed,
@@ -1321,6 +1299,57 @@ fn predicates_group_by_the_one_precedence_table() {
     // The grouping `!` over the whole disjunction keeps other tuples.
     assert_ne!(traversal("!{a} || {b}"), traversal("!({a} || {b})"));
     assert_ne!(stream("!{a} || {b}"), stream("!({a} || {b})"));
+}
+
+/// An order over an untruncated order (comprehension_forms.md §7.4
+/// O1): a strategy that selects from the shape chooses what it chooses
+/// over the shape beneath the inner order, which has no effect, and a
+/// strategy that selects from the sequence runs after the inner order.
+/// Both evaluators, the stream, and the validator agree.
+#[test]
+fn an_order_chain_folds_only_under_a_shape_strategy() {
+    use polydat::iteration::comprehension::validate::{Mode, validate};
+    let scope = scope();
+    let product = || Comprehension::cartesian(vec![range("a", 0, 4, 1), ints("b", &[5, 6, 7])]);
+    let shuffled = || Comprehension::order_seeded(product(), StrategyName::Shuffle, None, Some(5));
+    let rows = |c: &Comprehension| evaluate_indexed(c, &scope).unwrap().to_vec();
+    let streamed_rows = |c: &Comprehension| {
+        let s = streamed(c).expect("the streaming surface compiles");
+        assert!(s.error.is_none(), "{:?}", s.error);
+        s.tuples.iter().map(stream_row).collect::<Vec<_>>()
+    };
+    for outer in [
+        StrategyName::Halton,
+        StrategyName::Sobol,
+        StrategyName::Lhs,
+        StrategyName::Extrema,
+        StrategyName::Shells,
+        StrategyName::Diagonal,
+        StrategyName::Antidiagonal,
+    ] {
+        let chain = Comprehension::order(shuffled(), outer, Some(3));
+        let direct = Comprehension::order(product(), outer, Some(3));
+        validate(&chain, Mode::Permissive).unwrap();
+        assert_eq!(rows(&chain), rows(&direct), "{outer:?}");
+        assert_eq!(streamed_rows(&chain), streamed_rows(&direct), "{outer:?}");
+        assert_equivalent(&chain, &scope);
+    }
+    // `lex/2` after a shuffle is the shuffle's first two tuples.
+    let chain = Comprehension::order(shuffled(), StrategyName::Lex, Some(2));
+    let expected: Vec<_> = rows(&shuffled()).into_iter().take(2).collect();
+    assert_eq!(rows(&chain), expected);
+    assert_ne!(
+        rows(&chain),
+        rows(&Comprehension::order(product(), StrategyName::Lex, Some(2)))
+    );
+    assert_eq!(
+        streamed_rows(&chain),
+        expected
+            .iter()
+            .map(|t| traversal_row(t))
+            .collect::<Vec<_>>()
+    );
+    assert_equivalent(&chain, &scope);
 }
 
 /// A shape whose count the metadata bounds but does not know reports

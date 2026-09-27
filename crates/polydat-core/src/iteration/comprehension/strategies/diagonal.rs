@@ -34,6 +34,11 @@ impl Strategy for Diagonal {
         StrategyName::Diagonal
     }
 
+    /// The walk visits positions by their index sum.
+    fn selects_from_shape(&self) -> bool {
+        true
+    }
+
     fn accepts_input(&self, idx: Option<&IndexFn>) -> bool {
         match idx {
             None => false,
@@ -62,6 +67,11 @@ pub struct Antidiagonal;
 impl Strategy for Antidiagonal {
     fn name(&self) -> StrategyName {
         StrategyName::Antidiagonal
+    }
+
+    /// The walk visits positions by their index sum.
+    fn selects_from_shape(&self) -> bool {
+        true
     }
 
     fn accepts_input(&self, idx: Option<&IndexFn>) -> bool {

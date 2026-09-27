@@ -47,7 +47,8 @@
 //! - **R6 — chained filter folding** (F1): AST rewrite.
 //!   `filter(filter(c, p), q)` → `filter(c, p && q)`.
 //! - **R7 — order chain folding** (O1): AST rewrite.
-//!   `order(order(c, s1, None), s2, t)` → `order(c, s2, t)`.
+//!   `order(order(c, s1, None), s2, t)` → `order(c, s2, t)` when `s2`
+//!   selects from its input's shape.
 //!
 //! ## Module layout
 //!

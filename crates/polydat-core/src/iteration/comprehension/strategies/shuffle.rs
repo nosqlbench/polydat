@@ -50,6 +50,11 @@ impl Strategy for Shuffle {
         StrategyName::Shuffle
     }
 
+    /// The permutation is of the sequence as it arrives.
+    fn selects_from_shape(&self) -> bool {
+        false
+    }
+
     fn accepts_input(&self, idx: Option<&IndexFn>) -> bool {
         idx.is_some()
     }

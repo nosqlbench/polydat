@@ -72,7 +72,7 @@ use crate::iteration::comprehension::measure::AxisMeasure;
 use crate::iteration::comprehension::metadata::{IndexFn, cycle_length};
 use crate::iteration::comprehension::predicate::CompiledPredicate;
 use crate::iteration::comprehension::source::Source;
-use crate::iteration::comprehension::strategies::Selection;
+use crate::iteration::comprehension::strategies::{Selection, shape_input};
 use crate::iteration::comprehension::strategy::StrategyName;
 #[cfg(test)]
 use crate::kernel::PolydatKernel;
@@ -554,6 +554,9 @@ impl EvalState<'_> {
                 truncation,
                 seed,
             } => {
+                // A strategy that selects from the shape reads through
+                // the untruncated orders under it (§7.4 O1).
+                let child = shape_input(child, *strategy);
                 // A continuous axis has no tuples of its own: an order
                 // over one samples the child's space, discrete axes by
                 // position and continuous axes through their measures
@@ -1085,6 +1088,7 @@ impl EvalState<'_> {
                 truncation,
                 seed,
             } => {
+                let child = shape_input(child, *strategy);
                 if has_continuous_axis(child) {
                     let sampled =
                         self.sample_space(child, prefix, *strategy, *truncation, *seed)?;

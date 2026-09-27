@@ -131,6 +131,11 @@ impl Strategy for Sobol {
         StrategyName::Sobol
     }
 
+    /// The sequence samples the index space.
+    fn selects_from_shape(&self) -> bool {
+        true
+    }
+
     fn accepts_input(&self, idx: Option<&IndexFn>) -> bool {
         // Reject more axes than the embedded Joe-Kuo table covers —
         // the validation layer surfaces this as `strategy rejects

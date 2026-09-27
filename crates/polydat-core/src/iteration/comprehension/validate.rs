@@ -575,11 +575,10 @@ fn visit_order(
     report: &mut ValidationReport,
 ) -> Result<(), ValidationError> {
     // V4: per-strategy input-shape contract using the metadata
-    // algebra. V5's one-filter look-through is implemented by
-    // computing metadata against either the child directly OR
-    // (when the child is a Filter) against the filter's
-    // inner child.
-    let metadata_target = match child {
+    // algebra. A strategy that selects from the shape reads through
+    // the untruncated orders under it (§7.4 O1), and V5 looks through
+    // one filter layer: the metadata is computed against what remains.
+    let metadata_target = match super::strategies::shape_input(child, strategy) {
         Comprehension::Filter { child: inner, .. } => inner.as_ref(),
         other => other,
     };

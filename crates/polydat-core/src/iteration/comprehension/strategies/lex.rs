@@ -28,6 +28,11 @@ impl Strategy for Lex {
         StrategyName::Lex
     }
 
+    /// A prefix is taken from the sequence as it arrives.
+    fn selects_from_shape(&self) -> bool {
+        false
+    }
+
     fn accepts_input(&self, _idx: Option<&IndexFn>) -> bool {
         // Lex accepts any input including `None`.
         true
