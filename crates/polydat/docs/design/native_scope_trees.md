@@ -1,7 +1,7 @@
 ---
 type: specification
 title: Scope Trees on All Four Engines
-timestamp: 2026-09-25
+timestamp: 2026-09-27
 description: Building and driving a tree of child scopes on all four engines through the Kernel trait, including the binder and writes of varying type.
 tags: [scopes, engines, host]
 ---
@@ -133,8 +133,8 @@ typically holds it in an `Arc` that every fiber task reads), and
 are sound when many threads call them at once on one parent.
 
 The basis differs per engine. The compiled kernels (closure tier, native,
-and pure native) are `Sync` by construction; the closure tier and native
-create their on-demand broadcast cells under a mutex. The interpreter's
+and pure native) are `Sync` by construction, and all three create their
+on-demand broadcast cells under a mutex. The interpreter's
 `EngineCore` is `Sync` by one stated invariant, that no `&self` method
 mutates the core; its `unsafe impl` states that invariant, so a `&self`
 cache added later cannot break it silently. The finalized native modules
@@ -172,10 +172,20 @@ the child's cell-bound inputs, because writing one would publish into a
 register the scope shares. A value the child's declared input refuses is
 returned as an error naming it, not skipped.
 
-The caller names a child's engine. The parent's engine is the usual choice,
-since a child belongs to the kernel it was bound under. A tree may mix
-engines, for example during a migration, because every binder step is over
-`dyn Kernel`.
+A caller of `instantiate_under` names a child's engine. The parent's engine
+is the usual choice, since a child belongs to the kernel it was bound under.
+A tree may mix engines, for example during a migration, because every binder
+step is over `dyn Kernel`.
+
+The construction paths that name no engine build the child on the parent's
+engine. `PolydatMatter::build_under(parent: &dyn Kernel)` compiles source or
+statement matter once and instantiates it on the parent's engine, and a
+scope's `spawn` does the same for a spawned child; `ScopeKernel` wraps a
+`Box<dyn Kernel>`, so a scope over any engine can spawn. Program matter is
+already compiled for an engine, and the child keeps that engine: it is bound
+with `bind_under`, as the second row of the table states. A binder copy the
+child refuses, or a `const` that fails at the child's initialization, is
+returned as `ContractViolation::Bind` rather than a panic.
 
 ## 6. Lookup
 
@@ -203,20 +213,26 @@ runs on (performance.md).
 builds: a params root, a `set:` scope with a const that shadows a parameter,
 a phase, a fiber fork, a reset, an iteration child per tuple, and a per-op
 child with result bindings committing into a shared cell. It builds them on
-the interpreter, the closure tier, and native (pure native is not in the
-suite), with every parent-child engine pair, and requires every result to
-equal the interpreter's at each step. It also checks the program identity
-across binds and forks, the positions a module's program and its kernels
-agree on, `propagate_inputs`'s refusal, and eight threads binding and
-forking under one shared parent at once. One of its steps is a
+all four engines, pure native in both its `Raw` and `PushPull` modes, with
+every parent-child engine pair, and requires every result to equal the
+interpreter's at each step. Where the reset leaves an extern with no default
+unset, the suite asserts pure native's refusal of a pull that depends on it,
+naming the extern (engines.md §3.3), rather than skipping the step, and
+asserts the value once the extern is set again. It also checks the program
+identity across binds and forks, the positions a module's program and its
+kernels agree on, `propagate_inputs`'s refusal, eight threads binding and
+forking under one shared parent at once, a parent's output reaching its
+child through the broadcast cell by either pull, and a subscope and a
+spawned child running on the parent's engine. One of its steps is a
 const-shadow case (`set: { mode: "mode_for_{size}" }`).
 
 The suite also holds the compiled engines to two rules. A compiled kernel's
 `coord_count()` returns the number of coordinates, not the number of buffer
-slots the inputs occupy. A cell refresh on the closure and native tiers
-clears the slot's `None` mark when it writes the cell's value into an
-extern's slot, so an extern with no default that is bound to a parent's cell
-reads the cell's value.
+slots the inputs occupy. A cell refresh on every compiled engine clears the
+slot's unset mark when it writes the cell's value into an extern's slot, so
+an extern with no default that is bound to a parent's cell reads the cell's
+value; on pure native the same refresh lowers the unset count, so the pulls
+that read the extern are served.
 
 ## 9. Order
 

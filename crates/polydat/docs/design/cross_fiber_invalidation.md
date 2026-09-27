@@ -1,7 +1,7 @@
 ---
 type: specification
 title: Cross-Fiber Cell Invalidation
-timestamp: 2026-09-25
+timestamp: 2026-09-27
 description: "The SharedCell publish and consume protocol: revisions, intent bits, memory ordering, and happens-before across fibers on all four engines."
 tags: [runtime, scopes]
 ---
@@ -151,18 +151,20 @@ attached:
   (`reseed_cells`), on a fresh word.
 - **Compiled kernels, broadcast outputs.** On the first ask
   rather than at construction: `Kernel::output_cell(name)`
-  makes one, holding the output's current value, and every
-  later pull of that output publishes through it. The
+  makes one, and every later pull of that output, by name
+  or by index, publishes through it. The cell starts at
+  `None` when the output's step (on pure native, its unit)
+  has not run since the last write, as the interpreter's
+  does, and at the output's current value otherwise. The
   interpreter can afford to seed one per output at
   construction because it already holds a `Value` per port;
   a compiled kernel holds slots, so it makes a cell only
   where a descendant binds to one, and a program with no
   descendant bound to it allocates nothing and pays one
-  emptiness check per pull. This holds on the closure tier
-  and native. Pure native makes no broadcast cells: it is the
-  differential oracle and Tier-1's carrier, not a surface a
-  host builds child scopes under
-  ([engines.md](engines.md) §1, §8).
+  emptiness check per pull. This holds on the closure tier,
+  native, and pure native alike, so a child bound under a
+  parent on any of the three reads a computed output as a
+  live link ([engines.md](engines.md) §3.6).
 
 `Kernel::attach_shared_cell(name, cell)` replaces the cell
 of the `shared` binding `name` with `cell`, a cell another
@@ -226,8 +228,9 @@ engines:
   native) `set_input` on a `shared` slot, which then
   records the new revision as seen, so the kernel does
   not refresh from its own write;
-- a compiled kernel's (closure tier or native) pull of an
-  output a descendant asked a broadcast cell for (§3.1).
+- a compiled kernel's (closure tier, native, or pure
+  native) pull, by name or by index, of an output a
+  descendant asked a broadcast cell for (§3.1).
 
 Cost: one mutex acquire/release + one `fetch_add` + one
 `fetch_or`. O(1). No upward propagation, no fan-out, no
@@ -292,7 +295,17 @@ every cell it holds:
    lists the slot as changed.
 3. The kernel marks every step the slot's dependents
    list names as not current and not run since the last
-   write.
+   write, as a write to the slot does. Pure native marks
+   fusion units rather than steps: in `PushPull` mode the
+   units that depend on each refreshed slot, and in `Raw`
+   mode, which keeps no dependents lists, every unit
+   ([engines.md](engines.md) §1).
+4. On pure native, the refresh also updates the count of
+   unset externs native code reads, so a cell that
+   delivers a value to an unset extern clears its
+   refusal, and one that delivers `None` makes the pulls
+   that depend on the slot refused
+   ([engines.md](engines.md) §3.3).
 
 The poll runs at the first evaluation after a write
 (inside the externs' materialization) and before every

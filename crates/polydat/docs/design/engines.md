@@ -1,7 +1,7 @@
 ---
 type: specification
 title: Execution Engines
-timestamp: 2026-09-25
+timestamp: 2026-09-27
 description: The P1, P2, P3, and pure-native engines, the rules every engine follows, provenance modes, the selector, slot representation, and engine equivalence.
 tags: [engines, runtime]
 ---
@@ -41,10 +41,10 @@ can call; [compiled_handles.md](compiled_handles.md) §5): `Native` runs that no
 pure native refuses the program and names the node. Pure native runs the whole
 program as one native function, calling a node's kit where the node has no
 lowering, so it is the only engine that refuses a program in which some node
-neither lowers nor has a kit; `Native` never fails for that reason. Every node in this library
-has a native form, so the two tiers accept the same library programs; they
-differ only on a host's own registered nodes, which is where a node with no
-native form occurs in practice. Pure native supports the two provenance modes
+neither lowers nor has a kit; `Native` never fails for that reason. Every node
+registered in this library has a kit (§8), so the two tiers accept the same
+library programs; they differ only on a host's own registered nodes, which is
+where a node with neither a native form nor a kit occurs in practice. Pure native supports the two provenance modes
 the differential needs, `Raw` and `PushPull`. It refuses any other named mode,
 and `Auto` resolves to one of the two.
 
@@ -203,6 +203,14 @@ function, a run does not execute the whole program:
   that depend on what changed. In both modes every pull and every `eval`
   first dirties the units holding volatile steps (`volatile_units`), so each
   read runs them again.
+- A shared-cell refresh (cross_fiber_invalidation.md §5.2) is taken before
+  the run and dirties units as a write does. In `pushpull` it dirties only
+  the units that depend on each refreshed slot, through the same dependents
+  lists a write uses. `raw` keeps no dependents lists, so a refresh there
+  dirties every unit.
+- Before running, the kernel checks one count, the unset externs its native
+  code reads (`Externs::unset_read`), and consults the pulled output's own
+  inputs only when that count is nonzero (§3.3).
 
 It calls a node's kit where the node has no native lowering, refuses a node
 that has neither, and is `#[doc(hidden)]`: the
@@ -268,7 +276,8 @@ R1):
 - `pull` runs the requested output's cone and nothing else; `eval` runs every
   step.
 - An unset extern is `None` and propagates as the None rule (§3.3) says,
-  except on pure native (§8).
+  except on pure native, which refuses a pull whose output depends on it
+  (§3.3).
 
 The provenance modes of §4 are optimizations over this rule: they change
 what is recomputed, never a result. No step is exempt, and nothing but a
@@ -340,8 +349,38 @@ no `None` can arrive. When it is fed by a kernel input or by an extern that
 may be unset, it stays a closure or an interpreter node with its exact
 semantics. A `None` that arrives in native code anyway causes a panic naming
 the extern, which detects a violation of this rule, and never produces a
-wrong value. Pure native has no closures to fall back on; §8 states how it
-treats an unset extern.
+wrong value.
+
+**Pure native and an unset extern.** Pure native has no closures to fall
+back on, so where the other engines would propagate a `None` from an unset
+extern, it refuses the pull instead, naming the extern and telling the host
+to set it or to run the program on `native`. The refusal has the same reach
+as the `None` it replaces: a pull is refused only when the pulled output
+depends on an unset input, and every other pull is served. The other three
+engines return `None` for exactly the outputs pure native refuses.
+
+For example, after `reset_inputs` clears the extern `mode`, which has no
+default, pulling `tries`, which never reads `mode`, returns its value on
+all four engines. Pulling an output that reads `mode` returns `None` on the
+interpreter, the closure tier, and native, and is refused on pure native
+with a message naming `mode`.
+
+The check costs one comparison on an ordinary run. Pure native keeps a
+count of the unset externs its native code reads (`Externs::unset_read`),
+maintained by writes, cell refreshes, resets, and const-initialization
+registration, and a run tests only that the count is zero. When it is
+nonzero, the run consults the pulled output's list of inputs, computed at
+build for every output, and refuses only if one of them is unset; `eval`,
+which runs every step, is refused whenever the count is nonzero. The
+extern's name is looked up only when refusing.
+
+Slots that only initialization reads are exempt from the count, because
+native code never reads them: a `const`'s slot and a `const`'s fallback
+input. A `shared` register with a computed start is exempt only until
+initialization seeds it; after that it counts like any other extern native
+code reads, so clearing it later makes the pulls that depend on it refused.
+A `const` whose value is still `None` after initialization is refused at
+initialization (`KernelError::Refused`).
 
 ### 3.4 Failures
 
@@ -421,10 +460,13 @@ On all four engines, a `shared` binding is a cell under one protocol
 ([cross_fiber_invalidation.md](cross_fiber_invalidation.md)): a write
 through any kernel holding the cell is the value every other holder reads
 next, a kernel created from a shared program starts with cells of its own,
-and `attach_shared_cell` binds one kernel's cell into another. The broadcast
-cell of a computed output (`Kernel::output_cell`) exists on the interpreter,
-the closure tier, and native, but not on pure native, whose `output_cell`
-returns `None` (runtime_model.md §5). On all four engines a `for` traversal opens through `Kernel::traverse`, and each
+and `attach_shared_cell` binds one kernel's cell into another. A computed
+output has a broadcast cell (`Kernel::output_cell`) on all four engines, and
+every pull of the output, by name or by index, publishes through it, so a
+child bound under a parent on any engine reads the output as a live link
+(runtime_model.md §5). The compiled engines make the cell on the first ask;
+it starts at `None` when the output's step or unit has not run since the
+last write, and at the output's value otherwise. On all four engines a `for` traversal opens through `Kernel::traverse`, and each
 activation is a kernel over the body's program for the engine the host
 chose, with one program per engine per position
 ([for_traversal.md](for_traversal.md)).
@@ -638,7 +680,11 @@ inside an engine, not refusals:
   its currency is its own. A node with no kit runs only on the
   interpreter; the closure tier, P3, and pure native refuse a program
   containing one, naming the node (`KernelError::Refused`). Every node
-  registered in this library has a kit.
+  registered in this library has a kit, without exception, so no library
+  program is refused for this reason. Some library nodes have a kit and no
+  native lowering; the dataset nodes (`dataset_open`, `dataset_prebuffer`,
+  and the facet accessors) are among them, and a program using them runs on
+  all four engines.
 - A by-reference value crosses a cone boundary borrowed into its pair
   for the call and copied out after it, and a copy of one inside native
   code copies into the copying step's own scratch; a pair is never
@@ -700,21 +746,21 @@ inside an engine, not refusals:
     still runs in such a build, with every step a closure (§1).
 - **The one runtime exception to "computes what the interpreter
   computes": an unset extern on pure native.** The interpreter, the
-  closure tier, and P3 return `None` for a cleared or never-set extern
-  and propagate it (§3.3). They can do so because a node that may
-  receive a `None` is kept out of native code and left as a closure. Pure
-  native compiles the whole program to one function and has no closure
-  to keep such a node in, so instead of returning `None` it traps on the
-  pull, naming the extern and telling the host to set it or to run the
-  program on `native`. This is not a refusal: the program is accepted,
-  and it runs whenever the host sets the extern before pulling, which is
-  the ordinary case. It cannot be decided at build, because whether an
-  extern is ever set is decided by the host, not the program. The same
-  limit applies to a `const` whose value is `None` after initialization:
-  pure native refuses it at initialization (`KernelError::Refused`), and
-  its unset-extern check skips const slots and the fallback inputs only
-  initialization reads. These two are the only places a host can see
-  which engine it chose.
+  closure tier, and P3 return `None` for an output that depends on a
+  cleared or never-set extern and propagate it (§3.3). They can do so
+  because a node that may receive a `None` is kept out of native code and
+  left as a closure. Pure native compiles the whole program to one
+  function and has no closure to keep such a node in, so instead of
+  returning `None` it refuses that pull, naming the extern and telling the
+  host to set it or to run the program on `native`; a pull of an output
+  that does not depend on the extern is served as on the other engines.
+  This is not a build refusal: the program is accepted, and it runs
+  whenever the host sets the extern before pulling, which is the ordinary
+  case. It cannot be decided at build, because whether an extern is ever
+  set is decided by the host, not the program. The same limit applies to a
+  `const` whose value is `None` after initialization, which pure native
+  refuses at initialization (`KernelError::Refused`). These two are the
+  only places a host can see which engine it chose.
 - SIMD scalar-flow promotion is not selected by ordinary engine choice; it has
   its own explicit qualification and execution contract in
   [simd_isa_autopromotion.md](simd_isa_autopromotion.md).
