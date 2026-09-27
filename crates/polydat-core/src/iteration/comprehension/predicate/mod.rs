@@ -14,7 +14,8 @@
 //!
 //! ## Module layout
 //!
-//! - [`eval`] — `CompiledPredicate`, the evaluator.
+//! - [`eval`] — `CompiledPredicate`, the evaluator, and its totality
+//!   check.
 //! - [`info`] — `PredicateInfo` and supporting enums.
 //! - [`coordset`] — `CoordSet` carrying per-coord discrete /
 //!   continuous classification.
@@ -29,7 +30,7 @@ pub mod recognizers;
 
 pub use analyzer::analyze;
 pub use coordset::{CoordInfo, CoordKind, CoordSet};
-pub use eval::CompiledPredicate;
+pub use eval::{CompiledPredicate, ValueKind, element_kind};
 pub use info::{
     Determinism, Factorization, Monotonicity, OpaqueReason, PerAxisMap, PredicateInfo,
     RangeConstraint,

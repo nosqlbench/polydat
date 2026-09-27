@@ -14,11 +14,14 @@
 //!
 //! The tree holds the structure the runtime evaluates directly and the
 //! predicate analyzer factorizes: `||`, `&&`, `!`, the six comparisons,
-//! and membership, over element references and literals. Any other
-//! expression (arithmetic, a function call, a cast) is an
-//! [`PredicateKind::Expr`] leaf, which the runtime evaluates as a
-//! Polydat expression from its text. Every node carries the byte range
-//! of its text in the predicate, enclosing parentheses included.
+//! and membership, over element references and literals. Arithmetic
+//! (`+ - * / % **`) is an [`PredicateKind::Arith`] node that keeps its
+//! operands, and any other expression (a function call, a cast, a
+//! bitwise operator) is an [`PredicateKind::Expr`] leaf; the runtime
+//! evaluates both as a Polydat expression from their text, and the
+//! optimizer reads an `Arith` node's operands to decide whether it can
+//! fail. Every node carries the byte range of its text in the
+//! predicate, enclosing parentheses included.
 
 use std::ops::Range;
 
@@ -53,6 +56,9 @@ pub enum PredicateKind {
     Element(String),
     /// A literal value. A bare word is its own text.
     Literal(PredicateLiteral),
+    /// `a OP b` for one of the arithmetic operators `+ - * / % **`,
+    /// evaluated as a Polydat expression from its text.
+    Arith(BinOpKind, Box<Predicate>, Box<Predicate>),
     /// Any other Polydat expression, evaluated from its text.
     Expr,
 }
@@ -520,7 +526,8 @@ impl Parser {
 }
 
 /// `lhs op rhs` as a node: `||` and `&&` gather their chains,
-/// comparisons compare, and any other operator is an expression leaf.
+/// comparisons compare, arithmetic keeps its operands, and any other
+/// operator is an expression leaf.
 fn combine(op: BinOpKind, lhs: Predicate, rhs: Predicate) -> Predicate {
     let span = lhs.span.start..rhs.span.end;
     let comparison = match op {
@@ -547,6 +554,17 @@ fn combine(op: BinOpKind, lhs: Predicate, rhs: Predicate) -> Predicate {
             });
             return Predicate {
                 kind: PredicateKind::And(parts),
+                span,
+            };
+        }
+        BinOpKind::Add
+        | BinOpKind::Sub
+        | BinOpKind::Mul
+        | BinOpKind::Div
+        | BinOpKind::Mod
+        | BinOpKind::Pow => {
+            return Predicate {
+                kind: PredicateKind::Arith(op, Box::new(lhs), Box::new(rhs)),
                 span,
             };
         }
@@ -622,7 +640,7 @@ mod tests {
                 PredicateKind::Literal(PredicateLiteral::Float(f)) => f.to_string(),
                 PredicateKind::Literal(PredicateLiteral::Str(s)) => format!("'{s}'"),
                 PredicateKind::Literal(PredicateLiteral::Bool(b)) => b.to_string(),
-                PredicateKind::Expr => format!("<{}>", p.text(text)),
+                PredicateKind::Arith(..) | PredicateKind::Expr => format!("<{}>", p.text(text)),
             }
         }
         walk(&parse_predicate(text).unwrap(), text)
@@ -692,6 +710,30 @@ mod tests {
         assert_eq!(parts[0].text(text), "({a} > 1 || {b} < 2)");
         assert_eq!(parts[1].text(text), "!{c}");
         assert_eq!(p.text(text), text);
+    }
+
+    /// Arithmetic keeps its operator and operands, grouped by the one
+    /// table; a bitwise operator, a call, and a cast stay opaque.
+    #[test]
+    fn arithmetic_keeps_its_operands() {
+        let text = "{a} + {b} * 2 > 3";
+        let p = parse_predicate(text).unwrap();
+        let PredicateKind::Compare(Comparison::Gt, lhs, _) = &p.kind else {
+            panic!("{p:?}")
+        };
+        let PredicateKind::Arith(BinOpKind::Add, a, product) = &lhs.kind else {
+            panic!("{lhs:?}")
+        };
+        assert_eq!(a.kind, PredicateKind::Element("a".into()));
+        assert!(matches!(
+            &product.kind,
+            PredicateKind::Arith(BinOpKind::Mul, b, two)
+                if b.kind == PredicateKind::Element("b".into())
+                    && two.kind == PredicateKind::Literal(PredicateLiteral::Int(2))
+        ));
+        for opaque in ["{a} & 1", "u64_add({a}, 1)", "{a} as f64"] {
+            assert_eq!(parse_predicate(opaque).unwrap().kind, PredicateKind::Expr);
+        }
     }
 
     #[test]

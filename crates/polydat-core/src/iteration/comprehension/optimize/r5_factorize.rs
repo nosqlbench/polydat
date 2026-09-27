@@ -17,13 +17,21 @@
 //! per-axis (Conjunctive cross-cutting, Disjunctive,
 //! Opaque) leave R5 dormant.
 //!
+//! A pushed sub-predicate tests values the filter as written may
+//! never test, so it moves only when it is total over its axis
+//! ([`CompiledPredicate::is_total`]): `{k} > 5` over a range moves,
+//! and `{w} > 2` over strings, or `u64_mod({k}, {m}) == 0`, stays.
+//!
 //! Guard:
 //! - Outer is `Filter`.
 //! - Child is `Cartesian`.
 //! - Predicate's `Factorization` is `PerAxis(_)`.
+//! - Every pushed sub-predicate is total over the child it wraps.
 
 use crate::iteration::comprehension::ast::Comprehension;
-use crate::iteration::comprehension::predicate::{CoordSet, Factorization, PredicateInfo};
+use crate::iteration::comprehension::predicate::{
+    CompiledPredicate, CoordSet, Factorization, PredicateInfo, element_kind,
+};
 
 /// R5's predicate-analyzer interface — accepts a closure so
 /// the optimizer (which doesn't depend on predicate internals)
@@ -74,6 +82,18 @@ where
         if owned_subs.is_empty() {
             new_children.push(child.clone());
         } else {
+            // A pushed predicate tests every value of its axis, some of
+            // which the filter as written never tests: those of a tuple
+            // an earlier conjunct rejects, or of a product another axis
+            // empties. It moves only when no evaluation of it can fail
+            // over that axis's values; otherwise the filter stays where
+            // it is written.
+            let total = owned_subs
+                .iter()
+                .all(|sub| CompiledPredicate::new(sub).is_total(&|name| element_kind(child, name)));
+            if !total {
+                return None;
+            }
             any_change = true;
             let combined_pred = if owned_subs.len() == 1 {
                 owned_subs.into_iter().next().unwrap()
@@ -178,5 +198,49 @@ mod tests {
         let cart = Comprehension::cartesian(vec![clause("k", &[1]), clause("l", &[2])]);
         let ast = Comprehension::filter(cart, "polynomial_factorization({k}) > 0");
         assert_eq!(apply(&ast, &analyze), None);
+    }
+
+    fn words(name: &str, vs: &[&str]) -> Comprehension {
+        Comprehension::clause(
+            name,
+            Source::Literal {
+                values: vs
+                    .iter()
+                    .map(|v| LiteralValue::String((*v).into()))
+                    .collect(),
+            },
+        )
+    }
+
+    /// A per-axis predicate that can fail over its axis's values stays
+    /// where it is written: ordering strings against a number, a call,
+    /// division by an element, and arithmetic over strings. One that
+    /// cannot fail moves.
+    #[test]
+    fn r5_moves_only_a_total_predicate() {
+        let product =
+            || Comprehension::cartesian(vec![words("w", &["a", "b"]), clause("k", &[1, 2])]);
+        for stays in [
+            "{w} > 2",
+            "u64_add({k}, 1) > 1",
+            "{k} / {k} == 1",
+            "{k} % 0 == 1",
+            "{w} + 1 > 2",
+            "{w}",
+            "{k} > 1 && {w} > 2",
+        ] {
+            let ast = Comprehension::filter(product(), stays);
+            assert_eq!(apply(&ast, &analyze), None, "{stays}");
+        }
+        for moves in [
+            "{w} == \"a\"",
+            "{w} != 2",
+            "{k} > 1",
+            "{w} in [\"a\", 2]",
+            "{w} < \"b\" && {k} > 1",
+        ] {
+            let ast = Comprehension::filter(product(), moves);
+            assert!(apply(&ast, &analyze).is_some(), "{moves}");
+        }
     }
 }

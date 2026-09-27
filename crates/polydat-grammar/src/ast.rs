@@ -734,7 +734,7 @@ pub enum Expr {
 }
 
 /// Binary arithmetic operator kind.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinOpKind {
     /// `+` — desugars to `u64_add` or `f64_add` based on operand types
     Add,

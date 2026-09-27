@@ -57,10 +57,6 @@ struct Compared {
 /// The rewrites known to change a shape's outcome.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Rewrite {
-    /// R5 pushes a filter onto one axis of a cartesian, where it tests
-    /// values the shape as written never tests when another axis is
-    /// empty, and fails on one.
-    PushedPredicate,
     /// A rewrite of an order's input (R0a dropping a `true` filter, R3
     /// commuting a filter) changes whether the strategy accepts the
     /// input's shape (V4).
@@ -127,10 +123,8 @@ fn compare(ast: &Comprehension, scope: &polydat::kernel::PolydatKernel) -> Compa
     // the optimizer's rewrite keeps the shape's outcome, the stream is
     // held to the traversal of the shape as written; where it does not,
     // to the traversal of the tree it compiles, and the rewrite must be
-    // one known to change an outcome: a filter pushed onto one axis
-    // (R5) testing values the shape as written never tests, or a
-    // rewrite of an order's input changing whether its strategy accepts
-    // the input's shape (V4).
+    // one known to change an outcome: a rewrite of an order's input
+    // changing whether its strategy accepts the input's shape (V4).
     let optimized_ast = polydat::iteration::comprehension::optimize::optimize(ast.clone());
     let optimized = evaluate_indexed(&optimized_ast, scope).map(|t| t.to_vec());
     let rewritten = (!same_outcome(&outcome, &optimized)).then(|| {
@@ -139,9 +133,7 @@ fn compare(ast: &Comprehension, scope: &polydat::kernel::PolydatKernel) -> Compa
                 .iter()
                 .any(|r| r.as_ref().err().is_some_and(kind))
         };
-        if fails(|e| matches!(e, RuntimeError::FilterEval { .. })) {
-            Rewrite::PushedPredicate
-        } else if fails(|e| matches!(e, RuntimeError::StrategyRejectsInput { .. })) {
+        if fails(|e| matches!(e, RuntimeError::StrategyRejectsInput { .. })) {
             Rewrite::StrategyAdmission
         } else {
             panic!(
@@ -1299,6 +1291,61 @@ fn predicates_group_by_the_one_precedence_table() {
     // The grouping `!` over the whole disjunction keeps other tuples.
     assert_ne!(traversal("!{a} || {b}"), traversal("!({a} || {b})"));
     assert_ne!(stream("!{a} || {b}"), stream("!({a} || {b})"));
+}
+
+/// A predicate the totality check calls total (comprehension_forms.md
+/// §10.2 R5) evaluates over every tuple of its elements' kinds without
+/// error, arithmetic included, on the traversal and the stream.
+#[test]
+fn a_total_predicate_never_fails() {
+    use polydat::iteration::comprehension::predicate::{CompiledPredicate, element_kind};
+    let scope = scope();
+    let space = || {
+        Comprehension::cartesian(vec![
+            ints("k", &[0, 1, 7, -1]),
+            ints("m", &[0, 3]),
+            Comprehension::clause(
+                "x",
+                Source::Literal {
+                    values: vec![
+                        LiteralValue::Float(0.0),
+                        LiteralValue::Float(0.5),
+                        LiteralValue::Float(3.25),
+                    ],
+                },
+            ),
+            words("w", &["a", "zz", ""]),
+            Comprehension::clause(
+                "b",
+                Source::Literal {
+                    values: vec![LiteralValue::Bool(false), LiteralValue::Bool(true)],
+                },
+            ),
+        ])
+    };
+    for p in [
+        "{k} > 1",
+        "{k} < {x}",
+        "{w} == 2",
+        "{w} != {k} && {b}",
+        "{w} >= \"m\" || !{b}",
+        "{k} in [1, \"a\", true]",
+        "{k} * 2 + 1 > {m}",
+        "{k} - {m} >= 0",
+        "{k} / 2 == 1",
+        "{x} % 1.5 < 1",
+        "{k} ** 2 > {x}",
+        "{k} + 1",
+        "{x}",
+    ] {
+        let shape = Comprehension::filter(space(), p);
+        let total = CompiledPredicate::new(p).is_total(&|n| element_kind(&space(), n));
+        assert!(total, "{p}");
+        evaluate_indexed(&shape, &scope).unwrap_or_else(|e| panic!("{p}: {e}"));
+        let s = streamed(&shape).expect("the streaming surface compiles");
+        assert!(s.error.is_none(), "{p}: {:?}", s.error);
+        assert_equivalent(&shape, &scope);
+    }
 }
 
 /// An order over an untruncated order (comprehension_forms.md §7.4

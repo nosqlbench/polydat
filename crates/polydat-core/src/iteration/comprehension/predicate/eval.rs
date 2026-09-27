@@ -25,7 +25,9 @@
 
 use crate::ast::Value;
 use crate::dsl::compile::eval_const_expr_for;
+use crate::iteration::comprehension::ast::Comprehension;
 use crate::iteration::comprehension::runtime::{RuntimeError, RuntimeTuple};
+use crate::iteration::comprehension::source::{LiteralValue, Source};
 use crate::kernel::interp::{Layered, Lookup, interpolate_via_kernel};
 use polydat_grammar::comprehension::predicate::{
     Comparison, Predicate, PredicateKind, PredicateLiteral, parse_predicate,
@@ -138,7 +140,7 @@ impl CompiledPredicate {
                 PredicateLiteral::Str(s) => Scalar::Str(s.clone()),
                 PredicateLiteral::Bool(b) => Scalar::Bool(*b),
             },
-            PredicateKind::Expr => {
+            PredicateKind::Arith(..) | PredicateKind::Expr => {
                 let text = node.text(&self.text);
                 let layered = Layered {
                     prefix: tuple,
@@ -151,6 +153,167 @@ impl CompiledPredicate {
                 scalar(&value).ok_or_else(|| format!("`{text}` is {value:?}, not a scalar"))?
             }
         })
+    }
+}
+
+/// The kind every value of an element has, as its source declares it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValueKind {
+    /// Unsigned integers: a range, or a list of integers.
+    Int,
+    /// Floats: a list of floats, or a continuous interval.
+    Float,
+    /// Strings.
+    Str,
+    /// Booleans.
+    Bool,
+}
+
+impl CompiledPredicate {
+    /// Whether no evaluation of the predicate can fail over tuples whose
+    /// elements have the kinds `kind_of` gives, `None` for an element of
+    /// unknown or mixed kind (comprehension_forms.md §10.2 R5).
+    ///
+    /// The answer is read off the predicate's tree. `||`, `&&`, and `!`
+    /// are total over operands that are total and have a truth value (a
+    /// boolean or a number, never a string). `==`, `!=`, and membership
+    /// are total over total operands, since values of different kinds
+    /// are unequal; an ordering comparison is total only when both sides
+    /// are numbers, both strings, or both booleans. Arithmetic is total
+    /// over numeric operands, dividing only by a non-zero constant. An
+    /// element is total when its kind is known, a literal always is, and
+    /// any other expression (a function call, a cast, a bitwise
+    /// operator) can fail.
+    pub fn is_total(&self, kind_of: &dyn Fn(&str) -> Option<ValueKind>) -> bool {
+        total_kind(&self.tree, kind_of).is_some_and(has_truth)
+    }
+}
+
+/// The kind of value `node` yields when no evaluation of it can fail,
+/// or `None` when one can.
+fn total_kind(node: &Predicate, kind_of: &dyn Fn(&str) -> Option<ValueKind>) -> Option<ValueKind> {
+    use polydat_grammar::ast::BinOpKind;
+    let truthful = |p: &Predicate| total_kind(p, kind_of).is_some_and(has_truth);
+    match &node.kind {
+        PredicateKind::Or(parts) | PredicateKind::And(parts) => {
+            parts.iter().all(truthful).then_some(ValueKind::Bool)
+        }
+        PredicateKind::Not(inner) => truthful(inner).then_some(ValueKind::Bool),
+        PredicateKind::Compare(op, a, b) => {
+            let (a, b) = (total_kind(a, kind_of)?, total_kind(b, kind_of)?);
+            let ordered = matches!(
+                (a, b),
+                (
+                    ValueKind::Int | ValueKind::Float,
+                    ValueKind::Int | ValueKind::Float
+                ) | (ValueKind::Str, ValueKind::Str)
+                    | (ValueKind::Bool, ValueKind::Bool)
+            );
+            (matches!(op, Comparison::Eq | Comparison::Ne) || ordered).then_some(ValueKind::Bool)
+        }
+        PredicateKind::In(needle, items) => {
+            total_kind(needle, kind_of)?;
+            for item in items {
+                total_kind(item, kind_of)?;
+            }
+            Some(ValueKind::Bool)
+        }
+        PredicateKind::Element(name) => kind_of(name),
+        PredicateKind::Literal(literal) => Some(match literal {
+            PredicateLiteral::Int(_) => ValueKind::Int,
+            PredicateLiteral::Float(_) => ValueKind::Float,
+            PredicateLiteral::Str(_) => ValueKind::Str,
+            PredicateLiteral::Bool(_) => ValueKind::Bool,
+        }),
+        PredicateKind::Arith(op, a, b) => {
+            // An operand is written into the expression's text, so a
+            // literal is one the language reads back as itself: a
+            // non-negative integer within `u64`, or a non-negative float.
+            let operand = |p: &Predicate| {
+                let fits = match &p.kind {
+                    PredicateKind::Literal(PredicateLiteral::Int(n)) => u64::try_from(*n).is_ok(),
+                    PredicateKind::Literal(PredicateLiteral::Float(f)) => *f >= 0.0,
+                    _ => true,
+                };
+                total_kind(p, kind_of)
+                    .filter(|k| fits && matches!(k, ValueKind::Int | ValueKind::Float))
+            };
+            let (ka, kb) = (operand(a)?, operand(b)?);
+            if matches!(op, BinOpKind::Div | BinOpKind::Mod) {
+                let non_zero_constant = match &b.kind {
+                    PredicateKind::Literal(PredicateLiteral::Int(n)) => *n != 0,
+                    PredicateKind::Literal(PredicateLiteral::Float(f)) => *f != 0.0,
+                    _ => false,
+                };
+                if !non_zero_constant {
+                    return None;
+                }
+            }
+            Some(
+                if ka == ValueKind::Int && kb == ValueKind::Int && *op != BinOpKind::Pow {
+                    ValueKind::Int
+                } else {
+                    ValueKind::Float
+                },
+            )
+        }
+        PredicateKind::Expr => None,
+    }
+}
+
+/// Whether a value of this kind has a truth value.
+fn has_truth(kind: ValueKind) -> bool {
+    kind != ValueKind::Str
+}
+
+/// The kind of every value `name` takes in `c`: the kind its clause's
+/// source declares, the same in every branch of a union, or `None` when
+/// a source's values are of unknown or mixed kind or `c` does not bind
+/// `name`.
+pub fn element_kind(c: &Comprehension, name: &str) -> Option<ValueKind> {
+    let mut kinds = Vec::new();
+    collect_kinds(c, name, &mut kinds);
+    let first = (*kinds.first()?)?;
+    kinds.iter().all(|k| *k == Some(first)).then_some(first)
+}
+
+fn collect_kinds(c: &Comprehension, name: &str, out: &mut Vec<Option<ValueKind>>) {
+    match c {
+        Comprehension::Clause { name: n, source } if n == name => out.push(source_kind(source)),
+        Comprehension::Clause { .. } => {}
+        Comprehension::Cartesian { children }
+        | Comprehension::Zip { children, .. }
+        | Comprehension::Union { children } => {
+            for child in children {
+                collect_kinds(child, name, out);
+            }
+        }
+        Comprehension::Filter { child, .. } | Comprehension::Order { child, .. } => {
+            collect_kinds(child, name, out);
+        }
+    }
+}
+
+/// The kind of every value `source` yields, when it declares one.
+fn source_kind(source: &Source) -> Option<ValueKind> {
+    match source {
+        Source::IntRange { .. } => Some(ValueKind::Int),
+        Source::ContinuousInterval { .. } | Source::Distribution { .. } => Some(ValueKind::Float),
+        Source::Literal { values } => {
+            let kind = |v: &LiteralValue| match v {
+                LiteralValue::Int(_) => Some(ValueKind::Int),
+                LiteralValue::Float(_) => Some(ValueKind::Float),
+                LiteralValue::String(_) => Some(ValueKind::Str),
+                LiteralValue::Bool(_) => Some(ValueKind::Bool),
+                LiteralValue::Json(_) => None,
+            };
+            let first = kind(values.first()?)?;
+            values
+                .iter()
+                .all(|v| kind(v) == Some(first))
+                .then_some(first)
+        }
+        Source::Generator { .. } | Source::WorkloadParamList { .. } => None,
     }
 }
 
@@ -295,6 +458,59 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    /// Totality is read off the tree against the elements' kinds: what
+    /// can fail is an ordering of unlike kinds, the truth of a string,
+    /// arithmetic over a string or a negative literal, division by
+    /// anything but a non-zero constant, an element of unknown kind, and
+    /// any call or cast. (The integration suite evaluates each total
+    /// predicate here over values of its kinds, with the node library
+    /// that arithmetic calls into.)
+    #[test]
+    fn totality_is_read_off_the_tree() {
+        let kind_of = |name: &str| match name {
+            "k" | "m" => Some(ValueKind::Int),
+            "x" => Some(ValueKind::Float),
+            "w" => Some(ValueKind::Str),
+            "b" => Some(ValueKind::Bool),
+            _ => None,
+        };
+        let total = [
+            "{k} > 1",
+            "{k} < {x}",
+            "{w} == 2",
+            "{w} != {k} && {b}",
+            "{w} >= \"m\" || !{b}",
+            "{k} in [1, \"a\", true]",
+            "{k} * 2 + 1 > {m}",
+            "{k} - {m} >= 0",
+            "{k} / 2 == 1",
+            "{x} % 1.5 < 1",
+            "{k} ** 2 > {x}",
+            "{k} + 1",
+            "{x}",
+        ];
+        let partial = [
+            "{w} > 2",
+            "{b} < 1",
+            "{w}",
+            "{w} && {b}",
+            "{k} / {m} == 1",
+            "{k} % 0 == 1",
+            "{w} + 1 > 2",
+            "{k} + -1 > 2",
+            "{z} > 1",
+            "u64_add({k}, 1) > 2",
+            "{x} as u64 > 2",
+            "{k} & 1 == 1",
+        ];
+        for p in total {
+            assert!(CompiledPredicate::new(p).is_total(&kind_of), "{p}");
+        }
+        for p in partial {
+            assert!(!CompiledPredicate::new(p).is_total(&kind_of), "{p}");
         }
     }
 
