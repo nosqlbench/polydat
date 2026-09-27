@@ -186,7 +186,8 @@ pub(crate) fn try_shuffle_multi_indices(
 
 fn axis_sizes_for(idx: &IndexFn) -> Vec<u64> {
     match idx {
-        IndexFn::Lattice { axis_sizes } | IndexFn::Modular { axis_sizes } => axis_sizes.clone(),
+        IndexFn::Lattice { axis_sizes } => axis_sizes.clone(),
+        IndexFn::Modular { .. } => vec![index_fn_size(idx)],
         IndexFn::Lockstep { length } => vec![*length],
         IndexFn::Concatenation { segment_sizes } => vec![segment_sizes.iter().sum()],
         IndexFn::Continuous { .. } | IndexFn::Hybrid { .. } => Vec::new(),

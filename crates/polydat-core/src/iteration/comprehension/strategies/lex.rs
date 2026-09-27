@@ -62,7 +62,9 @@ pub(crate) fn lex_multi_indices(idx: &IndexFn, truncation: Option<u64>) -> Vec<M
     };
     let dim = index_fn_dim(idx);
     let axis_sizes: Vec<u64> = match idx {
-        IndexFn::Lattice { axis_sizes } | IndexFn::Modular { axis_sizes } => axis_sizes.clone(),
+        IndexFn::Lattice { axis_sizes } => axis_sizes.clone(),
+        // A cycle zip is one axis as long as its longest operand.
+        IndexFn::Modular { .. } => vec![total],
         IndexFn::Lockstep { length } => vec![*length],
         IndexFn::Concatenation { segment_sizes } => vec![segment_sizes.iter().sum()],
         // Continuous / Hybrid don't have integer multi-indices;

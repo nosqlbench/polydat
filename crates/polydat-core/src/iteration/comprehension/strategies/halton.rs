@@ -134,10 +134,12 @@ pub(crate) fn try_halton_multi_indices(
         return Ok(Vec::new());
     }
     let total = index_fn_size(idx);
+    // A continuous space has no tuple count, so the truncation is the
+    // number of draws; an empty discrete input has nothing to draw.
     let n = match (truncation, total) {
-        (Some(t), 0) => t,
+        (Some(t), 0) if idx.has_continuous_axis() => t,
+        (_, 0) => return Ok(Vec::new()),
         (Some(t), tot) => t.min(tot),
-        (None, 0) => return Ok(Vec::new()),
         (None, tot) => tot,
     };
     if n == 0 {
@@ -171,7 +173,8 @@ pub(crate) fn try_halton_multi_indices(
 
 fn axis_sizes_for(idx: &IndexFn, dim: usize) -> Vec<u64> {
     match idx {
-        IndexFn::Lattice { axis_sizes } | IndexFn::Modular { axis_sizes } => axis_sizes.clone(),
+        IndexFn::Lattice { axis_sizes } => axis_sizes.clone(),
+        IndexFn::Modular { .. } => vec![index_fn_size(idx)],
         IndexFn::Lockstep { length } => vec![*length],
         IndexFn::Concatenation { segment_sizes } => vec![segment_sizes.iter().sum()],
         IndexFn::Continuous { .. } => vec![u64::MAX; dim],

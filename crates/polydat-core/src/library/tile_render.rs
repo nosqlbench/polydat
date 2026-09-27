@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use crate::ast::SlotShape;
 use crate::ast::{PortType, Value, ValueRef};
 use crate::iteration::comprehension::StreamerValue;
-use crate::iteration::comprehension::runtime::{RuntimeTuple, evaluate_for_iteration};
+use crate::iteration::comprehension::runtime::{IndexedTuples, RuntimeTuple, evaluate_indexed};
 use crate::kernel::{Kernel, KernelProgram, PolydatKernel, PolydatProgram};
 use crate::library::support::float_text;
 
@@ -343,6 +343,35 @@ fn number_child_holes(ops: &mut [RtOp]) {
     walk(ops, &mut top);
 }
 
+/// A projection's tuples for one render: the memo's, or the ones the
+/// comprehension evaluated to this render, each computed from its
+/// position as the render reaches it.
+enum Projection<'a> {
+    Memo(&'a [RuntimeTuple]),
+    Indexed(IndexedTuples),
+}
+
+impl Projection<'_> {
+    fn len(&self) -> u64 {
+        match self {
+            Projection::Memo(tuples) => tuples.len() as u64,
+            Projection::Indexed(tuples) => tuples.len(),
+        }
+    }
+
+    /// The tuple at `i`, below [`Self::len`]; an evaluated one is
+    /// computed into `buf`.
+    fn tuple<'b>(&'b self, i: u64, buf: &'b mut RuntimeTuple) -> &'b RuntimeTuple {
+        match self {
+            Projection::Memo(tuples) => &tuples[i as usize],
+            Projection::Indexed(tuples) => {
+                *buf = tuples.get(i).unwrap_or_default();
+                buf
+            }
+        }
+    }
+}
+
 /// Evaluate every projection whose tuples cannot change between
 /// renders, once.
 fn memoize(
@@ -359,11 +388,14 @@ fn memoize(
                 generators,
                 ..
             } => {
+                // The memo holds the tuples a render iterates, computed
+                // once; an order over a large product computes only
+                // its selected tuples.
                 if generators.is_empty()
                     && !stream.text.contains('{')
-                    && let Ok(tuples) = evaluate_for_iteration(&stream.ast, &*canonicals[*child])
+                    && let Ok(tuples) = evaluate_indexed(&stream.ast, &*canonicals[*child])
                 {
-                    memo[*child] = Some(tuples.into());
+                    memo[*child] = Some(tuples.to_vec().into());
                 }
                 memoize(body, canonicals, memo);
             }
@@ -575,24 +607,21 @@ impl TileProgram {
                     // kernel it sees is empty and the canonical kernel is
                     // the body program.
                     let memoized = self.memo[*child_idx].clone();
-                    let tuples: std::borrow::Cow<'_, [RuntimeTuple]> = match &memoized {
-                        Some(t) => std::borrow::Cow::Borrowed(&t[..]),
+                    let tuples = match &memoized {
+                        Some(t) => Projection::Memo(&t[..]),
                         None => {
                             let mut streamer = (**stream).clone();
                             if !generators.is_empty() {
                                 streamer.ast = bind_generators(&streamer.ast, generators, inputs);
                             }
-                            std::borrow::Cow::Owned(
-                                evaluate_for_iteration(
-                                    &streamer.ast,
-                                    &*self.canonicals[*child_idx],
-                                )
-                                .unwrap_or_else(|e| {
-                                    panic!(
-                                        "tile '{}': projection `for {}` failed at render: {e}",
-                                        self.spec.name, streamer.text
-                                    )
-                                }),
+                            Projection::Indexed(
+                                evaluate_indexed(&streamer.ast, &*self.canonicals[*child_idx])
+                                    .unwrap_or_else(|e| {
+                                        panic!(
+                                            "tile '{}': projection `for {}` failed at render: {e}",
+                                            self.spec.name, streamer.text
+                                        )
+                                    }),
                             )
                         }
                     };
@@ -611,7 +640,9 @@ impl TileProgram {
                         )
                     };
                     bodies.with(&program, engine, |entry, bodies| {
-                        for (index, tuple) in tuples.iter().enumerate() {
+                        let mut buf = RuntimeTuple::new();
+                        for index in 0..tuples.len() {
+                            let tuple = tuples.tuple(index, &mut buf);
                             if !first {
                                 out.put(sep);
                             }
@@ -625,7 +656,7 @@ impl TileProgram {
                                     cascade,
                                     ..
                                 } = &mut *entry;
-                                kernel.set_inputs(&[index as u64]);
+                                kernel.set_inputs(&[index]);
                                 let elements = elements.get_or_insert_with(|| {
                                     tuple.iter().map(|(n, _)| kernel.input_index(n)).collect()
                                 });

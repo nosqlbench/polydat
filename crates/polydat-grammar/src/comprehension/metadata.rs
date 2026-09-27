@@ -813,8 +813,7 @@ fn lattice_dim(idx: &IndexFn) -> usize {
             continuous_axes,
             ..
         } => discrete_axes.len() + continuous_axes.len(),
-        IndexFn::Lockstep { .. } | IndexFn::Modular { .. } => 1,
-        IndexFn::Concatenation { segment_sizes } => segment_sizes.len(),
+        IndexFn::Lockstep { .. } | IndexFn::Modular { .. } | IndexFn::Concatenation { .. } => 1,
     }
 }
 

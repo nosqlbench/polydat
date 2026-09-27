@@ -95,6 +95,8 @@ mod guide_output;
 mod handle_boundaries;
 #[path = "hybrid_test.rs"]
 mod hybrid_test;
+#[path = "indexed_equivalence.rs"]
+mod indexed_equivalence;
 #[path = "input_variance.rs"]
 mod input_variance;
 #[path = "ir_end_to_end.rs"]

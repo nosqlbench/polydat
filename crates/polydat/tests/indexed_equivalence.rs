@@ -1,0 +1,465 @@
+// Copyright 2024-2026 Jonathan Shook
+// SPDX-License-Identifier: Apache-2.0
+
+//! The index-addressed evaluator against the reference evaluator
+//! (comprehension_forms.md §10.2 R2, §15.1).
+//!
+//! `evaluate_indexed` holds a comprehension's tuples addressed by
+//! position and computes one only when it is asked for;
+//! `evaluate_for_iteration_materialized` materializes every node. For
+//! every comprehension shape the two must yield exactly the same
+//! tuples in exactly the same order, fail with the same error, and
+//! report the same clause yields. The shapes here are fixed cases for
+//! each constructor and a seeded generator over their compositions:
+//! cartesians (independent and dependent), the three zip modes, unions,
+//! every order strategy with and without truncation and seed, filters,
+//! and sampled continuous spaces.
+
+use polydat::iteration::comprehension::ast::Comprehension;
+use polydat::iteration::comprehension::cardinality::{Interval, ProductMeasure};
+use polydat::iteration::comprehension::runtime::{
+    evaluate_for_iteration_materialized, evaluate_for_iteration_reported, evaluate_indexed,
+};
+use polydat::iteration::comprehension::source::{LiteralValue, Source};
+use polydat::iteration::comprehension::strategy::{StrategyName, ZipMode};
+
+fn scope() -> polydat::kernel::PolydatKernel {
+    polydat::dsl::compile_polydat_interpreter("input cycle: u64\n").unwrap()
+}
+
+/// Assert the two evaluators agree on `ast`, returning the tuple count.
+fn assert_equivalent(ast: &Comprehension, scope: &polydat::kernel::PolydatKernel) -> usize {
+    let reference = evaluate_for_iteration_materialized(ast, scope);
+    let indexed = evaluate_indexed(ast, scope);
+    match (reference, indexed) {
+        (Ok(reference), Ok(indexed)) => {
+            assert_eq!(
+                indexed.len(),
+                reference.tuples.len() as u64,
+                "tuple count differs for {ast:?}"
+            );
+            assert_eq!(
+                indexed.to_vec(),
+                reference.tuples,
+                "tuples differ for {ast:?}"
+            );
+            // Random access answers every position alike, in any order.
+            for i in (0..indexed.len()).rev().step_by(7) {
+                assert_eq!(
+                    indexed.get(i).as_ref(),
+                    reference.tuples.get(i as usize),
+                    "position {i} differs for {ast:?}"
+                );
+            }
+            assert_eq!(indexed.get(indexed.len()), None);
+            let reported = evaluate_for_iteration_reported(ast, scope).unwrap();
+            assert_eq!(
+                reported.clauses, reference.clauses,
+                "clause yields differ for {ast:?}"
+            );
+            assert_eq!(reported.tuples, reference.tuples);
+            reference.tuples.len()
+        }
+        (Err(reference), Err(indexed)) => {
+            assert_eq!(
+                indexed.to_string(),
+                reference.to_string(),
+                "errors differ for {ast:?}"
+            );
+            0
+        }
+        (reference, indexed) => panic!(
+            "one evaluator failed for {ast:?}:\n  reference: {:?}\n  indexed: {:?}",
+            reference.map(|r| r.tuples.len()),
+            indexed.map(|t| t.len())
+        ),
+    }
+}
+
+fn ints(name: &str, vs: &[i64]) -> Comprehension {
+    Comprehension::clause(
+        name,
+        Source::Literal {
+            values: vs.iter().map(|v| LiteralValue::Int(*v)).collect(),
+        },
+    )
+}
+
+fn range(name: &str, lo: i64, hi: i64, step: i64) -> Comprehension {
+    Comprehension::clause(name, Source::IntRange { lo, hi, step })
+}
+
+fn generator(name: &str, expr: &str) -> Comprehension {
+    Comprehension::clause(
+        name,
+        Source::Generator {
+            expr: expr.into(),
+            cardinality_hint: None,
+        },
+    )
+}
+
+fn unit(name: &str) -> Comprehension {
+    Comprehension::clause(
+        name,
+        Source::ContinuousInterval {
+            interval: Interval::closed(0.0, 1.0),
+            measure: ProductMeasure::Uniform,
+        },
+    )
+}
+
+const STRATEGIES: [StrategyName; 10] = [
+    StrategyName::Lex,
+    StrategyName::ReverseLex,
+    StrategyName::Diagonal,
+    StrategyName::Antidiagonal,
+    StrategyName::Extrema,
+    StrategyName::Shells,
+    StrategyName::Halton,
+    StrategyName::Sobol,
+    StrategyName::Lhs,
+    StrategyName::Shuffle,
+];
+
+/// Every constructor, and every strategy over each combinator.
+#[test]
+fn every_shape_indexes_as_it_materializes() {
+    let scope = scope();
+    let product = || Comprehension::cartesian(vec![range("a", 0, 4, 1), ints("b", &[5, 6, 7])]);
+    let dependent = || {
+        Comprehension::cartesian(vec![
+            range("a", 1, 5, 1),
+            generator("b", "0..{a}"),
+            ints("c", &[1, 2]),
+        ])
+    };
+    let lockstep =
+        |mode| Comprehension::zip(vec![range("x", 0, 5, 1), ints("y", &[1, 2, 3])], mode);
+    let union = || {
+        Comprehension::union(vec![
+            Comprehension::cartesian(vec![ints("k", &[1, 2]), range("m", 0, 3, 1)]),
+            Comprehension::cartesian(vec![ints("k", &[9]), range("m", 5, 7, 1)]),
+        ])
+    };
+    let mut shapes = vec![
+        range("a", 0, 10, 3),
+        range("a", 5, 5, 1),
+        range("a", -3, 4, 2),
+        ints("a", &[]),
+        ints("a", &[3, 3, 1]),
+        generator("a", "10..14"),
+        product(),
+        dependent(),
+        Comprehension::cartesian(vec![ints("a", &[]), range("b", 0, 3, 1)]),
+        Comprehension::cartesian(vec![
+            range("a", 0, 3, 1),
+            ints("b", &[]),
+            range("c", 0, 3, 1),
+        ]),
+        Comprehension::cartesian(vec![
+            lockstep(ZipMode::Strict),
+            Comprehension::cartesian(vec![ints("p", &[1, 2]), ints("q", &[3])]),
+        ]),
+        Comprehension::cartesian(vec![
+            range("o", 0, 3, 1),
+            Comprehension::union(vec![
+                Comprehension::cartesian(vec![ints("k", &[1]), generator("m", "0..{o}")]),
+                Comprehension::cartesian(vec![ints("k", &[2]), range("m", 0, 2, 1)]),
+            ]),
+        ]),
+        lockstep(ZipMode::Strict),
+        lockstep(ZipMode::Truncate),
+        lockstep(ZipMode::Cycle),
+        Comprehension::zip(vec![range("x", 0, 5, 1), ints("y", &[])], ZipMode::Cycle),
+        Comprehension::zip(
+            vec![
+                Comprehension::filter(range("x", 0, 9, 1), "{x} > 5"),
+                product(),
+                ints("z", &[1, 2, 3, 4, 5]),
+            ],
+            ZipMode::Cycle,
+        ),
+        union(),
+        Comprehension::filter(product(), "{a} != 2 && {b} > 5"),
+        Comprehension::filter(dependent(), "{b} < 2"),
+        Comprehension::filter(product(), "u64_add({a}, {b}) > 7"),
+        Comprehension::order(
+            Comprehension::cartesian(vec![range("a", 0, 3, 1), unit("u")]),
+            StrategyName::Halton,
+            Some(5),
+        ),
+        Comprehension::order(
+            Comprehension::filter(
+                Comprehension::cartesian(vec![unit("u"), unit("v")]),
+                "{u} > 0.5",
+            ),
+            StrategyName::Sobol,
+            Some(4),
+        ),
+    ];
+    for strategy in STRATEGIES {
+        for truncation in [None, Some(1), Some(4), Some(100)] {
+            for seed in [None, Some(7)] {
+                for input in [
+                    product(),
+                    dependent(),
+                    lockstep(ZipMode::Truncate),
+                    lockstep(ZipMode::Cycle),
+                    union(),
+                    Comprehension::filter(product(), "{b} != 6"),
+                    Comprehension::order(product(), StrategyName::Shuffle, Some(9)),
+                ] {
+                    shapes.push(Comprehension::order_seeded(
+                        input, strategy, truncation, seed,
+                    ));
+                }
+            }
+        }
+    }
+    for shape in &shapes {
+        assert_equivalent(shape, &scope);
+    }
+}
+
+/// A small PRNG, so the generated shapes are the same on every run.
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 = self
+            .0
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    fn below(&mut self, n: u64) -> u64 {
+        self.next() % n
+    }
+
+    fn coin(&mut self, percent: u64) -> bool {
+        self.below(100) < percent
+    }
+}
+
+/// Seeded comprehension shapes over every constructor, with each
+/// tuple count bounded so the reference evaluator stays quick.
+struct Shapes {
+    rng: Rng,
+    names: u64,
+}
+
+impl Shapes {
+    fn name(&mut self) -> String {
+        self.names += 1;
+        format!("n{}", self.names)
+    }
+
+    fn clause(&mut self, bound: &[String]) -> Comprehension {
+        let name = self.name();
+        let source = match self.rng.below(5) {
+            0 => Source::Literal {
+                values: (0..self.rng.below(5))
+                    .map(|_| LiteralValue::Int(self.rng.below(6) as i64))
+                    .collect(),
+            },
+            1 => Source::Literal {
+                values: (0..1 + self.rng.below(3))
+                    .map(|i| LiteralValue::String(format!("s{i}")))
+                    .collect(),
+            },
+            2 if !bound.is_empty() => {
+                // A source over an earlier axis: the product depends
+                // on the tuple before it.
+                let over = &bound[self.rng.below(bound.len() as u64) as usize];
+                Source::Generator {
+                    expr: format!("0..{{{over}}}"),
+                    cardinality_hint: None,
+                }
+            }
+            2 => Source::Generator {
+                expr: format!("{}..{}", self.rng.below(3), 2 + self.rng.below(4)),
+                cardinality_hint: None,
+            },
+            _ => {
+                let lo = self.rng.below(4) as i64 - 1;
+                Source::IntRange {
+                    lo,
+                    hi: lo + self.rng.below(6) as i64,
+                    step: 1 + self.rng.below(2) as i64,
+                }
+            }
+        };
+        Comprehension::clause(name, source)
+    }
+
+    fn shape(&mut self, depth: u32, bound: &[String]) -> Comprehension {
+        if depth == 0 {
+            return self.clause(bound);
+        }
+        match self.rng.below(10) {
+            0 | 1 => self.clause(bound),
+            2 | 3 => {
+                let mut children = Vec::new();
+                let mut seen = bound.to_vec();
+                for _ in 0..2 + self.rng.below(2) {
+                    let child = self.shape(depth - 1, &seen);
+                    seen.extend(child.coordinate_names());
+                    children.push(child);
+                }
+                Comprehension::cartesian(children)
+            }
+            4 => {
+                let mode = match self.rng.below(3) {
+                    0 => ZipMode::Strict,
+                    1 => ZipMode::Truncate,
+                    _ => ZipMode::Cycle,
+                };
+                let children = (0..2 + self.rng.below(2))
+                    .map(|_| self.shape(depth - 1, bound))
+                    .collect();
+                Comprehension::zip(children, mode)
+            }
+            5 => {
+                let template = self.shape(depth - 1, bound);
+                let other = if self.rng.coin(50) {
+                    template.clone()
+                } else {
+                    self.shape(depth - 1, bound)
+                };
+                Comprehension::union(vec![template, other])
+            }
+            6 | 7 => {
+                let child = self.shape(depth - 1, bound);
+                let names = child.coordinate_names();
+                let predicate = match (names.first(), self.rng.below(4)) {
+                    (Some(n), 0) => format!("{{{n}}} > {}", self.rng.below(3)),
+                    (Some(n), 1) => format!("{{{n}}} != {}", self.rng.below(3)),
+                    (Some(n), 2) if names.len() > 1 => format!("{{{n}}} <= {{{}}}", names[1]),
+                    _ => if self.rng.coin(50) { "true" } else { "false" }.to_string(),
+                };
+                Comprehension::filter(child, predicate)
+            }
+            _ => {
+                let child = self.shape(depth - 1, bound);
+                let strategy = STRATEGIES[self.rng.below(STRATEGIES.len() as u64) as usize];
+                let truncation = self.rng.coin(60).then(|| 1 + self.rng.below(8));
+                let seed = self.rng.coin(30).then(|| self.rng.below(1000));
+                Comprehension::order_seeded(child, strategy, truncation, seed)
+            }
+        }
+    }
+}
+
+/// An upper bound on a shape's tuple count, a dependent source
+/// counted at the most it can yield here.
+fn bound(c: &Comprehension) -> u64 {
+    match c {
+        Comprehension::Clause { source, .. } => match source {
+            Source::Generator { .. } => 6,
+            other => match other.cardinality() {
+                polydat::iteration::comprehension::CardinalityClass::Bounded(n) => n,
+                _ => 6,
+            },
+        },
+        Comprehension::Cartesian { children } => children
+            .iter()
+            .map(bound)
+            .fold(1u64, |a, b| a.saturating_mul(b)),
+        Comprehension::Zip { children, .. } => children.iter().map(bound).max().unwrap_or(1),
+        Comprehension::Union { children } => children.iter().map(bound).sum(),
+        Comprehension::Filter { child, .. } => bound(child),
+        Comprehension::Order {
+            child, truncation, ..
+        } => truncation.map_or(bound(child), |t| t.min(bound(child))),
+    }
+}
+
+/// Seeded compositions of every constructor: the two evaluators agree
+/// on each one.
+#[test]
+fn generated_shapes_index_as_they_materialize() {
+    let scope = scope();
+    let cases: u64 = std::env::var("POLYDAT_INDEXED_CASES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1500);
+    let (mut compared, mut tuples) = (0u64, 0usize);
+    for case in 0..cases {
+        let mut shapes = Shapes {
+            rng: Rng(0x5EED_0000 + case),
+            names: 0,
+        };
+        let shape = shapes.shape(3, &[]);
+        if bound(&shape) > 4000 {
+            continue;
+        }
+        tuples += assert_equivalent(&shape, &scope);
+        compared += 1;
+    }
+    assert!(compared > cases / 2, "only {compared} of {cases} compared");
+    assert!(tuples > 0, "no generated shape produced a tuple");
+}
+
+/// The open cost of a large product: the reference evaluator builds
+/// every tuple before its order selects, the index-addressed one
+/// holds the axes and the selection.
+#[test]
+fn a_large_product_opens_at_the_cost_of_its_selection() {
+    let scope = scope();
+    let sweep = |n: i64| {
+        Comprehension::order(
+            Comprehension::cartesian(vec![range("a", 0, n, 1), range("b", 0, n, 1)]),
+            StrategyName::Halton,
+            Some(100),
+        )
+    };
+    let started = std::time::Instant::now();
+    let reference = evaluate_for_iteration_materialized(&sweep(300), &scope).unwrap();
+    let reference_time = started.elapsed();
+    let started = std::time::Instant::now();
+    let indexed = evaluate_indexed(&sweep(300), &scope).unwrap();
+    let indexed_time = started.elapsed();
+    assert_eq!(indexed.to_vec(), reference.tuples);
+    eprintln!(
+        "open, 300 x 300 order halton/100: materialized {reference_time:?}, indexed {indexed_time:?}"
+    );
+
+    // A product no machine could materialize opens as fast.
+    let started = std::time::Instant::now();
+    let huge = evaluate_indexed(&sweep(1_000_000), &scope).unwrap();
+    let huge_time = started.elapsed();
+    assert_eq!(huge.len(), 100);
+    assert!(huge.get(99).is_some());
+    eprintln!("open, 10^6 x 10^6 order halton/100: indexed {huge_time:?}");
+}
+
+/// A traversal over a 10^12-tuple product opens, reports its length,
+/// and activates any tuple directly.
+#[test]
+fn a_traversal_over_a_huge_product_activates_by_position() {
+    let src = "input cycle: u64\n\
+               for a in 0..1000000, b in 0..1000000 order halton/10 {\n    \
+               s := u64_add(a, b)\n}\n";
+    let mut kernel = polydat::dsl::compile_polydat_interpreter(src).unwrap();
+    kernel.set_inputs(&[0]);
+    let started = std::time::Instant::now();
+    let mut stream = kernel.traverse(0).unwrap();
+    eprintln!(
+        "traverse, 10^6 x 10^6 order halton/10: {:?}",
+        started.elapsed()
+    );
+    assert_eq!(stream.len(), 10);
+    let mut last = stream.activation(9).unwrap();
+    let expected = last.coord("a").unwrap().as_u64() + last.coord("b").unwrap().as_u64();
+    assert_eq!(last.cycle(0).pull("s").as_u64(), expected);
+    let mut count = 0;
+    while stream.advance().unwrap().is_some() {
+        count += 1;
+    }
+    assert_eq!(count, 10);
+}

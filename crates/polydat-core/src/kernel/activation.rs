@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use crate::ast::Value;
 use crate::dsl::traversal::Traversal;
-use crate::iteration::comprehension::runtime::{RuntimeTuple, evaluate_for_iteration};
+use crate::iteration::comprehension::runtime::{IndexedTuples, evaluate_indexed};
 use crate::iteration::cursor_partition::{cursor_extent_on, cursor_over_partitions_on};
 use crate::kernel::Kernel;
 use crate::kernel::interp::Layered;
@@ -160,9 +160,15 @@ impl Activation {
 }
 
 /// Dispenses activations for one traversal of a kernel.
+///
+/// The stream holds the comprehension's tuples addressed by position
+/// ([`IndexedTuples`]): opening evaluated every source, and each
+/// activation computes its own tuple, so `len`, `seek`, and
+/// `activation(index)` cost the same at any index, and an order's
+/// selection over a large product holds only the selected positions.
 pub struct TraversalStream {
     traversal: Traversal,
-    tuples: Vec<RuntimeTuple>,
+    tuples: IndexedTuples,
     cascade: Vec<(String, Value)>,
     next: usize,
     /// The engine of the kernel that opened this traversal. Its
@@ -174,7 +180,7 @@ pub struct TraversalStream {
 impl TraversalStream {
     /// Number of activations the traversal dispenses.
     pub fn len(&self) -> usize {
-        self.tuples.len()
+        usize::try_from(self.tuples.len()).unwrap_or(usize::MAX)
     }
 
     /// Whether the traversal dispenses no activation.
@@ -190,7 +196,7 @@ impl TraversalStream {
     /// Move the dispense position. Every strategy is a decidable
     /// permutation, so seeking costs nothing beyond the index.
     pub fn seek(&mut self, index: usize) {
-        self.next = index.min(self.tuples.len());
+        self.next = index.min(self.len());
     }
 
     /// Current dispense position.
@@ -215,7 +221,7 @@ impl TraversalStream {
 
     /// The next activation, or `None` when exhausted.
     pub fn advance(&mut self) -> Result<Option<Activation<Box<dyn Kernel>>>, String> {
-        if self.next >= self.tuples.len() {
+        if self.next >= self.len() {
             return Ok(None);
         }
         let i = self.next;
@@ -246,7 +252,7 @@ impl TraversalStream {
         index: usize,
         engine: crate::Engine,
     ) -> Result<Activation<Box<dyn Kernel>>, String> {
-        let tuple = self.tuples.get(index).ok_or_else(|| {
+        let tuple = self.tuples.get(index as u64).ok_or_else(|| {
             format!(
                 "activation index {index} is out of range; traversal has {} tuples",
                 self.tuples.len()
@@ -257,7 +263,7 @@ impl TraversalStream {
             .program_on(engine)
             .map_err(|e| e.to_string())?;
         let mut kernel = program.create_uninitialized();
-        bind_by_name_on(kernel.as_mut(), tuple)?;
+        bind_by_name_on(kernel.as_mut(), &tuple)?;
         bind_by_name_on(kernel.as_mut(), &self.cascade)?;
         let cursor = narrow_cursors_on(kernel.as_mut())?;
         // The activation's consts are evaluated once its tuple, cascade,
@@ -265,7 +271,7 @@ impl TraversalStream {
         kernel.init().map_err(|e| e.to_string())?;
         Ok(Activation {
             index: index as u64,
-            coords: tuple.clone(),
+            coords: tuple,
             kernel,
             cursor,
         })
@@ -422,7 +428,7 @@ pub fn open_traversal(
         prefix: &captured,
         inner: &cascaded,
     };
-    let tuples = evaluate_for_iteration(&traversal.comprehension, &scope).map_err(|e| {
+    let tuples = evaluate_indexed(&traversal.comprehension, &scope).map_err(|e| {
         format!(
             "`for {}` at line {}, col {}: {e}",
             traversal.source_text, traversal.span.line, traversal.span.col

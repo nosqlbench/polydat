@@ -388,8 +388,9 @@ pub(crate) fn index_fn_dim(idx: &IndexFn) -> usize {
             continuous_axes,
             ..
         } => discrete_axes.len() + continuous_axes.len(),
-        IndexFn::Lockstep { .. } | IndexFn::Modular { .. } => 1,
-        IndexFn::Concatenation { segment_sizes } => segment_sizes.len(),
+        // A zip and a union are one axis of positions, which is what
+        // `multi_index_to_flat` reads from them.
+        IndexFn::Lockstep { .. } | IndexFn::Modular { .. } | IndexFn::Concatenation { .. } => 1,
     }
 }
 
@@ -436,7 +437,56 @@ mod tests {
             index_fn_dim(&IndexFn::Concatenation {
                 segment_sizes: vec![1, 2, 3]
             }),
-            3
+            1
         );
+    }
+
+    /// Every strategy over a zip or a union emits positions within the
+    /// input, one axis as long as the input, and never fails.
+    #[test]
+    fn one_axis_inputs_select_within_their_length() {
+        let inputs = [
+            IndexFn::Modular {
+                axis_sizes: vec![2, 7, 3],
+            },
+            IndexFn::Concatenation {
+                segment_sizes: vec![2, 3, 4],
+            },
+            IndexFn::Lockstep { length: 9 },
+        ];
+        for idx in &inputs {
+            let total = index_fn_size(idx);
+            for name in [
+                StrategyName::Lex,
+                StrategyName::ReverseLex,
+                StrategyName::Diagonal,
+                StrategyName::Antidiagonal,
+                StrategyName::Extrema,
+                StrategyName::Shells,
+                StrategyName::Halton,
+                StrategyName::Sobol,
+                StrategyName::Lhs,
+                StrategyName::Shuffle,
+            ] {
+                let full: Vec<u64> = for_name(name)
+                    .select(idx, total, None, None)
+                    .iter()
+                    .collect();
+                let mut sorted = full.clone();
+                sorted.sort_unstable();
+                sorted.dedup();
+                assert!(
+                    full.iter().all(|p| *p < total),
+                    "{name:?} over {idx:?}: {full:?}"
+                );
+                if !matches!(name, StrategyName::Halton | StrategyName::Sobol) {
+                    assert_eq!(
+                        sorted.len() as u64,
+                        total,
+                        "{name:?} over {idx:?} reaches every position: {full:?}"
+                    );
+                }
+            }
+        }
     }
 }

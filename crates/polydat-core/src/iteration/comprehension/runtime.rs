@@ -40,16 +40,18 @@
 //!
 //! ## What this owns
 //!
-//! [`evaluate_for_iteration`] is the public surface:
-//! `(algebra AST + scope) → Vec<RuntimeTuple>`. The returned
-//! tuples carry polydat [`Value`]s, which the caller binds into a
-//! kernel over the body's program, one per tuple.
+//! [`evaluate_indexed`] is the public surface:
+//! `(algebra AST + scope) → IndexedTuples`, the tuples addressed by
+//! position and computed when asked for; [`evaluate_for_iteration`]
+//! computes them all. The tuples carry polydat [`Value`]s, which the
+//! caller binds into a kernel over the body's program, one per tuple.
+//! [`evaluate_for_iteration_materialized`] is the reference the
+//! index-addressed evaluator is held to: every node materializes.
 //!
-//! Order modifiers route through the unified
-//! `Strategy::apply` (spec §10.7.8): each node returns its
-//! tuples paired with the [`IndexFn`] the materialized stream
-//! satisfies; the Order node assembles an [`EvaluatedInput`]
-//! and invokes the strategy. V4 fires at this site,
+//! Order modifiers route through `Strategy::select` (spec
+//! §10.7.8): each node returns its tuples paired with the
+//! [`IndexFn`] they satisfy, and the Order node selects positions
+//! from that shape and the tuple count. V4 fires at this site,
 //! definitively.
 //!
 //! ## What this does NOT own
@@ -78,8 +80,10 @@ use crate::kernel::interp::{Layered, Lookup, interpolate_via_kernel};
 
 /// Runtime tuple type — polydat-Value-based to preserve Ext
 /// typing (Partition / Json / etc.) through the iteration
-/// pipeline. The algebra layer's [`Tuple`] uses
-/// [`TupleValue`] which is scalar-only; this `RuntimeTuple`
+/// pipeline. The algebra layer's
+/// [`Tuple`](crate::iteration::comprehension::strategies::Tuple) uses
+/// [`TupleValue`](crate::iteration::comprehension::strategies::TupleValue)
+/// which is scalar-only; this `RuntimeTuple`
 /// is what the executor actually wants for per-iteration
 /// kernel binding via [`PolydatKernel::for_iteration`](crate::kernel::PolydatKernel::for_iteration).
 pub type RuntimeTuple = Vec<(String, Value)>;
@@ -170,18 +174,15 @@ impl std::error::Error for RuntimeError {}
 /// typed coordinate-tuple list.
 ///
 /// `scope` is where names resolve: the body's kernel with the
-/// parent's cascaded wires, or any other [`Lookup`].
-///
-/// It used to take two more: a workload-parameter map, which the
-/// evaluator stored and never read, and an empty-clause callback,
-/// which every caller passed as "do nothing". Both date from a host
-/// that decided an empty-clause policy of its own; a clause with no
+/// parent's cascaded wires, or any other [`Lookup`]. A clause with no
 /// values yields no tuples, which is what an empty clause means.
+///
+/// This is [`evaluate_indexed`] with every tuple computed.
 pub fn evaluate_for_iteration(
     comp: &Comprehension,
     scope: &dyn Lookup,
 ) -> Result<Vec<RuntimeTuple>, RuntimeError> {
-    evaluate_for_iteration_reported(comp, scope).map(|e| e.tuples)
+    evaluate_indexed(comp, scope).map(|t| t.to_vec())
 }
 
 /// [`evaluate_for_iteration`], and what each leaf clause yielded on the
@@ -203,11 +204,218 @@ pub fn evaluate_for_iteration_reported(
     scope: &dyn Lookup,
 ) -> Result<EvaluatedIteration, RuntimeError> {
     let mut state = EvalState::new(comp, scope);
+    let (node, _) = state.index_node(comp, &[])?;
+    Ok(EvaluatedIteration {
+        tuples: IndexedTuples { node }.to_vec(),
+        clauses: state.yields,
+    })
+}
+
+/// Evaluate a comprehension against a scope to its tuples addressed by
+/// position (comprehension_forms.md §10.2 R2).
+///
+/// Every source is evaluated here, so every source error surfaces
+/// here, but a tuple is computed only when it is asked for. A clause
+/// over a range holds its bounds, a clause over any other source holds
+/// its values, an independent cartesian, a zip, and a union hold their
+/// operands, and an order holds its operand and the positions its
+/// strategy selected from the operand's shape. A node with no closed
+/// form over its operands holds its tuples: a filter's survivors, a
+/// cartesian whose sources reference an earlier axis, and an order
+/// that samples a continuous space. `order halton/100` over a large
+/// product therefore holds the product's axes and 100 positions.
+///
+/// The tuples are exactly those [`evaluate_for_iteration_materialized`]
+/// produces, in the same order, and the clause yields it reports are
+/// the same.
+pub fn evaluate_indexed(
+    comp: &Comprehension,
+    scope: &dyn Lookup,
+) -> Result<IndexedTuples, RuntimeError> {
+    let mut state = EvalState::new(comp, scope);
+    let (node, _) = state.index_node(comp, &[])?;
+    Ok(IndexedTuples { node })
+}
+
+/// The reference evaluator: every node materializes its tuples, and a
+/// cartesian evaluates each later axis once per tuple of the axes
+/// before it.
+///
+/// [`evaluate_indexed`] must yield exactly these tuples in exactly
+/// this order, and report the same clause yields; the equivalence
+/// harness compares the two over every comprehension shape.
+pub fn evaluate_for_iteration_materialized(
+    comp: &Comprehension,
+    scope: &dyn Lookup,
+) -> Result<EvaluatedIteration, RuntimeError> {
+    let mut state = EvalState::new(comp, scope);
     let tuples = state.evaluate_node(comp, &[])?.tuples;
     Ok(EvaluatedIteration {
         tuples,
         clauses: state.yields,
     })
+}
+
+/// A comprehension's tuples addressed by position: each tuple is
+/// computed from its position when asked for ([`evaluate_indexed`]).
+#[derive(Debug, Clone)]
+pub struct IndexedTuples {
+    node: Indexed,
+}
+
+impl IndexedTuples {
+    /// How many tuples there are.
+    pub fn len(&self) -> u64 {
+        self.node.len()
+    }
+
+    /// Whether there are no tuples.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The tuple at position `i`, or `None` past the end.
+    pub fn get(&self, i: u64) -> Option<RuntimeTuple> {
+        if i >= self.len() {
+            return None;
+        }
+        let mut out = RuntimeTuple::new();
+        self.node.append_at(i, &mut out);
+        Some(out)
+    }
+
+    /// Every tuple, in order.
+    pub fn iter(&self) -> impl Iterator<Item = RuntimeTuple> + '_ {
+        (0..self.len()).filter_map(|i| self.get(i))
+    }
+
+    /// Every tuple, computed now.
+    pub fn to_vec(&self) -> Vec<RuntimeTuple> {
+        self.iter().collect()
+    }
+}
+
+/// One node of an evaluated comprehension, answering the tuple at a
+/// position.
+#[derive(Debug, Clone)]
+enum Indexed {
+    /// Materialized tuples: a node with no closed form over its
+    /// operands.
+    Tuples(Vec<RuntimeTuple>),
+    /// One clause's values.
+    Clause { name: String, values: ClauseValues },
+    /// An independent cartesian: the children's tuples at the
+    /// mixed-radix digits of the position, the last child least
+    /// significant.
+    Product {
+        children: Vec<Indexed>,
+        lens: Vec<u64>,
+        len: u64,
+    },
+    /// A strict or truncating zip: every child's tuple at the position.
+    Lockstep { children: Vec<Indexed>, len: u64 },
+    /// A cycle zip: every non-empty child's tuple at the position
+    /// modulo its length.
+    Cycle { children: Vec<Indexed>, len: u64 },
+    /// A union: the child whose segment holds the position.
+    Concat { children: Vec<Indexed>, len: u64 },
+    /// An order: the child's tuple at the selected position.
+    Select {
+        child: Box<Indexed>,
+        selection: Selection,
+    },
+}
+
+/// A clause's values, each computed from its position.
+#[derive(Debug, Clone)]
+enum ClauseValues {
+    /// `lo, lo + step, …`, `len` of them: an integer range.
+    Range { lo: i64, step: i64, len: u64 },
+    /// Any other source's evaluated values.
+    List(Vec<Value>),
+}
+
+impl ClauseValues {
+    fn len(&self) -> u64 {
+        match self {
+            ClauseValues::Range { len, .. } => *len,
+            ClauseValues::List(values) => values.len() as u64,
+        }
+    }
+
+    fn at(&self, i: u64) -> Value {
+        match self {
+            // A range's values are unsigned coordinates, as its
+            // evaluated source gives them.
+            ClauseValues::Range { lo, step, .. } => {
+                Value::U64((i128::from(*lo) + i128::from(i) * i128::from(*step)) as i64 as u64)
+            }
+            ClauseValues::List(values) => values[i as usize].clone(),
+        }
+    }
+}
+
+impl Indexed {
+    fn len(&self) -> u64 {
+        match self {
+            Indexed::Tuples(tuples) => tuples.len() as u64,
+            Indexed::Clause { values, .. } => values.len(),
+            Indexed::Product { len, .. }
+            | Indexed::Lockstep { len, .. }
+            | Indexed::Cycle { len, .. }
+            | Indexed::Concat { len, .. } => *len,
+            Indexed::Select { selection, .. } => selection.len(),
+        }
+    }
+
+    /// Append the bindings of the tuple at `i`, which is below
+    /// [`Self::len`], to `out`.
+    fn append_at(&self, i: u64, out: &mut RuntimeTuple) {
+        match self {
+            Indexed::Tuples(tuples) => out.extend(tuples[i as usize].iter().cloned()),
+            Indexed::Clause { name, values } => out.push((name.clone(), values.at(i))),
+            Indexed::Product { children, lens, .. } => {
+                let mut digits = vec![0u64; lens.len()];
+                let mut rest = i;
+                for (d, len) in digits.iter_mut().zip(lens).rev() {
+                    *d = rest % len;
+                    rest /= len;
+                }
+                for (child, d) in children.iter().zip(digits) {
+                    child.append_at(d, out);
+                }
+            }
+            Indexed::Lockstep { children, .. } => {
+                for child in children {
+                    child.append_at(i, out);
+                }
+            }
+            Indexed::Cycle { children, .. } => {
+                for child in children {
+                    let len = child.len();
+                    if len > 0 {
+                        child.append_at(i % len, out);
+                    }
+                }
+            }
+            Indexed::Concat { children, .. } => {
+                let mut offset = i;
+                for child in children {
+                    let len = child.len();
+                    if offset < len {
+                        child.append_at(offset, out);
+                        return;
+                    }
+                    offset -= len;
+                }
+            }
+            Indexed::Select { child, selection } => {
+                if let Some(p) = selection.get(i) {
+                    child.append_at(p, out);
+                }
+            }
+        }
+    }
 }
 
 /// Evaluate a predicate in the comprehension grammar against a tuple
@@ -484,6 +692,11 @@ struct EvalState<'a> {
     /// distinguishes two clauses that share a name across the branches
     /// of a union.
     by_leaf: std::collections::HashMap<usize, usize>,
+    /// How many evaluations the node being evaluated stands for. The
+    /// reference evaluator evaluates a cartesian's later axis once per
+    /// tuple of the axes before it; the index-addressed evaluator
+    /// evaluates an independent axis once, which stands for that many.
+    mult: usize,
 }
 
 impl<'a> EvalState<'a> {
@@ -493,6 +706,7 @@ impl<'a> EvalState<'a> {
             scope,
             yields: Vec::new(),
             by_leaf: std::collections::HashMap::new(),
+            mult: 1,
         };
         state.enumerate_leaves(comp);
         state
@@ -523,11 +737,14 @@ impl<'a> EvalState<'a> {
         }
     }
 
-    /// Record one evaluation of a leaf and the values it produced.
+    /// Record the evaluations of a leaf and the values each produced:
+    /// one evaluation standing for `mult` identical ones.
     fn record_yield(&mut self, source: &Source, values: usize) {
         if let Some(&i) = self.by_leaf.get(&(std::ptr::from_ref(source) as usize)) {
-            self.yields[i].evaluations += 1;
-            self.yields[i].values += values;
+            self.yields[i].evaluations = self.yields[i].evaluations.saturating_add(self.mult);
+            self.yields[i].values = self.yields[i]
+                .values
+                .saturating_add(values.saturating_mul(self.mult));
         }
     }
 }
@@ -566,12 +783,14 @@ impl EvalState<'_> {
         }
     }
 
-    fn evaluate_clause(
+    /// Evaluate one clause's source against the prefix and record what
+    /// it yielded.
+    fn evaluate_source(
         &mut self,
         name: &str,
         source: &Source,
         prefix: &[(String, Value)],
-    ) -> Result<EvaluatedNode, RuntimeError> {
+    ) -> Result<crate::iteration::comprehension::eval_source::EvaluatedSource, RuntimeError> {
         let ctx = EvalContext {
             var_name: name,
             scope: self.scope,
@@ -594,8 +813,17 @@ impl EvalState<'_> {
                 ))
             }
         })?;
-
         self.record_yield(source, evaluated.values.len());
+        Ok(evaluated)
+    }
+
+    fn evaluate_clause(
+        &mut self,
+        name: &str,
+        source: &Source,
+        prefix: &[(String, Value)],
+    ) -> Result<EvaluatedNode, RuntimeError> {
+        let evaluated = self.evaluate_source(name, source, prefix)?;
 
         if evaluated.values.is_empty() {
             // A clause with no values yields no tuples, which is what
@@ -632,7 +860,7 @@ impl EvalState<'_> {
                 }),
             });
         }
-        let mut child_index_fns: Vec<Option<IndexFn>> = Vec::with_capacity(children.len());
+        let mut child_index_fns: Vec<(Option<IndexFn>, u64)> = Vec::with_capacity(children.len());
         let mut dependent_observed = false;
         let result_tuples = self.evaluate_cartesian_rec(
             children.len(),
@@ -650,7 +878,9 @@ impl EvalState<'_> {
         let combined = if dependent_observed {
             None
         } else {
-            combine_cartesian_index_fn(&child_index_fns)
+            let index_fns: Vec<Option<IndexFn>> =
+                child_index_fns.into_iter().map(|(idx, _)| idx).collect();
+            combine_cartesian_index_fn(&index_fns)
         };
         Ok(EvaluatedNode {
             tuples: result_tuples,
@@ -663,7 +893,7 @@ impl EvalState<'_> {
         child_count: usize,
         children: &[Comprehension],
         prefix: &[(String, Value)],
-        child_index_fns: &mut Vec<Option<IndexFn>>,
+        child_index_fns: &mut Vec<(Option<IndexFn>, u64)>,
         dependent_observed: &mut bool,
     ) -> Result<Vec<RuntimeTuple>, RuntimeError> {
         if children.is_empty() {
@@ -673,17 +903,14 @@ impl EvalState<'_> {
         let head_eval = self.evaluate_node(head, prefix)?;
         let head_axis_len = head_eval.tuples.len() as u64;
         // The head's position among the cartesian's children: the
-        // first evaluation at a position records its index_fn.
+        // first evaluation at a position records its index_fn and
+        // tuple count, and a later evaluation with another count
+        // (a dependent cartesian) leaves the product no lattice.
         let depth = child_count - children.len();
-        if child_index_fns.len() <= depth {
-            child_index_fns.push(head_eval.index_fn.clone());
-        } else if let Some(prev) = child_index_fns.get(depth).cloned().flatten() {
-            // Subsequent prefix iterations of a dependent
-            // cartesian: if the per-prefix child cardinality
-            // differs from the first prefix's, mark dependent.
-            if axis_size_of(&prev) != Some(head_axis_len) {
-                *dependent_observed = true;
-            }
+        match child_index_fns.get(depth) {
+            None => child_index_fns.push((head_eval.index_fn.clone(), head_axis_len)),
+            Some((_, first)) if *first != head_axis_len => *dependent_observed = true,
+            Some(_) => {}
         }
 
         if tail.is_empty() {
@@ -797,45 +1024,7 @@ impl EvalState<'_> {
     ) -> Result<EvaluatedNode, RuntimeError> {
         let mut out = Vec::with_capacity(input.tuples.len());
         for tuple in input.tuples {
-            // Fast path: the comprehension predicate grammar (`{name}`
-            // compared to a literal or another `{name}`, joined by `&&`,
-            // `||`, `!`, or `in [...]`) evaluates directly against the
-            // tuple, without a kernel and without compiling (SRD 113
-            // §5.2). Anything richer takes the kernel path below.
-            if let Some(keep) = fast_predicate(predicate, &tuple) {
-                if keep {
-                    out.push(tuple);
-                }
-                continue;
-            }
-            let scope = Layered {
-                prefix: &tuple,
-                inner: self.scope,
-            };
-            let interpolated = interpolate_via_kernel(predicate, &scope).map_err(|e| {
-                RuntimeError::FilterEval {
-                    predicate: predicate.to_string(),
-                    message: e.to_string(),
-                }
-            })?;
-            let result = eval_const_expr_for(&interpolated, self.scope.ledger()).map_err(|e| {
-                RuntimeError::FilterEval {
-                    predicate: predicate.to_string(),
-                    message: e.to_string(),
-                }
-            })?;
-            let keep = match result {
-                Value::Bool(b) => b,
-                Value::U64(n) => n != 0,
-                Value::F64(n) => n != 0.0,
-                other => {
-                    return Err(RuntimeError::FilterEval {
-                        predicate: predicate.to_string(),
-                        message: format!("expected bool/u64/f64, got {other:?}"),
-                    });
-                }
-            };
-            if keep {
+            if self.keeps(predicate, &tuple)? {
                 out.push(tuple);
             }
         }
@@ -844,6 +1033,36 @@ impl EvalState<'_> {
             tuples: out,
             index_fn: None,
         })
+    }
+
+    /// Whether `tuple` passes `predicate`.
+    fn keeps(&self, predicate: &str, tuple: &RuntimeTuple) -> Result<bool, RuntimeError> {
+        // Fast path: the comprehension predicate grammar (`{name}`
+        // compared to a literal or another `{name}`, joined by `&&`,
+        // `||`, `!`, or `in [...]`) evaluates directly against the
+        // tuple, without a kernel and without compiling (SRD 113
+        // §5.2). Anything richer takes the kernel path below.
+        if let Some(keep) = fast_predicate(predicate, tuple) {
+            return Ok(keep);
+        }
+        let scope = Layered {
+            prefix: tuple,
+            inner: self.scope,
+        };
+        let failed = |message: String| RuntimeError::FilterEval {
+            predicate: predicate.to_string(),
+            message,
+        };
+        let interpolated =
+            interpolate_via_kernel(predicate, &scope).map_err(|e| failed(e.to_string()))?;
+        let result = eval_const_expr_for(&interpolated, self.scope.ledger())
+            .map_err(|e| failed(e.to_string()))?;
+        match result {
+            Value::Bool(b) => Ok(b),
+            Value::U64(n) => Ok(n != 0),
+            Value::F64(n) => Ok(n != 0.0),
+            other => Err(failed(format!("expected bool/u64/f64, got {other:?}"))),
+        }
     }
 
     /// Sample an order over a space with a continuous axis (spec
@@ -1050,43 +1269,16 @@ impl EvalState<'_> {
         truncation: Option<u64>,
         seed: Option<u64>,
     ) -> Result<EvaluatedNode, RuntimeError> {
-        use crate::iteration::comprehension::strategies::{
-            Strategy, antidiagonal::Antidiagonal, diagonal::Diagonal, extrema::Extrema,
-            halton::Halton, lex::Lex, lhs::Lhs, reverse_lex::ReverseLex, shells::Shells,
-            shuffle::Shuffle, sobol::Sobol,
-        };
-
-        let dispatch: Box<dyn Strategy> = match strategy {
-            StrategyName::Lex => Box::new(Lex),
-            StrategyName::ReverseLex => Box::new(ReverseLex),
-            StrategyName::Diagonal => Box::new(Diagonal),
-            StrategyName::Antidiagonal => Box::new(Antidiagonal),
-            StrategyName::Extrema => Box::new(Extrema),
-            StrategyName::Shells => Box::new(Shells),
-            StrategyName::Halton => Box::new(Halton),
-            StrategyName::Sobol => Box::new(Sobol),
-            StrategyName::Lhs => Box::new(Lhs),
-            StrategyName::Shuffle => Box::new(Shuffle),
-        };
-
-        // V4 fire at strategy-invocation time (spec §10.7.8).
-        if !dispatch.accepts_input(input.index_fn.as_ref()) {
-            return Err(RuntimeError::StrategyRejectsInput {
-                strategy,
-                index_fn: input.index_fn.clone(),
-            });
-        }
-
         // The strategy selects positions from the input's shape
         // alone (its `IndexFn` and tuple count), so the chosen tuples
         // are the input's tuples at those positions.
         let selection = order_selection(
-            dispatch.as_ref(),
+            strategy,
             input.index_fn.as_ref(),
             input.tuples.len() as u64,
             truncation,
             seed,
-        );
+        )?;
         let out = selection
             .iter()
             .map(|p| input.tuples[p as usize].clone())
@@ -1101,18 +1293,311 @@ impl EvalState<'_> {
     }
 }
 
+/// The index-addressed evaluator ([`evaluate_indexed`]). Each node
+/// returns its tuples addressed by position together with the
+/// `IndexFn` the reference evaluator claims for it, which is what an
+/// enclosing order's strategy routes on.
+impl EvalState<'_> {
+    fn index_node(
+        &mut self,
+        node: &Comprehension,
+        prefix: &[(String, Value)],
+    ) -> Result<(Indexed, Option<IndexFn>), RuntimeError> {
+        match node {
+            Comprehension::Clause { name, source } => self.index_clause(name, source, prefix),
+            Comprehension::Cartesian { children } => self.index_cartesian(children, prefix),
+            Comprehension::Zip { children, mode } => self.index_zip(children, *mode, prefix),
+            Comprehension::Union { children } => self.index_union(children, prefix),
+            Comprehension::Filter { child, predicate } => {
+                // A filter keeps the tuples that pass; which ones is
+                // known only by testing each, so its output holds them.
+                let (inner, _) = self.index_node(child, prefix)?;
+                let mut kept = Vec::new();
+                let mut tuple = RuntimeTuple::new();
+                for i in 0..inner.len() {
+                    tuple.clear();
+                    inner.append_at(i, &mut tuple);
+                    if self.keeps(predicate, &tuple)? {
+                        kept.push(tuple.clone());
+                    }
+                }
+                Ok((Indexed::Tuples(kept), None))
+            }
+            Comprehension::Order {
+                child,
+                strategy,
+                truncation,
+                seed,
+            } => {
+                if has_continuous_axis(child) {
+                    let sampled =
+                        self.sample_space(child, prefix, *strategy, *truncation, *seed)?;
+                    return Ok((Indexed::Tuples(sampled.tuples), sampled.index_fn));
+                }
+                let (inner, index_fn) = self.index_node(child, prefix)?;
+                let selection = order_selection(
+                    *strategy,
+                    index_fn.as_ref(),
+                    inner.len(),
+                    *truncation,
+                    *seed,
+                )?;
+                Ok((
+                    Indexed::Select {
+                        child: Box::new(inner),
+                        selection,
+                    },
+                    None,
+                ))
+            }
+        }
+    }
+
+    fn index_clause(
+        &mut self,
+        name: &str,
+        source: &Source,
+        prefix: &[(String, Value)],
+    ) -> Result<(Indexed, Option<IndexFn>), RuntimeError> {
+        let values = match source {
+            // A range's values are its bounds; the source's own
+            // evaluation would hold every value.
+            Source::IntRange { lo, hi, step } => {
+                let step = (*step).max(1);
+                let len = if hi <= lo {
+                    0
+                } else {
+                    ((i128::from(*hi) - i128::from(*lo)) as u128).div_ceil(step as u128) as u64
+                };
+                self.record_yield(source, len as usize);
+                ClauseValues::Range { lo: *lo, step, len }
+            }
+            _ => {
+                let evaluated = self.evaluate_source(name, source, prefix)?;
+                let index_fn = evaluated.index_fn;
+                return Ok((
+                    Indexed::Clause {
+                        name: name.to_string(),
+                        values: ClauseValues::List(evaluated.values),
+                    },
+                    Some(index_fn),
+                ));
+            }
+        };
+        let len = values.len();
+        Ok((
+            Indexed::Clause {
+                name: name.to_string(),
+                values,
+            },
+            Some(IndexFn::Lattice {
+                axis_sizes: vec![len],
+            }),
+        ))
+    }
+
+    /// An independent cartesian evaluates each axis once, the
+    /// evaluation standing for one per tuple of the axes before it,
+    /// and stops at an empty axis as the reference evaluator does. A
+    /// cartesian whose sources reference an earlier axis is evaluated
+    /// by the reference evaluator and holds its tuples.
+    fn index_cartesian(
+        &mut self,
+        children: &[Comprehension],
+        prefix: &[(String, Value)],
+    ) -> Result<(Indexed, Option<IndexFn>), RuntimeError> {
+        if children.is_empty() || references_an_earlier_axis(children) {
+            let node = self.evaluate_cartesian(children, prefix)?;
+            return Ok((Indexed::Tuples(node.tuples), node.index_fn));
+        }
+        let base = self.mult;
+        let mut parts = Vec::with_capacity(children.len());
+        let mut index_fns = Vec::with_capacity(children.len());
+        let mut lens = Vec::with_capacity(children.len());
+        let mut len: u64 = 1;
+        for child in children {
+            let evaluated = self.index_node(child, prefix);
+            let (part, index_fn) = match evaluated {
+                Ok(done) => done,
+                Err(e) => {
+                    self.mult = base;
+                    return Err(e);
+                }
+            };
+            let part_len = part.len();
+            parts.push(part);
+            index_fns.push(index_fn);
+            lens.push(part_len);
+            len = match len.checked_mul(part_len) {
+                Some(n) => n,
+                None => {
+                    self.mult = base;
+                    return Err(RuntimeError::UnsupportedShape(format!(
+                        "cartesian of {lens:?} tuples exceeds 2^64"
+                    )));
+                }
+            };
+            if part_len == 0 {
+                break;
+            }
+            self.mult = self
+                .mult
+                .saturating_mul(usize::try_from(part_len).unwrap_or(usize::MAX));
+        }
+        self.mult = base;
+        let index_fn = combine_cartesian_index_fn(&index_fns);
+        if len == 0 {
+            return Ok((Indexed::Tuples(Vec::new()), index_fn));
+        }
+        Ok((
+            Indexed::Product {
+                children: parts,
+                lens,
+                len,
+            },
+            index_fn,
+        ))
+    }
+
+    fn index_zip(
+        &mut self,
+        children: &[Comprehension],
+        mode: crate::iteration::comprehension::strategy::ZipMode,
+        prefix: &[(String, Value)],
+    ) -> Result<(Indexed, Option<IndexFn>), RuntimeError> {
+        use crate::iteration::comprehension::strategy::ZipMode;
+        if children.is_empty() {
+            let node = self.evaluate_zip(children, mode, prefix)?;
+            return Ok((Indexed::Tuples(node.tuples), node.index_fn));
+        }
+        let mut parts = Vec::with_capacity(children.len());
+        for child in children {
+            parts.push(self.index_node(child, prefix)?.0);
+        }
+        let lengths: Vec<u64> = parts.iter().map(Indexed::len).collect();
+        let len = match mode {
+            ZipMode::Strict => {
+                let first = lengths[0];
+                if lengths.iter().any(|&n| n != first) {
+                    return Err(RuntimeError::UnsupportedShape(format!(
+                        "zip strict: child lengths differ ({lengths:?})"
+                    )));
+                }
+                first
+            }
+            ZipMode::Truncate => lengths.iter().copied().min().unwrap_or(0),
+            ZipMode::Cycle => lengths.iter().copied().max().unwrap_or(0),
+        };
+        Ok(match mode {
+            ZipMode::Strict | ZipMode::Truncate => (
+                Indexed::Lockstep {
+                    children: parts,
+                    len,
+                },
+                Some(IndexFn::Lockstep { length: len }),
+            ),
+            ZipMode::Cycle => (
+                Indexed::Cycle {
+                    children: parts,
+                    len,
+                },
+                Some(IndexFn::Modular {
+                    axis_sizes: lengths,
+                }),
+            ),
+        })
+    }
+
+    fn index_union(
+        &mut self,
+        children: &[Comprehension],
+        prefix: &[(String, Value)],
+    ) -> Result<(Indexed, Option<IndexFn>), RuntimeError> {
+        let mut parts = Vec::with_capacity(children.len());
+        let mut segment_sizes = Vec::with_capacity(children.len());
+        let mut all_segments_addressable = true;
+        for child in children {
+            let (part, index_fn) = self.index_node(child, prefix)?;
+            all_segments_addressable &= index_fn.is_some();
+            segment_sizes.push(part.len());
+            parts.push(part);
+        }
+        let len = segment_sizes
+            .iter()
+            .try_fold(0u64, |acc, n| acc.checked_add(*n))
+            .ok_or_else(|| {
+                RuntimeError::UnsupportedShape(format!(
+                    "union of {segment_sizes:?} tuples exceeds 2^64"
+                ))
+            })?;
+        let index_fn = all_segments_addressable.then_some(IndexFn::Concatenation { segment_sizes });
+        Ok((
+            Indexed::Concat {
+                children: parts,
+                len,
+            },
+            index_fn,
+        ))
+    }
+}
+
+/// `true` when a child of a cartesian references, in its sources, a
+/// name that an earlier child binds: the child's tuples then depend on
+/// the tuple before it (spec §3.2).
+fn references_an_earlier_axis(children: &[Comprehension]) -> bool {
+    let mut bound: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for child in children {
+        if child
+            .referenced_source_names()
+            .iter()
+            .any(|n| bound.contains(n))
+        {
+            return true;
+        }
+        collect_clause_names(child, &mut bound);
+    }
+    false
+}
+
+/// Every clause name in `c`, in every branch of a union.
+fn collect_clause_names(c: &Comprehension, out: &mut std::collections::BTreeSet<String>) {
+    match c {
+        Comprehension::Clause { name, .. } => {
+            out.insert(name.clone());
+        }
+        Comprehension::Cartesian { children }
+        | Comprehension::Zip { children, .. }
+        | Comprehension::Union { children } => {
+            for child in children {
+                collect_clause_names(child, out);
+            }
+        }
+        Comprehension::Filter { child, .. } | Comprehension::Order { child, .. } => {
+            collect_clause_names(child, out);
+        }
+    }
+}
+
 /// The positions `strategy` selects over an input of `cardinality`
-/// tuples addressed by `index_fn`. An input the walker could not
-/// address (a filter's output, a dependent cartesian whose axes vary)
-/// is ordered as a one-axis lattice of its tuples: V4 admits only
-/// `Lex` over one, and `Lex` reads nothing but the count.
+/// tuples addressed by `index_fn`, after V4 (spec §10.7.8). An input
+/// the walker could not address (a filter's output, a dependent
+/// cartesian whose axes vary) is ordered as a one-axis lattice of its
+/// tuples: V4 admits only `Lex` over one, and `Lex` reads nothing but
+/// the count.
 fn order_selection(
-    strategy: &dyn crate::iteration::comprehension::strategies::Strategy,
+    strategy: StrategyName,
     index_fn: Option<&IndexFn>,
     cardinality: u64,
     truncation: Option<u64>,
     seed: Option<u64>,
-) -> Selection {
+) -> Result<Selection, RuntimeError> {
+    let dispatch = crate::iteration::comprehension::strategies::for_name(strategy);
+    if !dispatch.accepts_input(index_fn) {
+        return Err(RuntimeError::StrategyRejectsInput {
+            strategy,
+            index_fn: index_fn.cloned(),
+        });
+    }
     let fallback;
     let index_fn = match index_fn {
         Some(idx) => idx,
@@ -1123,7 +1608,7 @@ fn order_selection(
             &fallback
         }
     };
-    strategy.select(index_fn, cardinality, truncation, seed)
+    Ok(dispatch.select(index_fn, cardinality, truncation, seed))
 }
 
 /// How many times a sampled order redraws, doubling the count each
@@ -1283,14 +1768,6 @@ fn combine_cartesian_index_fn(children: &[Option<IndexFn>]) -> Option<IndexFn> {
         }
     }
     Some(IndexFn::Lattice { axis_sizes })
-}
-
-fn axis_size_of(idx: &IndexFn) -> Option<u64> {
-    match idx {
-        IndexFn::Lattice { axis_sizes } if axis_sizes.len() == 1 => Some(axis_sizes[0]),
-        IndexFn::Lockstep { length } => Some(*length),
-        _ => None,
-    }
 }
 
 #[cfg(test)]
