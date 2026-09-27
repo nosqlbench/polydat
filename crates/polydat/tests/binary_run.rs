@@ -203,6 +203,25 @@ fn every_engine_emits_the_same_rows() {
     assert_eq!(rows(&stdout), want);
 }
 
+/// `--strict` is `pragma strict` at the program's top scope: a name a
+/// comprehension reads that nothing binds compiles with a warning without
+/// it and is refused with it.
+#[test]
+fn the_strict_flag_refuses_an_unbound_name() {
+    let path = write_temp(
+        "strict",
+        "input cycle: u64\nfor k in 1..4 where {k} > {zz} {\n    s := u64_add(k, 1)\n}\n",
+    );
+    let (ok, _, stderr) = run_binary(&["check", path.to_str().unwrap()]);
+    assert!(ok, "{stderr}");
+    let (ok, stdout, stderr) = run_binary(&["check", path.to_str().unwrap(), "--strict"]);
+    assert!(!ok, "{stdout}");
+    assert!(
+        stderr.contains("V3:") && stderr.contains("`zz`"),
+        "{stderr}"
+    );
+}
+
 #[test]
 fn stats_and_timing_name_the_run_engine() {
     let path = write_temp(

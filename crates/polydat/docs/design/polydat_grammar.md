@@ -920,6 +920,17 @@ as a warning (`UnknownPragma`), never an error.
 pragma strict_types
 ```
 
+**The host's strict switch is `pragma strict` at the top scope.** A
+host that compiles with `CompileOptions::strict`, or the binary's
+`--strict`, compiles the program as if `pragma strict` were written at
+its top: strict value checks, strict type checks, and strict name
+checking hold in the program and in every scope that inherits its
+pragmas (§[14.1](#sec-pragma-scoping)). A module body follows its own
+pragmas alone under a strict host as under any other. The switch also
+turns on the checks that have no pragma, such as the refusal of an
+implicit type coercion, a binding nothing reads, and a positional module
+argument; those are listed on `CompileOptions`.
+
 <a id="sec-pragma-scoping"></a>
 ### 14.1 Pragma scoping
 

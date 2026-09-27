@@ -54,6 +54,10 @@
 //! is not a scope: it compiles under the set of the scope it is
 //! written in. Pragmas are presence-only, so a nested scope can add to
 //! the set and never conflicts with it.
+//!
+//! A host that compiles strictly seeds the program's top scope with
+//! `strict` ([`PragmaSet::host`]): the host switch and a `pragma strict`
+//! at the top of the program mean the same thing.
 
 use crate::ast::Statement;
 
@@ -64,7 +68,8 @@ pub struct Pragma {
     pub name: String,
     /// Whitespace-separated arguments after the name, if any.
     pub args: Vec<String>,
-    /// 1-based line number where the pragma appeared, for diagnostics.
+    /// 1-based line number where the pragma appeared, for diagnostics;
+    /// 0 for a pragma the host seeds ([`PragmaSet::host`]).
     pub line: usize,
 }
 
@@ -77,6 +82,26 @@ pub struct PragmaSet {
 }
 
 impl PragmaSet {
+    /// The set a program's top scope starts from before its own pragmas
+    /// are added: `strict` when the host asks for strict compilation
+    /// (`CompileOptions::strict`, the binary's `--strict`), and empty
+    /// otherwise. The seeded `strict` is in force exactly as a
+    /// `pragma strict` written at the top of the program is, so every
+    /// scope that inherits the top scope's set inherits it, and a module
+    /// body, which compiles under its own pragmas alone, does not.
+    pub fn host(strict: bool) -> PragmaSet {
+        let entries = if strict {
+            vec![Pragma {
+                name: "strict".to_string(),
+                args: Vec::new(),
+                line: 0,
+            }]
+        } else {
+            Vec::new()
+        };
+        PragmaSet { entries }
+    }
+
     /// Returns true if the named pragma is in force.
     pub fn contains(&self, name: &str) -> bool {
         self.entries.iter().any(|p| p.name == name)
@@ -184,6 +209,14 @@ mod tests {
         let unknown: Vec<_> = set.unknown().collect();
         assert_eq!(unknown.len(), 1);
         assert_eq!(unknown[0].name, "warp_drive");
+    }
+
+    #[test]
+    fn host_strict_seeds_strict_under_the_program_pragmas() {
+        let set = PragmaSet::host(true).nested(&statements("pragma strict_values\nid := cycle\n"));
+        assert!(set.strict_names() && set.strict_types() && set.strict_values());
+        assert_eq!(set.unknown().count(), 0);
+        assert!(PragmaSet::host(false).entries.is_empty());
     }
 
     #[test]

@@ -67,7 +67,8 @@ struct CompileArgs {
     /// Directory searched for `.polydat` modules. Repeatable.
     #[arg(long = "lib", value_name = "DIR")]
     libs: Vec<PathBuf>,
-    /// Reject implicit type coercions and require explicit inputs.
+    /// Compile strictly: reject implicit type coercions, require explicit
+    /// inputs, and apply `pragma strict` at the program's top scope.
     #[arg(long)]
     strict: bool,
     /// Execution engine: `auto` is the build's default, native code

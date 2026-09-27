@@ -129,6 +129,7 @@ returns it again on every later `advance`.
 | Under `pragma strict`, a name that nothing binds is refused at compile (V3) | a program whose scope declares `pragma strict` and whose clause source or predicate names something that neither the comprehension nor the scope provides; a bare word in a predicate, which is a name and never resolves. `strict` is now a pragma of its own, which checks names besides implying `strict_values` and `strict_types`; neither of those checks names | bind or declare the name, or quote the text; the error `ValidationError::V3UnresolvedNames { reads }` names each unresolved name and where it is read ([comprehension_forms.md](../design/comprehension_forms.md) §5, V3; [polydat_grammar.md](../design/polydat_grammar.md) §14) |
 | V6's bound check reads every zip operand, including one inside a wrapper | a zip whose unbounded operand was hidden by a rewrite and accepted | bound the operand, or use a cycle zip ([comprehension_forms.md](../design/comprehension_forms.md) §5, V6) |
 | Under `pragma strict_values`, a constant that violates the constraint of the port it feeds fails the build | a program such as `mod_wire(cycle, 0)`, which compiled before because a constant source was skipped unchecked | pass a value the constraint accepts; the error names the port, the constraint, and the constant ([graph_compiler.md](../design/graph_compiler.md) §2.3) |
+| A strict compile (`CompileOptions::strict`, the binary's `--strict`) is `pragma strict` at the program's top scope | a program compiled strictly that reads a name nothing binds, in the program or a `for` body, which compiled with a warning before; a constant that violates the value constraint of the port it feeds, which now fails the build, and any other source feeding such a port, which now gets a runtime assertion. A module body that declares no pragma is not affected | the fixes in the two rows above; the error is the one `pragma strict` raises ([polydat_grammar.md](../design/polydat_grammar.md) §14) |
 
 ## Part 2: what changes quietly
 
@@ -299,8 +300,9 @@ a rule the specifications now state and every engine follows.
   a predicate that reads it for a tuple keeps it not. A scope name that
   holds None, such as an extern with no default, reads the same way; in
   0.5.0 a None element failed the predicate, and a source interpolated
-  it as text. A host that wants the refusal declares `pragma strict`, or
-  compiles a stream with `Mode::Strict`
+  it as text. A host that wants the refusal declares `pragma strict`,
+  compiles with `CompileOptions::strict` (Part 1), or compiles a stream
+  with `Mode::Strict`
   ([comprehension_forms.md](../design/comprehension_forms.md) §5, V3,
   §10.9.1).
 - **A stream evaluates predicates and orders as a traversal does.**
@@ -402,7 +404,9 @@ a rule the specifications now state and every engine follows.
   refused (Part 1). Name checking follows the same scopes as the other
   pragmas, so a strict module refuses its own producers' unbound names
   under a lax host, and a lax module warns about them under a strict
-  host ([polydat_grammar.md](../design/polydat_grammar.md) §14).
+  host ([polydat_grammar.md](../design/polydat_grammar.md) §14). A
+  host's `CompileOptions::strict` puts `pragma strict` in the program's
+  top scope (Part 1).
 - **The type round-trip lint follows the same scopes.** Whether a lossy
   round trip is an error or a warning is decided by the pragmas of the
   scope the converting node is written in, not by the program's set, so

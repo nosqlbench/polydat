@@ -42,9 +42,15 @@ struct Run {
 /// Compile `src` on `engine` and open each of its traversals, or the
 /// compile error.
 fn run(src: &str, engine: Engine) -> Result<Run, String> {
+    run_with(src, engine, false)
+}
+
+/// [`run`] with the host's `CompileOptions::strict` set to `host_strict`.
+fn run_with(src: &str, engine: Engine, host_strict: bool) -> Result<Run, String> {
     let ledger = CompileLedger::new();
     let options = CompileOptions {
         ledger: Some(ledger.clone()),
+        strict: host_strict,
         ..CompileOptions::default()
     };
     let mut log = CompileEventLog::new();
@@ -298,6 +304,43 @@ fn a_module_is_checked_under_its_own_pragmas() {
             "{engine}: {}",
             found.warnings[0]
         );
+    }
+}
+
+/// The host's `CompileOptions::strict` is `pragma strict` at the
+/// program's top scope: an unbound name that compiles with a warning
+/// without it is refused with it, in the program and in a `for` body, and
+/// a module without pragmas stays lax under it.
+#[test]
+fn host_strict_is_pragma_strict_at_the_top_scope() {
+    let refused = |src: &str, engine: Engine| {
+        let Err(err) = run_with(src, engine, true) else {
+            panic!("{engine}: compiles under CompileOptions::strict\n{src}")
+        };
+        assert!(
+            err.contains("V3:") && err.contains("`zz`"),
+            "{engine}: {err}"
+        );
+    };
+    let top = "input cycle: u64\nfor k in 1..4 where {k} > {zz} {\n    s := u64_add(k, 1)\n}\n";
+    let body = "input cycle: u64\n\
+                for k in 1..3 {\n    \
+                for j in pow2({zz}) {\n        t := j\n    }\n    \
+                s := k\n}\n";
+    let module = "input cycle: u64\n\
+                  m(a: u64) -> (out: u64) := {\n\
+                      p := for k in 1..4 where {k} > {zz}\n\
+                      out := a\n\
+                  }\n\
+                  s := m(a: cycle)\n";
+    for engine in engines() {
+        for src in [top, body] {
+            let found = lax(src, engine);
+            assert_eq!(found.warnings.len(), 1, "{engine}: {:?}", found.warnings);
+            refused(src, engine);
+        }
+        let found = run_with(module, engine, true).unwrap_or_else(|e| panic!("{engine}: {e}"));
+        assert_eq!(found.warnings.len(), 1, "{engine}: {:?}", found.warnings);
     }
 }
 

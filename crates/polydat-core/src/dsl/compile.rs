@@ -443,7 +443,11 @@ impl Drop for DataBaseDirGuard {
 /// an implicit type coercion, a config wire fed from a cycle-time
 /// source, a nondeterministic node no `volatile` output acknowledges, a
 /// binding nothing reads, an undeclared coordinate, and a positional
-/// module argument.
+/// module argument. It is also `pragma strict` at the program's top
+/// scope (polydat_grammar.md §14): strict value checks, strict type
+/// checks, and strict name checking hold in the program and in every
+/// scope that inherits its pragmas, and a module body follows its own
+/// pragmas alone.
 ///
 /// `engine` is a **preference**, and the only place a caller expresses
 /// one. Leaving it alone is the normative path: [`Engine::default`](crate::Engine::default) is
@@ -465,7 +469,8 @@ pub struct CompileOptions {
     pub lib_paths: Vec<PathBuf>,
     /// The outputs to keep; every output when empty.
     pub required_outputs: Vec<String>,
-    /// Whether to enforce strict validation.
+    /// Whether to enforce strict validation, `pragma strict` at the
+    /// program's top scope included.
     pub strict: bool,
     /// The diagnostic context label, such as a file name.
     pub context: String,
@@ -2661,9 +2666,13 @@ impl Prepared {
         // program's own directory for the duration of this synchronous
         // compile; see `library::datafile::set_data_base_dir`.
         let _data_base = options.source_dir.as_deref().map(DataBaseDirGuard::set);
-        let pragmas = super::pragmas::collect_from_ast(ast);
+        // `strict` in the options is `pragma strict` at the program's top
+        // scope (polydat_grammar.md §14): the host seeds the set the
+        // program's own pragmas add to. The log records the pragmas the
+        // source declares.
+        let pragmas = super::pragmas::PragmaSet::host(options.strict).nested(&ast.statements);
         if let Some(log) = log {
-            record_pragma_events(&pragmas, log);
+            record_pragma_events(&super::pragmas::collect_from_ast(ast), log);
         }
         // The required-outputs list is extended with the const bindings
         // only when the caller passed one: an empty list keeps every

@@ -1046,7 +1046,10 @@ Two validation modes:
   workload-loading paths that want a clean bill of health. On the
   stream compile it refuses V3 as `ValidationError::V3UnresolvedNames`.
   In a program's compile V3 follows `pragma strict` in the scope the
-  statement is written in, not the compile's mode (§5).
+  statement is written in, not the compile's mode (§5). A strict
+  compile puts `pragma strict` in the program's top scope
+  (polydat_grammar.md §14), so V3 is refused there and in every scope
+  that inherits it, and a module body follows its own pragmas.
 
 The degenerate-composition catalog:
 
