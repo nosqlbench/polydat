@@ -136,14 +136,15 @@ wire of the same name, and a value is checked against the child slot's
 type. The spawn binder (`kernel::bind_under`, whose wiring pass takes
 `dyn Kernel` on both sides) performs these operations in order:
 
-1. Collect every shared cell visible at the parent, including transit cells
+1. Join the child program's resource scope to the parent's (§4.1).
+2. Collect every shared cell visible at the parent, including transit cells
    inherited from ancestors.
-2. Attach a matching cell to the child's same-named input slot. A visible cell
+3. Attach a matching cell to the child's same-named input slot. A visible cell
    with no matching child slot is retained on the child as transit for deeper
    descendants.
-3. Suppress an ancestor transit cell when the child has a local authoritative
+4. Suppress an ancestor transit cell when the child has a local authoritative
    `const` output of the same name.
-4. For a parent output that is backed by a parent input slot or is a `const`,
+5. For a parent output that is backed by a parent input slot or is a `const`,
    copy the parent's current cell-aware lookup result into the child's
    input under the host-write rule. A declared input takes the value as it
    is; an input whose type was inferred takes it converted through the
@@ -151,14 +152,14 @@ type. The spawn binder (`kernel::bind_under`, whose wiring pass takes
    `KernelError::Write(WriteError::FromParent { slot, expected, got })`
    ([input_variance.md](input_variance.md) §7). A coordinate is never
    copied.
-5. For a computed parent output consumed by the child, attach the parent's
+6. For a computed parent output consumed by the child, attach the parent's
    output cell to the child's slot; every pull of that output on the parent
    publishes the fresh value through the cell. Output cells exist on all
    four engines, so the link is live whatever engines the parent and
    child run on.
-6. Initialize the child (`Kernel::init`), after its extern inputs have been
+7. Initialize the child (`Kernel::init`), after its extern inputs have been
    filled, so each `const` is evaluated once and fixed for the child's life.
-7. Refresh the child's own coordinate stratum and append the parent's frozen
+8. Refresh the child's own coordinate stratum and append the parent's frozen
    coordinate path.
 
 Coordinate advancement remains explicit. Parent materialization does not copy
@@ -177,6 +178,45 @@ binders differ in what they transfer to the child (cells, transit cells,
 output cells, and coordinates on the spawn path; values on the traversal
 path). Both run over the `Kernel` trait and bind a child on any of the four
 engines.
+
+### 4.1 Resource scope inheritance
+
+A program's resource scope (`polydat::ResourceScope`,
+[library_catalog.md](library_catalog.md), "Resources") is fixed when it
+compiles. A `for` body, a subscope built through the builder, a module's
+programs, and every kernel created from or forked off a program share the
+scope of the program they were built for. A program compiled on its own,
+such as a host's per-fiber image, has a scope of its own. Step 1 of the
+spawn binder joins that scope to the parent's (`ResourceScope::join`), and
+the join has these rules:
+
+- **Delegation.** A scope with no accessor installed resolves each lookup
+  through the parent it joined, and that parent through its own, up to the
+  first scope with an accessor installed. The link is set on the child
+  program's scope, so every kernel of that program, bound, forked, or
+  created later, resolves through it. An accessor installed once at the root
+  serves every image bound beneath it, including one installed after the
+  bind.
+- **An installed accessor stays.** A scope with its own accessor installed
+  answers its own lookups, and the join leaves it unlinked. An accessor
+  installed on a joined scope later takes precedence over its parent.
+- **No cycles.** A scope never delegates to itself or to a descendant. A
+  child whose scope is the parent's, or one the parent already resolves
+  through, is not linked: a builder's subscope shares its parent's scope, and
+  a tree's root program bound under a kernel of its own descendant stays the
+  root. A join made concurrently with others that would close a cycle is
+  severed, leaves the scope joined to nothing, and fails binding with
+  `KernelError::Resources(ScopeJoinError::Cycle)`.
+- **The first join wins.** A scope joins at most one parent. Binding a
+  kernel of the same program again, under the same tree or another, leaves
+  the link as the first bind set it, because the program's nodes hold its
+  one scope. A host that binds one program under trees with different
+  accessors installs an accessor on that program (`CompileOptions::resources`
+  when it compiles it). A module built under one tree and instantiated
+  under another joins the module's scope, which is its builder parent's
+  tree's, to the tree it is first instantiated under, so the builder
+  parent's tree resolves through that tree too while it has no accessor of
+  its own.
 
 ## 5. Visibility and shadowing
 

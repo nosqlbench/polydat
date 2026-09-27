@@ -65,6 +65,7 @@ The release makes three things true that a host builds on:
 | `PolydatRuntime::register_factory`, `build_from_factory`, and `factory_count` are removed | a host that registered a factory at run time | link it with `inventory::submit! { FactoryRegistration { factory: &MY_FACTORY } }`; list factories with `registry::factories()` |
 | `ScopedExpr::set` returns `Result<&mut Self, WriteError>` | a chained or ignored call | handle the error: an unknown name, a coordinate, or a value that does not convert is now refused as `set_input` refuses it ([polydat_grammar_programmatic.md](../design/polydat_grammar_programmatic.md) §11) |
 | `#[polydat_node]` refuses a signature that mixes a const list (`Const<Vec<C>>`) with a wire variadic (`&[T]`), and an unknown `from = (…)` setup source | a host node written that way, which the macro accepted before | split it into two nodes, or pass the constants as individual `Const` arguments ([library_catalog.md](../design/library_catalog.md), "Shapes") |
+| New variant `KernelError::Resources(ScopeJoinError)` | an exhaustive `match` on `KernelError` (E0004) | add the arm or a wildcard; binding fails with it only when concurrent binds would close a cycle of resource scopes ([scope_model.md](../design/scope_model.md) §4.1) |
 
 A healing write becomes a conversion the host asks for:
 
@@ -113,6 +114,64 @@ for tuple in coordinate_stream { use_tuple(tuple?); }
 
 An iterator yields the error once and then ends; `CoordinateStream`
 returns it again on every later `advance`.
+
+A `#[polydat_node]` node that read its binding or looked a resource up
+through process-wide state takes both from its build context at setup
+([library_catalog.md](../design/library_catalog.md), "Shapes", rule 7):
+
+```rust
+// 0.5.0
+fn capture_binding() -> String {
+    polydat::dsl::factory::compile_ctx::current_binding().unwrap_or_default()
+}
+
+#[polydat_node(category = Context)]
+fn control_set(
+    name: Const<&str>,
+    value: f64,
+    #[poly_const(capture_binding, from = ())] binding: &String,
+) -> f64 { set_control(name.0, value, binding); value }
+
+#[polydat_node(category = Context, purity = Nondeterministic("live session"))]
+fn cql_session(key: Const<&str>) -> Arc<CqlSessionHandle> {
+    polydat::resource::resource_lookup(key.0)
+        .and_then(|p| p.downcast::<CqlSessionHandle>().ok())
+        .expect("attached")
+}
+
+// 0.6.0
+fn capture_binding(ctx: &BuildContext) -> String {
+    ctx.binding().unwrap_or_default().to_string()
+}
+
+#[polydat_node(category = Context)]
+fn control_set(
+    name: Const<&str>,
+    value: f64,
+    #[poly_const(capture_binding, from = ctx)] binding: &String,
+) -> f64 { set_control(name.0, value, binding); value }
+
+#[derive(Clone)]
+pub struct SessionRef { key: String, resources: ResourceScope }
+
+fn capture_session(ctx: &BuildContext, key: &str) -> SessionRef {
+    SessionRef { key: key.to_string(), resources: ctx.resources().clone() }
+}
+
+#[polydat_node(category = Context, purity = Nondeterministic("live session"))]
+fn cql_session(
+    key: Const<&str>,
+    #[poly_const(capture_session, from = (ctx, key))] session: &SessionRef,
+) -> Arc<CqlSessionHandle> {
+    session.resources.lookup(&session.key)
+        .and_then(|p| p.downcast::<CqlSessionHandle>().ok())
+        .expect("attached")
+}
+```
+
+A test that builds such a node directly passes the context first:
+`ControlSet::new(&BuildContext::with_binding("rate_adj"), "rate".into())`,
+or `BuildContext::new(bindings, scope)` for a resource scope of its own.
 
 ### In a Polydat program
 
@@ -498,6 +557,24 @@ a rule the specifications now state and every engine follows.
   skeleton into a kernel's tree: its bodies see the resources installed
   on that tree and record their compile events on its ledger
   ([polytile.md](../design/polytile.md) §7.1).
+- **Macro nodes read their build context at setup.** A
+  `#[polydat_node]` setup that names `ctx` first,
+  `#[poly_const(setup, from = (ctx, key))]`, receives the node's
+  `&BuildContext`, so the node keeps its binding (`ctx.binding()`,
+  `ctx.bindings()`) or a clone of its tree's resource scope
+  (`ctx.resources()`) and uses it on every evaluation, on all four
+  engines. The generated `new()` takes the context first, and
+  `BuildContext::with_binding(name)` builds one for a direct test
+  ([library_catalog.md](../design/library_catalog.md), "Shapes", rule 7).
+- **An image bound under a tree resolves through the tree's
+  resources.** Binding a kernel of a separately compiled program under a
+  parent (`bind_under`, `ScopeModule::instantiate_under`) joins the
+  program's resource scope to the parent's, so an accessor installed once
+  at the root, through `CompileOptions::resources` or `install`, serves
+  every image bound beneath it, with its forks and the kernels created
+  from its program. An image compiled with an accessor of its own keeps
+  it, and a program joins the first tree it is bound under
+  ([scope_model.md](../design/scope_model.md) §4.1).
 
 ## Not breaking, though it looks it
 

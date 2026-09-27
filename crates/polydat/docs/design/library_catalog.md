@@ -302,7 +302,10 @@ A factory that records attribution reads the chain when it builds the node:
 The counter in a compiler-given name belongs to the compile and changes when the
 program does; the first entry of the chain is always a binding the author wrote. A
 caller that builds a node directly with `build_node` passes a context of its own;
-`BuildContext::default()` has no bindings and an empty resource scope.
+`BuildContext::default()` has no bindings and an empty resource scope, and
+`BuildContext::with_binding(name)` has the one binding `name` and an empty resource
+scope. A `#[polydat_node]` node reads its build context at construction, through a
+setup that names `ctx` first (see "Shapes" under Registration).
 
 #### Resources
 
@@ -327,6 +330,13 @@ one of its programs. One `polydat::ResourceScope` serves the whole tree.
 - A node keeps a clone of `BuildContext::resources()` and calls `lookup(key)` when it
   evaluates. The lookup is synchronous and never blocks or connects; it returns
   `None` when the tree has no accessor or the accessor holds nothing under `key`.
+- A program compiled on its own has a scope of its own. Binding one of its kernels
+  under a kernel of the tree (`kernel::bind_under`, `ScopeModule::instantiate_under`)
+  joins its scope to the tree's: while it has no accessor installed, its lookups
+  resolve through the tree's, for every kernel of that program. An accessor installed
+  once at the root therefore serves every image bound beneath it, and an image
+  compiled with an accessor of its own keeps it. A scope joins one parent, the first
+  it is bound under ([scope_model.md](scope_model.md) §4.1).
 
 Two trees in one process have two scopes, so each sees its own accessor:
 
@@ -458,6 +468,7 @@ the kit plans):
 | `Const<&[C]>` | A trailing list of literals (`Arity::VariadicConsts`), collected from the tail of the const arguments. The list is built once at construction and the body borrows it, as `Const<&str>` borrows a string literal. Prefer this form. |
 | `Const<Vec<C>>` | The same list, handed to the body as an owned clone. Accepted; it allocates once per evaluation for a list that never changes after construction, so write `Const<&[C]>` unless the body genuinely needs to own the elements. |
 | `#[poly_const(path, from = arg)] name: &T` | Setup state computed once at construction by `path(arg)` from a const; `from = ()` names a session-static value that is not a function of the consts. |
+| `#[poly_const(path, from = (ctx, arg))] name: &T` | Setup state computed once at construction by `path(ctx, arg)`, where `ctx` is the node's `&BuildContext` (rule 7). |
 | `Value` | A polymorphic wire whose port type is resolved at construction; with a `Value` return the output type is `SameAsInput`. |
 | `&[T]` (one argument), two `&[T]` arguments | A variadic wire list (`Arity::VariadicWires`), or split halves; element types `u64`, `bool`, `&str`, `String`, `Value`. |
 | `Option<T>` | A carrier that may be `None` on the interpreter; a compiled slot never carries `None`, so the closure reads `Some` and the kernel's `None` mask skips the step (see [Compiled By-Reference Slots](compiled_handles.md) §5). |
@@ -473,7 +484,7 @@ construction from the node's one `Const<Vec<C>>` argument);
 only, run once at construction, whose cached value every evaluation
 returns).
 
-**Shape rules.** The macro reads six rules from a signature. It
+**Shape rules.** The macro reads seven rules from a signature. It
 refuses a signature that breaks one with a compile error naming the
 argument, and each refusal has a case under `tests/ui/fail/`.
 
@@ -516,6 +527,69 @@ argument, and each refusal has a case under `tests/ui/fail/`.
    the node's name ([Engines](engines.md) §3.4), as in
    ``Wire<String>::extract: expected String, got u64; … ↳ in node
    `<node>` ``.
+7. **Build context at setup.** A setup whose `from` list names `ctx`
+   first receives the node's `&BuildContext` (see "Host-registered
+   nodes") as its function's first argument, before the named consts:
+   `from = ctx` calls `path(ctx)`, and `from = (ctx, a)` calls
+   `path(ctx, a)`. The node keeps what the function returns, such as
+   its binding or a clone of its tree's resource scope, and the body
+   reads it on every evaluation; the body itself takes no context. The
+   generated `new()` takes the context as its first parameter, and the
+   slot kit clones the kept value, so its type implements `Clone`. The
+   macro refuses a `BuildContext` argument outside a setup, `ctx`
+   anywhere but first in a `from` list, and an argument named `ctx`
+   beside such a setup.
+
+   A node modeled on a host's `control_set` keeps the binding that
+   built it, to attribute the control it sets:
+
+   ```rust
+   #[derive(Clone)]
+   pub struct ControlOrigin { binding: String }
+
+   impl ControlOrigin {
+       fn capture(ctx: &BuildContext) -> Self {
+           Self { binding: ctx.binding().unwrap_or_default().to_string() }
+       }
+   }
+
+   #[polydat_node(category = Context)]
+   fn control_set(
+       name: Const<&str>,
+       value: f64,
+       #[poly_const(ControlOrigin::capture, from = ctx)] origin: &ControlOrigin,
+   ) -> f64 {
+       // `rate_adj := control_set("rate", t)` sets `rate` attributed to `rate_adj`.
+       set_control(name.0, value, &origin.binding);
+       value
+   }
+   ```
+
+   A node modeled on a host's `cql_session` keeps its key and its
+   tree's resource scope, and looks the session up when it evaluates:
+
+   ```rust
+   #[derive(Clone)]
+   pub struct SessionRef { key: String, resources: ResourceScope }
+
+   impl SessionRef {
+       fn capture(ctx: &BuildContext, key: &str) -> Self {
+           Self { key: key.to_string(), resources: ctx.resources().clone() }
+       }
+   }
+
+   #[polydat_node(category = Context, purity = Nondeterministic("reads a live host session"))]
+   fn cql_session(
+       key: Const<&str>,
+       #[poly_const(SessionRef::capture, from = (ctx, key))] session: &SessionRef,
+   ) -> Arc<CqlSessionHandle> {
+       session
+           .resources
+           .lookup(&session.key)
+           .and_then(|p| p.downcast::<CqlSessionHandle>().ok())
+           .expect("the host attached the session before the run")
+   }
+   ```
 
 **Attributes.** Registration: `category = <FuncCategory>` (required),
 `struct_name = <Ident>`. Semantics:
