@@ -240,6 +240,54 @@ both quote kinds in both positions, so interpolate-and-atomic
 (`t in "a_{x}, b_{x}"`) both work. Quote-kind selects *only* the
 iteration interior of a source-position string.
 
+**Named generators.** A *named generator* is a call in source
+position that expands its arguments into a finite list of values
+(`iteration::comprehension::eval::NamedGenerator`). The arguments are
+literal numbers after `{name}` interpolation. An argument named `n`,
+and the `max` of `fib_until` and `pow2_until`, is a non-negative
+integer; every other argument is any number. The table lists every
+named generator.
+
+| Call | Yields | Example | Ends | Count |
+|---|---|---|---|---|
+| `fib(n)` | the first `n` Fibonacci numbers, starting `1, 1`; a term past `u64::MAX` (the 94th on) is `u64::MAX` | `fib(8)` → 1, 1, 2, 3, 5, 8, 13, 21 | not applicable | `n` |
+| `fib_until(max)` | the Fibonacci numbers up to `max`, starting `1, 1` | `fib_until(50)` → 1, 1, 2, 3, 5, 8, 13, 21, 34 | `max` is yielded when it is a Fibonacci number | the number of terms up to `max`; 0 for `max` 0 |
+| `pow2(n)` | `2^0` through `2^(n-1)`, at most the 64 powers that fit a `u64` | `pow2(6)` → 1, 2, 4, 8, 16, 32 | not applicable | `min(n, 64)` |
+| `pow2_until(max)` | the powers of two up to `max` | `pow2_until(100)` → 1, 2, 4, 8, 16, 32, 64 | `max` is yielded when it is a power of two | `floor(log2(max)) + 1`; 0 for `max` 0 |
+| `binomial(n)` | row `n` of Pascal's triangle, `C(n, 0)` through `C(n, n)`; the row stops before its first coefficient past `u64::MAX`, which cuts every row past 67 | `binomial(4)` → 1, 4, 6, 4, 1 | both `C(n, 0)` and `C(n, n)` for `n` up to 67 | `n + 1` for `n` up to 67, fewer after |
+| `geometric(start, factor, n)` | `n` floats `start · factor^i`, for any `factor`, including zero and negative ones | `geometric(1, 10, 4)` → 1, 10, 100, 1000 | not applicable | `n` |
+| `geometric_until(start, factor, max)` | the floats `start · factor^i` up to `max`; nothing when `factor ≤ 1`, `start ≤ 0`, or `max ≤ 0` | `geometric_until(1, 10, 1000)` → 1, 10, 100, 1000 | `max` is yielded when a term equals it | the number of terms up to `max` |
+| `linear_starts(start, end, n)` | the starts of `n` equal steps from `start` to `end`: `start + i · (end − start) / n` | `linear_starts(0, 1, 4)` → 0, 0.25, 0.5, 0.75 | `start` included, `end` excluded | `n` |
+| `linear_steps(start, end, n)` | `n` evenly spaced floats from `start` to `end`: `start + i · (end − start) / (n − 1)`; `n` = 1 yields `start` | `linear_steps(0, 1, 4)` → 0, 1/3, 2/3, 1 | both included | `n` |
+| `log_steps(start, end, n)` | `n` floats evenly spaced in logarithm from `start` to `end`; `n` = 1 yields `start` | `log_steps(1, 1000, 4)` → 1, 9.999999999999998, 99.99999999999996, 999.9999999999998 | both included, to floating-point rounding | `n` |
+
+`fib`, `fib_until`, `pow2`, `pow2_until`, and `binomial` yield
+integers; the other five yield floats. A `start` greater than `end`
+yields a descending sequence (`linear_starts(1, 0, 4)` → 1, 0.75,
+0.5, 0.25). A count of 0 yields nothing, and the clause is empty.
+
+A call with no free names is evaluated at compile (§10.7.7), so its
+clause reports `Bounded(count)` with the count the table gives. A
+call whose arguments interpolate a coordinate or another name is
+`Unbounded` until the scope that binds the name evaluates it.
+
+A call is an error, reported where it is evaluated, when:
+
+- it has the wrong number of arguments (`fib(n): expected 1 argument,
+  got 2`);
+- an integer argument is negative, fractional, or not a number
+  (`fib.n: expected non-negative integer, got '-1'`), or another
+  argument is not a number (`geometric.start: expected numeric, got
+  'a'`);
+- the count cannot be allocated (`fib(99999999999999)`);
+- a bound of `log_steps` is zero or negative (`log_steps: bounds must
+  be positive`).
+
+A context-free call that fails at compile is kept as written, so its
+error is reported when a stream or traversal over it opens.
+[Illustrations](../tutorials/illustrations.md), "Named generators",
+runs every generator and one failing call.
+
 #### 3.1.4 Bare identifiers are references; parse-bake vs. eval-defer
 
 List-comprehension-sugar elements and bare sources are parsed by
@@ -2656,8 +2704,9 @@ V8-rejected at compile time.
 #### 10.7.7 Context-free generators are flattened at compile
 
 Whether a generator call can be evaluated before traversal is
-decided by its **expression**, never by its name: there is no
-table of generator names, in the spec or in the code. A call's
+decided by its **expression**, never by its name: flattening
+consults no list of generator names, and the named generators of
+§3.1.3 are flattened by the same rule as any other call. A call's
 free names (`Source::referenced_names`: the parsed identifiers of
 the expression and its `{name}` interpolation placeholders) decide
 its eval class (§10.7.0). A call with no free names is

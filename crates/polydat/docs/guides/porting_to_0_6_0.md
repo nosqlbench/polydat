@@ -408,6 +408,15 @@ a rule the specifications now state and every engine follows.
   grows every round as it grew the first. A rewind is safe while other
   threads read the source
   ([cursor_partitions.md](../design/cursor_partitions.md) §8).
+- **Named generators are specified.** `fib`, `fib_until`, `pow2`,
+  `pow2_until`, `binomial`, `geometric`, `geometric_until`,
+  `linear_starts`, `linear_steps`, and `log_steps` each have their
+  arguments, values, ends, count, and errors stated, and
+  `NamedGenerator` lists them for a host
+  ([comprehension_forms.md](../design/comprehension_forms.md) §3.1.3).
+  An argument error now names the argument as `generator.parameter`,
+  as `fib.n` in `fib.n: expected non-negative integer, got '-1'`, and a
+  wrong argument count says `arguments` for every generator.
 
 ## Not breaking, though it looks it
 
@@ -445,14 +454,6 @@ a rule the specifications now state and every engine follows.
 - **The known issue of 0.5.0 is resolved.** The scope binder no longer
   converts a copy into a declared input, and the write-through commit no
   longer widens a numeric type.
-
-## Pending for 0.6.0
-
-**Pending.** The items below are in flight and are not part of the tree
-this guide was written against. Each bullet is completed, or removed,
-when its change lands.
-
-- Named generators are specified.
 
 ## Checklist
 

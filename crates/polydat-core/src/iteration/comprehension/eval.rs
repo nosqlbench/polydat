@@ -937,131 +937,139 @@ fn parse_num_arg(text: &str, what: &str) -> Result<f64, String> {
 }
 
 // ============================================================
-// Named generators (comprehension_forms.md §3.1)
+// Named generators (comprehension_forms.md §3.1.3)
 // ============================================================
 
-/// Recognise `fib(n)`, `pow2(n)`, `geometric(...)`, etc. and
-/// expand to a `Vec<Value>`. Returns `Ok(None)` when the
-/// text isn't a known generator call (caller falls through
-/// to set-op / sequencer / const-eval paths).
+/// A named generator: a call in source position that expands its
+/// literal arguments into a finite list of values
+/// (comprehension_forms.md §3.1.3, "Named generators").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NamedGenerator {
+    /// `fib(n)`: the first `n` Fibonacci numbers.
+    Fib,
+    /// `fib_until(max)`: the Fibonacci numbers up to `max`.
+    FibUntil,
+    /// `pow2(n)`: the first `n` powers of two.
+    Pow2,
+    /// `pow2_until(max)`: the powers of two up to `max`.
+    Pow2Until,
+    /// `binomial(n)`: row `n` of Pascal's triangle.
+    Binomial,
+    /// `geometric(start, factor, n)`: `n` terms of a geometric series.
+    Geometric,
+    /// `geometric_until(start, factor, max)`: a geometric series up to `max`.
+    GeometricUntil,
+    /// `linear_starts(start, end, n)`: the starts of `n` equal steps.
+    LinearStarts,
+    /// `linear_steps(start, end, n)`: `n` evenly spaced points, both ends included.
+    LinearSteps,
+    /// `log_steps(start, end, n)`: `n` log-spaced points, both ends included.
+    LogSteps,
+}
+
+impl NamedGenerator {
+    /// Every named generator, in declaration order.
+    pub fn all() -> impl Iterator<Item = NamedGenerator> {
+        std::iter::successors(Some(Self::Fib), |g| g.after())
+    }
+
+    /// The generator after `self` in [`Self::all`], `None` after the
+    /// last. The match is exhaustive, so a new variant does not
+    /// compile until it has a place in the walk.
+    fn after(self) -> Option<Self> {
+        use NamedGenerator as G;
+        match self {
+            G::Fib => Some(G::FibUntil),
+            G::FibUntil => Some(G::Pow2),
+            G::Pow2 => Some(G::Pow2Until),
+            G::Pow2Until => Some(G::Binomial),
+            G::Binomial => Some(G::Geometric),
+            G::Geometric => Some(G::GeometricUntil),
+            G::GeometricUntil => Some(G::LinearStarts),
+            G::LinearStarts => Some(G::LinearSteps),
+            G::LinearSteps => Some(G::LogSteps),
+            G::LogSteps => None,
+        }
+    }
+
+    /// The call signature, as written in source position.
+    pub fn signature(self) -> &'static str {
+        use NamedGenerator as G;
+        match self {
+            G::Fib => "fib(n)",
+            G::FibUntil => "fib_until(max)",
+            G::Pow2 => "pow2(n)",
+            G::Pow2Until => "pow2_until(max)",
+            G::Binomial => "binomial(n)",
+            G::Geometric => "geometric(start, factor, n)",
+            G::GeometricUntil => "geometric_until(start, factor, max)",
+            G::LinearStarts => "linear_starts(start, end, n)",
+            G::LinearSteps => "linear_steps(start, end, n)",
+            G::LogSteps => "log_steps(start, end, n)",
+        }
+    }
+
+    /// The name a call is written with: the signature up to `(`.
+    pub fn name(self) -> &'static str {
+        let sig = self.signature();
+        &sig[..sig.find('(').unwrap_or(sig.len())]
+    }
+
+    /// The parameter names, from the signature.
+    fn params(self) -> Vec<&'static str> {
+        let sig = self.signature();
+        let inner = &sig[self.name().len() + 1..sig.len() - 1];
+        inner.split(',').map(str::trim).collect()
+    }
+
+    /// The generator a call name names, if any.
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::all().find(|g| g.name() == name)
+    }
+
+    /// Expand the call's argument texts into the generator's values.
+    fn expand(self, args: &[&str]) -> Result<Vec<Value>, String> {
+        use NamedGenerator as G;
+        let params = self.params();
+        if args.len() != params.len() {
+            return Err(format!(
+                "{}: expected {} argument{}, got {}",
+                self.signature(),
+                params.len(),
+                if params.len() == 1 { "" } else { "s" },
+                args.len()
+            ));
+        }
+        let what = |i: usize| format!("{}.{}", self.name(), params[i]);
+        let int = |i: usize| parse_u64_arg(args[i], &what(i));
+        let num = |i: usize| parse_num_arg(args[i], &what(i));
+        match self {
+            G::Fib => generate_fib_n(int(0)?),
+            G::FibUntil => Ok(generate_fib_until(int(0)?)),
+            G::Pow2 => Ok(generate_pow2_n(int(0)?)),
+            G::Pow2Until => Ok(generate_pow2_until(int(0)?)),
+            G::Binomial => Ok(generate_binomial(int(0)?)),
+            G::Geometric => generate_geometric(num(0)?, num(1)?, int(2)?),
+            G::GeometricUntil => Ok(generate_geometric_until(num(0)?, num(1)?, num(2)?)),
+            G::LinearStarts => generate_linear_points(num(0)?, num(1)?, int(2)?, false),
+            G::LinearSteps => generate_linear_points(num(0)?, num(1)?, int(2)?, true),
+            G::LogSteps => generate_log_steps(num(0)?, num(1)?, int(2)?),
+        }
+    }
+}
+
+/// Expand a named generator call (`fib(8)`, `linear_steps(0, 1, 4)`)
+/// into its values. Returns `Ok(None)` when the text is not a call of
+/// a [`NamedGenerator`] (the caller falls through to the set-op,
+/// sequencer, and const-eval paths).
 fn try_eval_generator(text: &str) -> Result<Option<Vec<Value>>, String> {
     let Some((name, args)) = parse_func_call(text) else {
         return Ok(None);
     };
-    let arg_list = split_args_top_level(args);
-    match name {
-        "fib" => {
-            if arg_list.len() != 1 {
-                return Err(format!(
-                    "fib(n): expected 1 argument, got {}",
-                    arg_list.len()
-                ));
-            }
-            let n = parse_u64_arg(arg_list[0], "fib(n)")?;
-            Ok(Some(generate_fib_n(n)?))
-        }
-        "fib_until" => {
-            if arg_list.len() != 1 {
-                return Err(format!(
-                    "fib_until(max): expected 1 argument, got {}",
-                    arg_list.len()
-                ));
-            }
-            let max = parse_u64_arg(arg_list[0], "fib_until(max)")?;
-            Ok(Some(generate_fib_until(max)))
-        }
-        "pow2" => {
-            if arg_list.len() != 1 {
-                return Err(format!(
-                    "pow2(n): expected 1 argument, got {}",
-                    arg_list.len()
-                ));
-            }
-            let n = parse_u64_arg(arg_list[0], "pow2(n)")?;
-            Ok(Some(generate_pow2_n(n)))
-        }
-        "pow2_until" => {
-            if arg_list.len() != 1 {
-                return Err(format!(
-                    "pow2_until(max): expected 1 argument, got {}",
-                    arg_list.len()
-                ));
-            }
-            let max = parse_u64_arg(arg_list[0], "pow2_until(max)")?;
-            Ok(Some(generate_pow2_until(max)))
-        }
-        "binomial" => {
-            if arg_list.len() != 1 {
-                return Err(format!(
-                    "binomial(n): expected 1 argument, got {}",
-                    arg_list.len()
-                ));
-            }
-            let n = parse_u64_arg(arg_list[0], "binomial(n)")?;
-            Ok(Some(generate_binomial(n)))
-        }
-        "geometric" => {
-            if arg_list.len() != 3 {
-                return Err(format!(
-                    "geometric(start, factor, n): expected 3 args, got {}",
-                    arg_list.len()
-                ));
-            }
-            let start = parse_num_arg(arg_list[0], "geometric.start")?;
-            let factor = parse_num_arg(arg_list[1], "geometric.factor")?;
-            let n = parse_u64_arg(arg_list[2], "geometric.n")?;
-            Ok(Some(generate_geometric(start, factor, n)?))
-        }
-        "geometric_until" => {
-            if arg_list.len() != 3 {
-                return Err(format!(
-                    "geometric_until(start, factor, max): expected 3 args, got {}",
-                    arg_list.len()
-                ));
-            }
-            let start = parse_num_arg(arg_list[0], "geometric_until.start")?;
-            let factor = parse_num_arg(arg_list[1], "geometric_until.factor")?;
-            let max = parse_num_arg(arg_list[2], "geometric_until.max")?;
-            Ok(Some(generate_geometric_until(start, factor, max)))
-        }
-        "linear_starts" => {
-            if arg_list.len() != 3 {
-                return Err(format!(
-                    "linear_starts(start, end, n): expected 3 args, got {}",
-                    arg_list.len()
-                ));
-            }
-            let start = parse_num_arg(arg_list[0], "linear_starts.start")?;
-            let end = parse_num_arg(arg_list[1], "linear_starts.end")?;
-            let n = parse_u64_arg(arg_list[2], "linear_starts.n")?;
-            Ok(Some(generate_linear_points(start, end, n, false)?))
-        }
-        "linear_steps" => {
-            if arg_list.len() != 3 {
-                return Err(format!(
-                    "linear_steps(start, end, n): expected 3 args, got {}",
-                    arg_list.len()
-                ));
-            }
-            let start = parse_num_arg(arg_list[0], "linear_steps.start")?;
-            let end = parse_num_arg(arg_list[1], "linear_steps.end")?;
-            let n = parse_u64_arg(arg_list[2], "linear_steps.n")?;
-            Ok(Some(generate_linear_points(start, end, n, true)?))
-        }
-        "log_steps" => {
-            if arg_list.len() != 3 {
-                return Err(format!(
-                    "log_steps(start, end, n): expected 3 args, got {}",
-                    arg_list.len()
-                ));
-            }
-            let start = parse_num_arg(arg_list[0], "log_steps.start")?;
-            let end = parse_num_arg(arg_list[1], "log_steps.end")?;
-            let n = parse_u64_arg(arg_list[2], "log_steps.n")?;
-            Ok(Some(generate_log_steps(start, end, n)?))
-        }
-        _ => Ok(None),
-    }
+    let Some(generator) = NamedGenerator::from_name(name) else {
+        return Ok(None);
+    };
+    generator.expand(&split_args_top_level(args)).map(Some)
 }
 
 /// First `n` Fibonacci numbers: 1, 1, 2, 3, 5, 8, ...

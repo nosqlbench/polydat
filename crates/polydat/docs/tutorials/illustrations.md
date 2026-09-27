@@ -461,6 +461,47 @@ costs nothing per cycle, and interpolating it into a string yields its
 `for` text. See
 [`examples/for_producer.rs`](../../examples/for_producer.rs).
 
+## Named generators
+
+A named generator expands a call such as `fib(8)` or
+`linear_steps(0, 1, 4)` into a list of values in source position.
+This example binds each generator as a producer and prints the
+cardinality the producer reports and the values it yields:
+
+```rust
+for call in ["fib(8)", "fib_until(50)", /* ... */ "log_steps(0, 10, 3)"] {
+    let src = format!("input cycle: u64\ns := for x in {call}\n");
+    let mut kernel = polydat::dsl::compile_polydat_kernel(&src).expect("compile failed");
+    kernel.set_inputs(&[0]);
+    let value = kernel.pull("s");
+    let producer = value.as_streamer().expect("a producer");
+    // ... print producer.cardinality() and the values of its stream
+}
+```
+
+```text
+fib(8)                         Bounded(8)  1, 1, 2, 3, 5, 8, 13, 21
+fib_until(50)                  Bounded(9)  1, 1, 2, 3, 5, 8, 13, 21, 34
+pow2(6)                        Bounded(6)  1, 2, 4, 8, 16, 32
+pow2_until(100)                Bounded(7)  1, 2, 4, 8, 16, 32, 64
+binomial(4)                    Bounded(5)  1, 4, 6, 4, 1
+geometric(1, 10, 4)            Bounded(4)  1, 10, 100, 1000
+geometric_until(1, 10, 1000)   Bounded(4)  1, 10, 100, 1000
+linear_starts(0, 1, 4)         Bounded(4)  0, 0.25, 0.5, 0.75
+linear_steps(0, 1, 4)          Bounded(4)  0, 0.3333333333333333, 0.6666666666666666, 1
+log_steps(1, 1000, 4)          Bounded(4)  1, 9.999999999999998, 99.99999999999996, 999.9999999999998
+log_steps(0, 10, 3)            error: clause 'x' cannot be evaluated: source 'x in log_steps(0, 10, 3)': parse error in 'log_steps(0, 10, 3)': log_steps: bounds must be positive, got start=0, end=10
+```
+
+`linear_starts` yields the start of each of `n` equal steps and never
+reaches `end`, while `linear_steps` places `n` points with both ends
+included. A call with literal arguments is evaluated once, at compile,
+so its cardinality is exact. A call whose arguments are out of range
+compiles and fails when its stream opens. Every generator's arguments,
+ends, count, and errors are listed in
+[Comprehension Forms](../design/comprehension_forms.md) §3.1.3. See
+[`examples/named_generators.rs`](../../examples/named_generators.rs).
+
 ## A traversal
 
 `for <comprehension> { body }` activates one child scope per tuple. The
