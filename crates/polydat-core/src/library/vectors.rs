@@ -1502,6 +1502,58 @@ fn predicate_count_of(handle: Facet<MetadataPredicatesFacet>, value: i64) -> u64
     )
 }
 
+// ── Listing a facet's matching records ──────────────────────────────
+
+/// The indices of a Generic facet whose scalar equals `value`,
+/// ascending.
+///
+/// The same linear read as [`generic_count_typed`], keeping the
+/// indices it counts, so a list's length is the matching count, and
+/// the list is computed once at scope init and reused the same way.
+/// An index past `i32::MAX` is a facet larger than a `vec_i32`
+/// addresses and fails by name rather than wrapping.
+fn generic_ordinals_typed(node: &str, h: &DatasetHandle, value: i64) -> Vec<i32> {
+    match h {
+        DatasetHandle::Generic(d) => (0..d.count)
+            .filter(|i| d.get_scalar(*i) == value)
+            .map(|i| {
+                i32::try_from(i)
+                    .unwrap_or_else(|_| panic!("{node}: ordinal {i} is outside the i32 range"))
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The base ordinals whose metadata value is `value`, ascending.
+///
+/// The list whose length `metadata_count_of(handle, value)` is. The
+/// record at local row `l` among those carrying `value` has global
+/// ordinal `vec_at_i32(metadata_ordinals_of(handle, value), l)`
+/// (docs/design/runtime_model.md §9.1).
+#[crate::polydat_node(category = RealData)]
+fn metadata_ordinals_of(handle: Facet<MetadataContentFacet>, value: i64) -> Vec<i32> {
+    generic_ordinals_typed(
+        "metadata_ordinals_of",
+        handle.resolve_facet(MetadataContentFacet::FACET).as_ref(),
+        value,
+    )
+}
+
+/// The query ordinals whose predicate value is `value`, ascending.
+///
+/// The list whose length `predicate_count_of(handle, value)` is.
+#[crate::polydat_node(category = RealData)]
+fn predicate_ordinals_of(handle: Facet<MetadataPredicatesFacet>, value: i64) -> Vec<i32> {
+    generic_ordinals_typed(
+        "predicate_ordinals_of",
+        handle
+            .resolve_facet(MetadataPredicatesFacet::FACET)
+            .as_ref(),
+        value,
+    )
+}
+
 // =========================================================================
 // Cursor-sugar handlers
 // =========================================================================
@@ -1674,6 +1726,29 @@ mod count_of_tests {
         }
     }
 
+    /// The ordinals nodes take the same handle and value as the counts
+    /// and give a `vec_i32` of ordinals.
+    #[test]
+    fn the_ordinals_of_nodes_take_what_the_counts_take() {
+        for node in [
+            Box::new(MetadataOrdinalsOf::new()) as Box<dyn PolydatNode>,
+            Box::new(PredicateOrdinalsOf::new()) as Box<dyn PolydatNode>,
+        ] {
+            let meta = node.meta();
+            assert_eq!(meta.outs.len(), 1);
+            assert_eq!(meta.outs[0].typ, PortType::VecI32, "{}", meta.name);
+            let types: Vec<PortType> = meta
+                .ins
+                .iter()
+                .map(|s| match s {
+                    Slot::Wire(w) => w.typ,
+                    _ => panic!("{}: every input is a wire", meta.name),
+                })
+                .collect();
+            assert_eq!(types, [PortType::Handle, PortType::I64], "{}", meta.name);
+        }
+    }
+
     /// A handle of the wrong shape answers zero rather than failing.
     /// The facets these read are scalar ones; a caller that opened a
     /// vector facet by mistake gets a count of nothing, which is the
@@ -1692,6 +1767,7 @@ mod count_of_tests {
             source: "nonexistent:profile".into(),
         };
         assert_eq!(generic_count_typed(&group_shaped, 1), 0);
+        assert!(generic_ordinals_typed("test", &group_shaped, 1).is_empty());
     }
 
     /// Both names resolve through the registry and carry a default
@@ -1702,6 +1778,8 @@ mod count_of_tests {
         for (name, facet) in [
             ("metadata_count_of", "metadata_content"),
             ("predicate_count_of", "metadata_predicates"),
+            ("metadata_ordinals_of", "metadata_content"),
+            ("predicate_ordinals_of", "metadata_predicates"),
         ] {
             let sig = crate::dsl::registry::lookup(name)
                 .unwrap_or_else(|| panic!("{name} is registered"));

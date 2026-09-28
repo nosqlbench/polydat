@@ -1,7 +1,7 @@
 ---
 type: specification
 title: The Runtime Model
-timestamp: 2026-09-27
+timestamp: 2026-09-28
 description: The R-axioms of data flow, currency, invalidation, and output ownership, and the D-axioms of determinism, on all four engines.
 tags: [runtime]
 ---
@@ -778,6 +778,13 @@ opens ([The for Construct](for_traversal.md) §3.1).
 The quantities a counter is usually wanted for are pure
 functions of data the host already holds:
 
+- **The list of matching records** over a dataset facet is
+  `metadata_ordinals_of(handle, value)`, the base ordinals whose
+  metadata value is `value`, or `predicate_ordinals_of(handle,
+  value)`, the query ordinals whose predicate value is `value`,
+  each a `vec_i32` in ascending order. The global ordinal of
+  local row `l` among the matching records is
+  `vec_at_i32(metadata_ordinals_of(handle, value), l)`.
 - **The rank of a record among the matching records** is the
   number of matching ordinals smaller than the record's
   ordinal: `vec_count_below_i32(matching, ordinal)` (or the
@@ -787,8 +794,10 @@ functions of data the host already holds:
 - **The number of matching records** is the length of that
   list, `vec_len_i32(matching)`, or, over a dataset facet,
   `predicate_count_of(handle, value)` and
-  `metadata_count_of(handle, value)`, which a scope computes
-  once when it loads the facet.
+  `metadata_count_of(handle, value)`, which equal the lengths of
+  the two lists. For a value fixed in a scope, the scope
+  computes each count and each list once when it loads the
+  facet.
 
 Neither needs a visit order, and a visit order is what a
 counter would add: polydat does not promise one.

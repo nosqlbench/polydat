@@ -1,7 +1,7 @@
 ---
 type: guide
 title: Porting to 0.6.0
-timestamp: 2026-09-27
+timestamp: 2026-09-28
 description: "The 0.6.0 release notes as a host reads them, covering every change since the published 0.5.0: what stops compiling and its fix, the behavior that changes quietly, the new capabilities, and the known issues."
 tags: [release, host]
 ---
@@ -646,6 +646,25 @@ when it is evaluated
 - **`evaluate_spec` reads a name bound to None as None.** A spec that
   reads a name bound to None yields no values instead of the value
   `None` or its display text; a name nothing binds is still its error.
+
+## Added in 0.6.3
+
+The 0.6.3 release adds nodes and changes no existing behavior
+([library_catalog.md](../design/library_catalog.md), "Vector identity
+and facet ordinal lists").
+
+- **`vec_eq_<t>(a, b) -> bool` compares two vectors for identity.** It
+  exists as `vec_eq_f16`, `vec_eq_f32`, `vec_eq_f64`, `vec_eq_i8`,
+  `vec_eq_i16`, `vec_eq_i32`, and `vec_eq_i64`, and is `true` when both
+  vectors have the same length and identical elements, floats compared
+  by their bits. A length mismatch is `false`.
+- **`metadata_ordinals_of(handle, value)` and
+  `predicate_ordinals_of(handle, value)` list the matching records.**
+  With the `vectordata` feature, each returns a `vec_i32` of the base or
+  query ordinals whose facet value is `value`, ascending, and its length
+  is what `metadata_count_of` or `predicate_count_of` returns. The global
+  ordinal of local row `l` is `vec_at_i32(metadata_ordinals_of(handle,
+  value), l)` ([runtime_model.md](../design/runtime_model.md) §9.1).
 
 ## Known issues
 

@@ -1,7 +1,7 @@
 ---
 type: specification
 title: Library Catalog
-timestamp: 2026-09-27
+timestamp: 2026-09-28
 description: What a node is, the authoring contract, cost classes, and why the node registry is open.
 tags: [library]
 ---
@@ -240,6 +240,32 @@ steps: extract the unary value with `exactly_one_value`, then apply
 `regex_match` to it. `exactly_one_value` is type-agnostic at the substrate layer:
 the body is a structural value wide enough to round-trip through
 the JSON representation.
+
+### Vector identity and facet ordinal lists
+
+`vec_eq_<t>(a, b)` exists for every vector carrier: `vec_eq_f16`,
+`vec_eq_f32`, `vec_eq_f64`, `vec_eq_i8`, `vec_eq_i16`, `vec_eq_i32`,
+and `vec_eq_i64`. Each returns a `bool` that is `true` when the two
+vectors have the same length and every element pair is identical. A
+float element is compared by its bits, so `-0.0` and `0.0` differ and a
+NaN equals a NaN with the same bits and differs from a NaN with another
+payload; an integer element is compared by value. A length mismatch is
+`false`, and two empty vectors are equal. Order and repetition count,
+which distinguishes `vec_eq_i32` from `vec_set_eq_i32`. None of them has
+a native lowering: each runs its kit on the closure tier and from native
+code.
+
+`metadata_ordinals_of(handle, value)` and
+`predicate_ordinals_of(handle, value)` (feature `vectordata`) return,
+as a `vec_i32` in ascending order, the base ordinals whose
+`metadata_content` value is `value` and the query ordinals whose
+`metadata_predicates` value is `value`. They take the handle and the
+`i64` value that `metadata_count_of` and `predicate_count_of` take and
+resolve the same facets, so a prebuffered handle, an opened facet
+handle, and a source string all work, and each list's length is the
+matching count. Each list is one linear read of the facet, computed
+when its inputs change and kept by provenance until they change again,
+as the counts are ([Runtime Model](runtime_model.md) §9.1).
 
 ### Host-registered nodes
 

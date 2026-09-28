@@ -326,19 +326,66 @@ fn predicate_count(v: u64) -> String {
         .to_string()
 }
 
-/// The metadata and predicate answers, by output name.
+/// The ordinals of `facet` whose value is `v`, ascending, as display
+/// text.
+fn ordinals_of<T: Copy + Into<i64>>(facet: &[T], v: u64) -> String {
+    let ords: Vec<i32> = (0..facet.len())
+        .filter(|&i| facet[i].into() == v as i64)
+        .map(|i| i as i32)
+        .collect();
+    Value::VecI32(SliceArc::from_vec(ords)).to_display_string()
+}
+
+/// The metadata and predicate answers, by output name. The length of
+/// each ordinals list is the matching count.
 fn facet_answer(out: &str, c: u64) -> String {
     match out {
         "meta" => metadata_at(c),
         "pred" => predicate_at(c),
         "meta_n" => METADATA.len().to_string(),
-        "meta_of" => metadata_count(c),
-        "pred_of" => predicate_count(c),
+        "meta_of" | "meta_ords_n" => metadata_count(c),
+        "pred_of" | "pred_ords_n" => predicate_count(c),
+        "meta_ords" => ordinals_of(&METADATA, c),
+        "pred_ords" => ordinals_of(&PREDICATES, c),
         other => panic!("no answer for {other}"),
     }
 }
 
-const FACET_OUTPUTS: [&str; 5] = ["meta", "pred", "meta_n", "meta_of", "pred_of"];
+const FACET_OUTPUTS: [&str; 9] = [
+    "meta",
+    "pred",
+    "meta_n",
+    "meta_of",
+    "pred_of",
+    "meta_ords",
+    "pred_ords",
+    "meta_ords_n",
+    "pred_ords_n",
+];
+
+/// The list lengths the facet tests read beside the lists.
+const ORDINAL_LENGTHS: &str = "meta_ords_n := vec_len_i32(meta_ords)\n\
+                               pred_ords_n := vec_len_i32(pred_ords)\n";
+
+/// The fixture's ordinals lists, spelled out: base ordinals by
+/// metadata value and query ordinals by predicate value, so the
+/// generated answers above are checked against a known table.
+#[test]
+fn the_ordinals_answers_are_the_known_lists() {
+    let known: [(&str, u64, &[i32]); 7] = [
+        ("meta_ords", 0, &[1, 5]),
+        ("meta_ords", 2, &[0, 2, 4]),
+        ("meta_ords", 5, &[3]),
+        ("meta_ords", 7, &[]),
+        ("pred_ords", 2, &[0, 2]),
+        ("pred_ords", 5, &[1]),
+        ("pred_ords", 0, &[]),
+    ];
+    for (out, v, list) in known {
+        let expected = Value::VecI32(SliceArc::from_vec(list.to_vec())).to_display_string();
+        assert_eq!(facet_answer(out, v), expected, "{out} of {v}");
+    }
+}
 
 /// A source string into a `Handle` port of a function with a default
 /// resolver compiles to the resolver call (type_system.md §1.8): the
@@ -390,7 +437,10 @@ fn facet_accessors_read_the_fixture_through_a_source_string() {
          pred := predicate_value_at(\"{SOURCE}\", cycle)\n\
          meta_n := metadata_content_count(\"{SOURCE}\")\n\
          meta_of := metadata_count_of(\"{SOURCE}\", to_i64(cycle))\n\
-         pred_of := predicate_count_of(\"{SOURCE}\", to_i64(cycle))\n"
+         pred_of := predicate_count_of(\"{SOURCE}\", to_i64(cycle))\n\
+         meta_ords := metadata_ordinals_of(\"{SOURCE}\", to_i64(cycle))\n\
+         pred_ords := predicate_ordinals_of(\"{SOURCE}\", to_i64(cycle))\n\
+         {ORDINAL_LENGTHS}"
     );
     check_on_every_engine(&src, &[], &FACET_OUTPUTS, 8, facet_answer);
 }
@@ -407,7 +457,10 @@ fn facet_accessors_read_the_fixture_through_opened_handles() {
          pred := predicate_value_at(preds, cycle)\n\
          meta_n := metadata_content_count(content)\n\
          meta_of := metadata_count_of(content, to_i64(cycle))\n\
-         pred_of := predicate_count_of(preds, to_i64(cycle))\n"
+         pred_of := predicate_count_of(preds, to_i64(cycle))\n\
+         meta_ords := metadata_ordinals_of(content, to_i64(cycle))\n\
+         pred_ords := predicate_ordinals_of(preds, to_i64(cycle))\n\
+         {ORDINAL_LENGTHS}"
     );
     check_on_every_engine(&src, &[], &FACET_OUTPUTS, 8, facet_answer);
 }
@@ -426,15 +479,53 @@ fn facet_accessors_read_the_fixture_through_handle_externs() {
             format!("dataset_open(\"{SOURCE}\", \"metadata_predicates\")"),
         ),
     ]);
-    let src = "input cycle: u64\n\
-               extern content: handle\n\
-               extern preds: handle\n\
-               meta := metadata_value_at(content, cycle)\n\
-               pred := predicate_value_at(preds, cycle)\n\
-               meta_n := metadata_content_count(content)\n\
-               meta_of := metadata_count_of(content, to_i64(cycle))\n\
-               pred_of := predicate_count_of(preds, to_i64(cycle))\n";
-    check_on_every_engine(src, &externs, &FACET_OUTPUTS, 8, facet_answer);
+    let src = format!(
+        "input cycle: u64\n\
+         extern content: handle\n\
+         extern preds: handle\n\
+         meta := metadata_value_at(content, cycle)\n\
+         pred := predicate_value_at(preds, cycle)\n\
+         meta_n := metadata_content_count(content)\n\
+         meta_of := metadata_count_of(content, to_i64(cycle))\n\
+         pred_of := predicate_count_of(preds, to_i64(cycle))\n\
+         meta_ords := metadata_ordinals_of(content, to_i64(cycle))\n\
+         pred_ords := predicate_ordinals_of(preds, to_i64(cycle))\n\
+         {ORDINAL_LENGTHS}"
+    );
+    check_on_every_engine(&src, &externs, &FACET_OUTPUTS, 8, facet_answer);
+}
+
+/// The global ordinal of local row `l` among the base records carrying
+/// a metadata value is the list's element at `l`
+/// (docs/design/runtime_model.md §9.1): with value 2 the matching
+/// records are base ordinals 0, 2 and 4, so rows 0, 1, 2 map to them,
+/// and the rank of each back through `vec_position_i32` is its row.
+#[test]
+fn metadata_ordinals_of_maps_a_local_row_to_its_global_ordinal() {
+    let src = format!(
+        "input cycle: u64\n\
+         matching := metadata_ordinals_of(\"{SOURCE}\", to_i64(2))\n\
+         rows := metadata_count_of(\"{SOURCE}\", to_i64(2))\n\
+         l := cycle % rows\n\
+         global := vec_at_i32(matching, l)\n\
+         row := vec_position_i32(matching, global)\n"
+    );
+    let globals = [0, 2, 4];
+    for g in globals {
+        assert_eq!(METADATA[g], 2, "base ordinal {g} carries the value 2");
+    }
+    check_on_every_engine(
+        &src,
+        &[],
+        &["rows", "global", "row"],
+        6,
+        |out, c| match out {
+            "rows" => "3".to_string(),
+            "global" => globals[c as usize % 3].to_string(),
+            "row" => (c % 3).to_string(),
+            other => panic!("no answer for {other}"),
+        },
+    );
 }
 
 /// The facets the fixture's profile declares: every facet a dataset
@@ -453,7 +544,7 @@ const FIXTURE_FACETS: [&str; 9] = [
 
 /// Every facet accessor: its name, the facet it resolves, and the
 /// arguments after the handle.
-const ACCESSORS: [(&str, &str, &str); 18] = [
+const ACCESSORS: [(&str, &str, &str); 20] = [
     ("vector_at", "base", ", cycle"),
     ("vector_count", "base", ""),
     ("vector_dim", "base", ""),
@@ -478,9 +569,19 @@ const ACCESSORS: [(&str, &str, &str); 18] = [
     ("metadata_value_at", "metadata_content", ", cycle"),
     ("metadata_content_count", "metadata_content", ""),
     ("metadata_count_of", "metadata_content", ", to_i64(cycle)"),
+    (
+        "metadata_ordinals_of",
+        "metadata_content",
+        ", to_i64(cycle)",
+    ),
     ("predicate_value_at", "metadata_predicates", ", cycle"),
     (
         "predicate_count_of",
+        "metadata_predicates",
+        ", to_i64(cycle)",
+    ),
+    (
+        "predicate_ordinals_of",
         "metadata_predicates",
         ", to_i64(cycle)",
     ),
