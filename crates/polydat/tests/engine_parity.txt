@@ -292,6 +292,13 @@ vec_cosine	ok	ok	ok	ok
 vec_count_below_i32	ok	ok	ok	ok
 vec_count_below_i64	ok	ok	ok	ok
 vec_dot	ok	ok	ok	ok
+vec_eq_f16	ok	ok	ok	ok
+vec_eq_f32	ok	ok	ok	ok
+vec_eq_f64	ok	ok	ok	ok
+vec_eq_i16	ok	ok	ok	ok
+vec_eq_i32	ok	ok	ok	ok
+vec_eq_i64	ok	ok	ok	ok
+vec_eq_i8	ok	ok	ok	ok
 vec_intersect_count_i32	ok	ok	ok	ok
 vec_intersect_count_i64	ok	ok	ok	ok
 vec_l2	ok	ok	ok	ok

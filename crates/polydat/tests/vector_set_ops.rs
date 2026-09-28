@@ -182,3 +182,182 @@ fn the_recall_audit_quantities_are_functions_of_the_list() {
         assert_eq!(k.pull("cardinality").as_u64(), 5, "{engine}");
     }
 }
+
+// ── vec_eq ──────────────────────────────────────────────────────────
+
+/// One engine of each kind: the interpreter, the closure tier, native,
+/// and pure native when the build has the jit.
+fn vec_eq_engines() -> Vec<polydat::Engine> {
+    use polydat::{Engine, JitMode, Provenance};
+    let mut all = vec![
+        Engine::Interpreter(JitMode::Off),
+        Engine::Closures(Provenance::Auto),
+        Engine::Native(Provenance::Auto),
+    ];
+    if cfg!(feature = "jit") {
+        all.push(Engine::PureNative(Provenance::PushPull));
+    }
+    all
+}
+
+/// Build `vec_eq_<ty>(a, b)` over two extern vectors on every engine,
+/// and check each `(label, a, b, expected)` case on one kernel per
+/// engine, setting the externs anew for each case.
+fn check_vec_eq(ty: &str, cases: &[(&str, polydat::ast::Value, polydat::ast::Value, bool)]) {
+    let src = format!(
+        "input cycle: u64\n\
+         extern a: vec_{ty}\n\
+         extern b: vec_{ty}\n\
+         out := vec_eq_{ty}(a, b)\n"
+    );
+    for engine in vec_eq_engines() {
+        let asm = polydat::dsl::compile::compile_polydat_to_assembler(&src)
+            .unwrap_or_else(|e| panic!("{e}\n{src}"));
+        let mut k = asm
+            .compile_with(engine)
+            .unwrap_or_else(|e| panic!("{engine}: {e}\n{src}"));
+        k.set_inputs(&[0]);
+        for (label, a, b, expected) in cases {
+            k.set_input("a", a.clone())
+                .unwrap_or_else(|e| panic!("{engine}: set a: {e}"));
+            k.set_input("b", b.clone())
+                .unwrap_or_else(|e| panic!("{engine}: set b: {e}"));
+            assert_eq!(
+                k.pull("out").to_display_string(),
+                expected.to_string(),
+                "{engine}: vec_eq_{ty} {label}"
+            );
+        }
+    }
+}
+
+/// The cases every carrier answers, over three elements of its type
+/// built from small integers.
+fn common_cases<T: Copy>(
+    wrap: fn(Vec<T>) -> polydat::ast::Value,
+    of: fn(i8) -> T,
+) -> Vec<(&'static str, polydat::ast::Value, polydat::ast::Value, bool)> {
+    let v = |xs: &[i8]| wrap(xs.iter().map(|x| of(*x)).collect());
+    vec![
+        ("equal", v(&[1, 2, 3]), v(&[1, 2, 3]), true),
+        ("differing element", v(&[1, 2, 3]), v(&[1, 7, 3]), false),
+        ("reordered", v(&[1, 2, 3]), v(&[3, 2, 1]), false),
+        ("longer", v(&[1, 2, 3]), v(&[1, 2, 3, 4]), false),
+        ("shorter", v(&[1, 2, 3]), v(&[1, 2]), false),
+        ("empty vs non-empty", v(&[]), v(&[1]), false),
+        ("empty vs empty", v(&[]), v(&[]), true),
+    ]
+}
+
+/// The float cases: bit identity, not IEEE equality.
+fn float_cases<T: Copy>(
+    wrap: fn(Vec<T>) -> polydat::ast::Value,
+    of: fn(i8) -> T,
+    neg_zero: T,
+    nan: T,
+    other_nan: T,
+) -> Vec<(&'static str, polydat::ast::Value, polydat::ast::Value, bool)> {
+    let mut cases = common_cases(wrap, of);
+    let with = |x: T| wrap(vec![of(1), x]);
+    cases.extend([
+        ("-0.0 vs 0.0", with(neg_zero), with(of(0)), false),
+        ("-0.0 vs -0.0", with(neg_zero), with(neg_zero), true),
+        ("NaN vs the same NaN", with(nan), with(nan), true),
+        ("NaN vs another payload", with(nan), with(other_nan), false),
+    ]);
+    cases
+}
+
+#[test]
+fn vec_eq_f32_compares_bits() {
+    use polydat::ast::{SliceArc, Value};
+    let (nan, other) = (f32::from_bits(0x7fc0_0000), f32::from_bits(0x7fc0_0001));
+    assert!(nan.is_nan() && other.is_nan());
+    check_vec_eq(
+        "f32",
+        &float_cases(
+            |v| Value::VecF32(SliceArc::from_vec(v)),
+            f32::from,
+            -0.0,
+            nan,
+            other,
+        ),
+    );
+}
+
+#[test]
+fn vec_eq_f64_compares_bits() {
+    use polydat::ast::{SliceArc, Value};
+    let (nan, other) = (
+        f64::from_bits(0x7ff8_0000_0000_0000),
+        f64::from_bits(0x7ff8_0000_0000_0001),
+    );
+    assert!(nan.is_nan() && other.is_nan());
+    check_vec_eq(
+        "f64",
+        &float_cases(
+            |v| Value::VecF64(SliceArc::from_vec(v)),
+            f64::from,
+            -0.0,
+            nan,
+            other,
+        ),
+    );
+}
+
+#[test]
+fn vec_eq_f16_compares_bits() {
+    use polydat::ast::{SliceArc, Value};
+    use polydat::half::f16;
+    let (nan, other) = (f16::from_bits(0x7e00), f16::from_bits(0x7e01));
+    assert!(nan.is_nan() && other.is_nan());
+    check_vec_eq(
+        "f16",
+        &float_cases(
+            |v| Value::VecF16(SliceArc::from_vec(v)),
+            |x| f16::from_f32(f32::from(x)),
+            f16::NEG_ZERO,
+            nan,
+            other,
+        ),
+    );
+}
+
+#[test]
+fn vec_eq_integer_forms_compare_values() {
+    use polydat::ast::{SliceArc, Value};
+    check_vec_eq(
+        "i8",
+        &common_cases(|v| Value::VecI8(SliceArc::from_vec(v)), |x| x),
+    );
+    check_vec_eq(
+        "i16",
+        &common_cases(|v| Value::VecI16(SliceArc::from_vec(v)), i16::from),
+    );
+    check_vec_eq(
+        "i32",
+        &common_cases(|v| Value::VecI32(SliceArc::from_vec(v)), i32::from),
+    );
+    check_vec_eq(
+        "i64",
+        &common_cases(|v| Value::VecI64(SliceArc::from_vec(v)), i64::from),
+    );
+}
+
+/// Equality is order-sensitive where `vec_set_eq_i32` is not: the same
+/// set in another order is a different vector.
+#[test]
+fn vec_eq_differs_from_set_equality_on_order() {
+    let src = concat!(
+        "input cycle: u64\n",
+        "a := str_to_vec_i32(\"[1, 2, 3]\")\n",
+        "b := str_to_vec_i32(\"[3, 2, 1]\")\n",
+        "same_set := vec_set_eq_i32(a, b)\n",
+        "same_vec := vec_eq_i32(a, b)\n",
+        "self_eq := vec_eq_i32(a, a)\n",
+    );
+    assert_eq!(
+        run(src, &["same_set", "same_vec", "self_eq"]),
+        vec!["1", "false", "true"]
+    );
+}

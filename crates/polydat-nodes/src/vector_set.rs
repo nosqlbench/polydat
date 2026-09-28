@@ -1,7 +1,8 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Element and set operations over the integer vector carriers.
+//! Element and set operations over the integer vector carriers, and
+//! elementwise equality over every vector carrier.
 //!
 //! The float vector nodes ([`super::vector_math`]) compute over
 //! embeddings; these read integer vectors as *lists*: how many
@@ -166,6 +167,76 @@ fn vec_set_eq_i64(a: &[i64], b: &[i64]) -> u64 {
     let x: std::collections::BTreeSet<i64> = a.iter().copied().collect();
     let y: std::collections::BTreeSet<i64> = b.iter().copied().collect();
     u64::from(x == y)
+}
+
+// ── Elementwise equality ────────────────────────────────────────────
+//
+// `vec_eq_<t>(a, b)` exists for every vector carrier. It answers
+// whether two vectors are the same value: the same length and every
+// element identical. A float element compares by its bits, so `-0.0`
+// and `0.0` differ and a NaN equals a NaN with the same bits; that is
+// the identity a host auditing a vector it wrote needs, where IEEE
+// equality would call a NaN unequal to itself. A length mismatch is
+// `false`, never a failure.
+
+/// Whether two slices have the same length and every element pair has
+/// the same key.
+fn same_by<T, K: PartialEq>(a: &[T], b: &[T], key: impl Fn(&T) -> K) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| key(x) == key(y))
+}
+
+/// `vec_eq_f16(a, b)` — `true` when both vectors have the same length
+/// and every element has the same bits.
+#[polydat::polydat_node(category = Comparison)]
+fn vec_eq_f16(a: &[polydat::half::f16], b: &[polydat::half::f16]) -> bool {
+    same_by(a, b, |x| x.to_bits())
+}
+
+/// `vec_eq_f32(a, b)` — `true` when both vectors have the same length
+/// and every element has the same bits.
+///
+/// `-0.0` and `0.0` differ, and a NaN equals a NaN with the same
+/// payload.
+#[polydat::polydat_node(category = Comparison)]
+fn vec_eq_f32(a: &[f32], b: &[f32]) -> bool {
+    same_by(a, b, |x| x.to_bits())
+}
+
+/// `vec_eq_f64(a, b)` — `true` when both vectors have the same length
+/// and every element has the same bits.
+#[polydat::polydat_node(category = Comparison)]
+fn vec_eq_f64(a: &[f64], b: &[f64]) -> bool {
+    same_by(a, b, |x| x.to_bits())
+}
+
+/// `vec_eq_i8(a, b)` — `true` when both vectors have the same length
+/// and equal elements.
+#[polydat::polydat_node(category = Comparison)]
+fn vec_eq_i8(a: &[i8], b: &[i8]) -> bool {
+    a == b
+}
+
+/// `vec_eq_i16(a, b)` — `true` when both vectors have the same length
+/// and equal elements.
+#[polydat::polydat_node(category = Comparison)]
+fn vec_eq_i16(a: &[i16], b: &[i16]) -> bool {
+    a == b
+}
+
+/// `vec_eq_i32(a, b)` — `true` when both vectors have the same length
+/// and equal elements, in order.
+///
+/// Order and repetition count, unlike `vec_set_eq_i32`.
+#[polydat::polydat_node(category = Comparison)]
+fn vec_eq_i32(a: &[i32], b: &[i32]) -> bool {
+    a == b
+}
+
+/// `vec_eq_i64(a, b)` — `true` when both vectors have the same length
+/// and equal elements, in order.
+#[polydat::polydat_node(category = Comparison)]
+fn vec_eq_i64(a: &[i64], b: &[i64]) -> bool {
+    a == b
 }
 
 // ── Reading a list from text ────────────────────────────────────────
