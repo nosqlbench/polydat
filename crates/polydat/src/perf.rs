@@ -975,6 +975,8 @@ pub fn perf(args: PerfArgs) -> Result<(), String> {
         }
         _ => {}
     });
+    // vectordata's `log` records join the audit lines above.
+    let _ = audit::LogBridge::install();
     let suite = load_suite(&args)?;
     if args.print_config {
         print!(

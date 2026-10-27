@@ -59,16 +59,17 @@ inventory = "0.3.24"
 # around its blocking HTTP client when an outer runtime is current
 # (`library::vectors::run_blocking_io`), so it rides the feature.
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"], optional = true }
-# The level type vectordata's fetch meter hands each line with
-# (`library::vectors::audit_level`), so it rides the feature too.
-log = { version = "0.4", optional = true }
+# The `log` facade, bridged into the audit channel
+# (`library::support::audit::LogBridge`) so a host can route a
+# dependency's log records, vectordata's among them, to its sink.
+log = "0.4"
 # Insertion-ordered map for `kernel::ScopeCoord`.
 indexmap = "2"
 half = "2"
 
 [features]
 default = ["jit"]
-vectordata = ["dep:vectordata", "dep:tokio", "dep:log"]
+vectordata = ["dep:vectordata", "dep:tokio"]
 jit = ["dep:cranelift-jit", "dep:cranelift-module", "dep:cranelift-codegen", "dep:cranelift-frontend", "dep:cranelift-native"]
 # The typed tier constructors, for measurement. `compile_slots` picks an
 # engine from a runtime value and so must box; a benchmark knows its tier

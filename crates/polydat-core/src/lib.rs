@@ -285,7 +285,9 @@ pub use resource::{ResourceAccessor, ResourceScope, ScopeJoinError};
 /// a leveled log sink into the kernel (`set_log_fn`) and for emitting
 /// through it (`warn` / `info` / …). The activity runner installs its
 /// `observer::log` here so polydat's cycle-time data-source audit lines
-/// land in `session.log`. This is the one public entry point for the
+/// land in `session.log`. A host with no `log` logger of its own can
+/// install `audit::LogBridge` to route vectordata's `log` records into
+/// the same channel. This is the one public entry point for the
 /// audit channel; the implementation lives under `library::support`,
 /// which is library-internal and must not be reached directly.
 pub use library::support::audit;

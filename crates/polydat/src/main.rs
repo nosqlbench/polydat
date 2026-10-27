@@ -415,6 +415,10 @@ fn install_audit(echo: bool) {
             eprintln!("{level:?}: {msg}");
         }
     });
+    // vectordata reports through `log`, and this binary has no logger
+    // of its own, so the bridge joins its records to the audit lines.
+    // A later call finds the bridge already installed.
+    let _ = audit::LogBridge::install();
 }
 
 fn take_audit() -> Vec<(LogLevel, String)> {

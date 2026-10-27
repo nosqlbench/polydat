@@ -68,6 +68,68 @@ pub fn log(level: LogLevel, msg: &str) {
     }
 }
 
+impl From<log::Level> for LogLevel {
+    fn from(level: log::Level) -> Self {
+        match level {
+            log::Level::Error => LogLevel::Error,
+            log::Level::Warn => LogLevel::Warn,
+            log::Level::Info => LogLevel::Info,
+            log::Level::Debug => LogLevel::Debug,
+            log::Level::Trace => LogLevel::Trace,
+        }
+    }
+}
+
+/// A [`log`](mod@log) logger that forwards vectordata's records into the audit
+/// channel, so its warnings reach the host's sink beside polydat's own
+/// lines. The records forwarded are those at `Info` and above from the
+/// `vectordata` crate and its `veks_*` crates, each as
+/// `<target>: <message>` at the matching [`LogLevel`].
+///
+/// polydat never installs it: a process has one `log` logger, and
+/// choosing it is the host's call. A host with no logger of its own
+/// installs this one with [`LogBridge::install`]; a host that has one
+/// already receives vectordata's records through it.
+pub struct LogBridge;
+
+impl LogBridge {
+    /// The least severe level forwarded.
+    const LEVEL: log::LevelFilter = log::LevelFilter::Info;
+
+    /// Make this the process's `log` logger. Fails if a logger is
+    /// already installed, which is then left in place.
+    pub fn install() -> Result<(), log::SetLoggerError> {
+        static BRIDGE: LogBridge = LogBridge;
+        log::set_logger(&BRIDGE)?;
+        log::set_max_level(Self::LEVEL);
+        Ok(())
+    }
+
+    /// Whether `target` names a module of vectordata or of one of its
+    /// `veks_*` crates.
+    fn forwards(target: &str) -> bool {
+        let krate = target.split("::").next().unwrap_or(target);
+        krate == "vectordata" || krate.starts_with("veks_")
+    }
+}
+
+impl log::Log for LogBridge {
+    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+        metadata.level() <= Self::LEVEL && Self::forwards(metadata.target())
+    }
+
+    fn log(&self, record: &log::Record<'_>) {
+        if self.enabled(record.metadata()) {
+            log(
+                record.level().into(),
+                &format!("{}: {}", record.target(), record.args()),
+            );
+        }
+    }
+
+    fn flush(&self) {}
+}
+
 /// Convenience helpers for callsite ergonomics.
 pub fn debug(msg: &str) {
     log(LogLevel::Debug, msg);
@@ -122,4 +184,52 @@ pub fn log_prebuffer_summary(source: &str, profile: &str, facet_count: u64) {
     debug(&format!(
         "prebuffer: done {source}:{profile} (covered {facet_count} facet(s))"
     ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use log::Log;
+
+    fn enabled(target: &str, level: log::Level) -> bool {
+        LogBridge.enabled(&log::Metadata::builder().target(target).level(level).build())
+    }
+
+    #[test]
+    fn the_bridge_forwards_vectordata_and_its_veks_crates() {
+        for target in ["vectordata", "vectordata::fetch", "veks_io::reader::vvec", "veks_apicore"] {
+            assert!(enabled(target, log::Level::Warn), "{target}");
+        }
+    }
+
+    #[test]
+    fn the_bridge_leaves_other_crates_to_the_host() {
+        for target in ["reqwest::connect", "hyper", "vectordatax", "veks", "polydat_core"] {
+            assert!(!enabled(target, log::Level::Error), "{target}");
+        }
+    }
+
+    #[test]
+    fn the_bridge_forwards_info_and_above() {
+        for level in [log::Level::Error, log::Level::Warn, log::Level::Info] {
+            assert!(enabled("vectordata::fetch", level), "{level}");
+        }
+        for level in [log::Level::Debug, log::Level::Trace] {
+            assert!(!enabled("vectordata::fetch", level), "{level}");
+        }
+    }
+
+    #[test]
+    fn each_log_level_maps_to_its_audit_level() {
+        let pairs = [
+            (log::Level::Error, LogLevel::Error),
+            (log::Level::Warn, LogLevel::Warn),
+            (log::Level::Info, LogLevel::Info),
+            (log::Level::Debug, LogLevel::Debug),
+            (log::Level::Trace, LogLevel::Trace),
+        ];
+        for (level, audit) in pairs {
+            assert_eq!(LogLevel::from(level), audit);
+        }
+    }
 }

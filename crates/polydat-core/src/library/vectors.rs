@@ -1301,23 +1301,10 @@ fn do_dataset_prebuffer_inner(source: &str) -> Result<Arc<DatasetHandle>, String
 /// nothing for data already in the cache.
 fn fetch_meter(title: &str) -> LogMeter {
     LogMeter::to_lines(title, |level, line| {
-        crate::library::support::audit::log(audit_level(level), line)
+        crate::library::support::audit::log(level.into(), line)
     })
     .min_interval(std::time::Duration::from_secs(10))
     .quiet_when_resident(true)
-}
-
-/// The audit level for a line vectordata's fetch meter writes at
-/// `level`: progress at info, a stall at warn, a failure at error.
-fn audit_level(level: log::Level) -> crate::library::support::audit::LogLevel {
-    use crate::library::support::audit::LogLevel;
-    match level {
-        log::Level::Error => LogLevel::Error,
-        log::Level::Warn => LogLevel::Warn,
-        log::Level::Info => LogLevel::Info,
-        log::Level::Debug => LogLevel::Debug,
-        log::Level::Trace => LogLevel::Trace,
-    }
 }
 
 // =================================================================
