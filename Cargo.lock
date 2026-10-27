@@ -282,7 +282,7 @@ dependencies = [
  "heck",
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -639,7 +639,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "strsim",
- "syn 3.0.3",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -650,7 +650,7 @@ checksum = "68f5792fa0d41cd2325ce0ffa64f0a340eaebd4971a3a0c5e1ffd2cc488a355e"
 dependencies = [
  "darling_core",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -673,6 +673,7 @@ checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
 dependencies = [
  "block-buffer",
  "crypto-common",
+ "subtle",
 ]
 
 [[package]]
@@ -683,7 +684,7 @@ checksum = "c6232dd377dcc64799954cbd3a9bb882e9cdc1308ccd87b1c098f1fb2eaf82a8"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -719,6 +720,23 @@ name = "fallible-iterator"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2acce4a10f12dc2fb14a218589d4f1f62ef011b2d0cc4b3cb1bba8e94da14649"
+
+[[package]]
+name = "fearless_simd"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3296eb97d869113eaf148a6bdf01884e90b3828ad7ae2340b0f93362fc158611"
+
+[[package]]
+name = "fearless_simd_macros"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3e91d94c6885390b81782d7ee60fd6583b33907333a8b340de25ccf468353315"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.9",
+]
 
 [[package]]
 name = "filetime"
@@ -917,6 +935,15 @@ name = "hermit-abi"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc0fef456e4baa96da950455cd02c081ca953b141298e41db3fc7e36b1da849c"
+
+[[package]]
+name = "hmac"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
+dependencies = [
+ "digest",
+]
 
 [[package]]
 name = "http"
@@ -1162,7 +1189,7 @@ dependencies = [
  "indoc",
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -1548,6 +1575,7 @@ dependencies = [
  "half",
  "indexmap",
  "inventory",
+ "log",
  "paste",
  "polydat-derive",
  "polydat-grammar",
@@ -1902,8 +1930,6 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "rustls-platform-verifier",
- "serde",
- "serde_json",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
@@ -2125,7 +2151,7 @@ checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -2238,15 +2264,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
 
 [[package]]
-name = "simsimd"
-version = "6.5.16"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f4fb3bc3cdce07a7d7d4caa4c54f8aa967f6be41690482b54b24100a2253fa70"
-dependencies = [
- "cc",
-]
-
-[[package]]
 name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2254,9 +2271,9 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "slabtastic"
-version = "1.3.1"
+version = "4.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ccdf2e48f69c4334461ee5cb2c46209a88295ceda43feae468fe3808276f5e17"
+checksum = "863eb0198b517ae31b1d0e954040823ff1819783816f5b6da703e4c54af9b4fd"
 dependencies = [
  "csv",
  "memmap2",
@@ -2342,9 +2359,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "3.0.3"
+version = "3.0.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "53e9bae58849f64dfa4f5d5ae372c8341f7305f82a3868709269343628b659a3"
+checksum = "d78c8dee4c7bf0e14673097256fed6142ce9d3b85a408189d07482442145823b"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2409,7 +2426,7 @@ checksum = "bc04cd3e1236dd4a98afca4569f2deb3f120e5422a4023be2cb683f8486292af"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -2491,7 +2508,7 @@ checksum = "78773a2a397f451582ce068015985c33193cf6dea8b74d2a639fe457b2f07b0e"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -2748,9 +2765,9 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "vectordata"
-version = "1.7.1"
+version = "4.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4411b84bd425c9f7db95644435536a7c69108ba8129b975a6368bd450aadc89a"
+checksum = "e4fb36b164325a12938634779d68902f454a635afa5443e2607ffef403cba2c5"
 dependencies = [
  "anyhow",
  "byteorder",
@@ -2767,28 +2784,31 @@ dependencies = [
  "ratatui",
  "rayon",
  "regex",
- "reqwest",
  "serde",
  "serde_json",
  "serde_yaml",
  "sha2",
  "signal-hook",
- "simsimd",
  "slabtastic",
  "thiserror",
  "toml 0.8.23",
  "unicode-width 0.2.0",
  "url",
  "veks-anode",
+ "veks-apicore",
  "veks-completion",
  "veks-completion-derive",
+ "veks-datatypes",
+ "veks-io",
+ "veks-simd",
+ "veks-transport",
 ]
 
 [[package]]
 name = "veks-anode"
-version = "1.3.1"
+version = "4.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "59c9ef05c01f26420a483735fd806fa428620f99d34bf5d359a6661ad956403a"
+checksum = "57ad617cb796c3d066bd0793d217f69cc1643bf8ee1964beb4806de26a1f2abd"
 dependencies = [
  "byteorder",
  "indexmap",
@@ -2796,20 +2816,94 @@ dependencies = [
 ]
 
 [[package]]
-name = "veks-completion"
-version = "1.6.1"
+name = "veks-apicore"
+version = "4.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85c7f0baf3c19aeb84780913363dea641a0a3b1861fc5b6607e41481da1ac7f8"
+checksum = "0ad09d92de7a09b0e0997a0d98a708311cfec119d1146813e6b67637a469b94a"
+dependencies = [
+ "indexmap",
+ "log",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror",
+ "url",
+ "veks-datatypes",
+]
+
+[[package]]
+name = "veks-completion"
+version = "4.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b9882a9ce41b637d71c0d2b4b9e74fd226c5fe4487fc93c4e7a04593cae8baf0"
 
 [[package]]
 name = "veks-completion-derive"
-version = "1.6.1"
+version = "4.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d6ba2eb94dd47aa09eae183c387a08e5979f7863cc0dcfac7a8f5f2ef4204de6"
+checksum = "85a1fa5c32520917eaab0a9a2322d49df49816ff80ea4eae5df0213a40831089"
 dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "veks-datatypes"
+version = "4.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d36b0a64c9fa15f0a9c82ae38d7060e3854c7b37f196faf80091abf784dacf6e"
+dependencies = [
+ "half",
+]
+
+[[package]]
+name = "veks-io"
+version = "4.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b280dcabf33cdbdf3d94ede82b32e56728248f451ffbb69147576b76f400baa0"
+dependencies = [
+ "byteorder",
+ "half",
+ "libc",
+ "log",
+ "memmap2",
+ "thiserror",
+ "veks-apicore",
+ "veks-datatypes",
+ "veks-simd",
+]
+
+[[package]]
+name = "veks-simd"
+version = "4.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7197a6b0fa93a425176a43e3ab66335cd029c6019c47a5aa3649360c56c480c"
+dependencies = [
+ "fearless_simd",
+ "fearless_simd_macros",
+ "half",
+ "veks-datatypes",
+]
+
+[[package]]
+name = "veks-transport"
+version = "4.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4326c103278142f2404150b1feed02cec44f5251f732994884d604af9c295f7b"
+dependencies = [
+ "byteorder",
+ "filetime",
+ "hmac",
+ "httpdate",
+ "libc",
+ "log",
+ "memmap2",
+ "reqwest",
+ "sha2",
+ "url",
+ "veks-apicore",
 ]
 
 [[package]]
@@ -3209,7 +3303,7 @@ checksum = "9f212a141d820099d57ffafb9569be9617a6f27d3dc881fbee8fb56642f917a9"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.9",
 ]
 
 [[package]]

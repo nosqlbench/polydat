@@ -96,16 +96,15 @@ pub fn record_prebuffer_entered(source: &str) {
     debug(&format!("prebuffer: entered dataset_prebuffer({source:?})"));
 }
 
-/// Record that the prebuffer pass covered a facet. Emitted from
-/// inside the `view.prebuffer_all_with_progress` callback, once
-/// per facet the manifest declared.
+/// Record that the prebuffer pass covered a facet. Emitted once per
+/// facet in the report of the prebuffer's `view.fetch`.
 pub fn record_prebuffered(source: &str, profile: &str, facet: &str) {
     debug(&format!("prebuffer: covered {source}:{profile}/{facet}"));
 }
 
 /// Record that a reader was opened for a facet. Emitted from
 /// every `vectors::*` reader-open path *before* the actual
-/// `view.<facet>()` / `open_facet_typed` call so the line lands
+/// `view.<facet>_as()` / `view.facet_as()` call so the line lands
 /// even if the open errors. `kind` distinguishes the open shape
 /// (`uniform`, `ivvec32`, `generic-typed`, …) for at-a-glance
 /// debugging.

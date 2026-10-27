@@ -29,19 +29,18 @@
 //!
 //! ## Upstream API reference
 //!
-//! See the vectordata consumer API docs for the full dataset access,
-//! catalog, caching, and prebuffer model:
-//! <https://github.com/nosqlbench/vectordata-rs/blob/main/docs/sysref/02-api.md>
+//! See the vectordata consumer guide for the full dataset access,
+//! catalog, caching, and fetch model — the crate's `AGENTS.md`,
+//! rendered as `vectordata::_agents`:
+//! <https://docs.rs/vectordata/latest/vectordata/_agents/index.html>
 
 use std::sync::{Arc, LazyLock};
 
 use crate::library::support::cache::OnceCache;
 
-use vectordata::TestDataGroup;
-use vectordata::TestDataView;
-use vectordata::catalog::resolver::Catalog;
-use vectordata::catalog::sources::CatalogSources;
-use vectordata::io::{VectorReader, VvecReader};
+use vectordata::catalog::{Catalog, CatalogSources};
+use vectordata::fetch::{FetchRequest, LogMeter};
+use vectordata::{TestDataGroup, TestDataView, TestDataViewExt, VectorReader, VvecReader};
 
 /// Global cache for loaded dataset groups keyed by source string.
 /// Ensures each dataset is loaded exactly once regardless of how many
@@ -196,10 +195,10 @@ impl F32Dataset {
         let facet_name = facet.to_string();
         load_uniform_facet(source, profile, facet, move |view| {
             match facet_name.as_str() {
-                "base" => view.base_vectors(),
-                "query" => view.query_vectors(),
-                "neighbor_distances" => view.neighbor_distances(),
-                "filtered_neighbor_distances" => view.prefiltered_neighbor_distances(),
+                "base" => view.base_vectors_as(),
+                "query" => view.query_vectors_as(),
+                "neighbor_distances" => view.neighbor_distances_as(),
+                "filtered_neighbor_distances" => view.prefiltered_neighbor_distances_as(),
                 other => Err(vectordata::Error::MissingFacet(format!(
                     "unknown f32 facet: '{other}'"
                 ))),
@@ -213,8 +212,8 @@ impl I32Dataset {
         let facet_name = facet.to_string();
         load_uniform_facet(source, profile, facet, move |view| {
             match facet_name.as_str() {
-                "neighbor_indices" => view.neighbor_indices(),
-                "filtered_neighbor_indices" => view.prefiltered_neighbor_indices(),
+                "neighbor_indices" => view.neighbor_indices_as(),
+                "filtered_neighbor_indices" => view.prefiltered_neighbor_indices_as(),
                 other => Err(vectordata::Error::MissingFacet(format!(
                     "unknown i32 facet: '{other}'"
                 ))),
@@ -763,7 +762,13 @@ impl Ivvec32Dataset {
                 "metadata_results",
                 "ivvec32",
             );
-            let reader = run_blocking_io(|| view.metadata_results())
+            // A remote variable-length facet published without its
+            // `IDXFOR__` offset index can only be opened from every
+            // byte; the fetching open downloads it whole, with progress,
+            // where a plain open refuses.
+            let reader = run_blocking_io(|| {
+                view.metadata_results_fetching_as(&mut fetch_meter(&format!("open {source}")))
+            })
                 .map_err(|e| format!("failed to access metadata_results from '{source}': {e}"))?;
             let count = reader.count();
             let arc: Arc<Self> = Arc::new(Self { reader, count });
@@ -1246,111 +1251,43 @@ fn do_dataset_prebuffer_inner(source: &str) -> Result<Arc<DatasetHandle>, String
             }));
         }
     };
-    // vectordata's default `prebuffer_all_with_progress`
-    // walks the manifest and calls `FacetStorage::prebuffer`
-    // per facet — works for both record-shaped (xvec) and
-    // scalar (typed) facets after the storage-transport
-    // refactor in vectordata 1.0.0.
+    // One fetch over every facet that holds data: vectordata plans
+    // each facet, refuses a run the cache directory cannot hold
+    // before any byte moves, and skips chunks already resident.
+    // [`fetch_meter`] reports the run through the audit channel,
+    // throttled so a multi-gigabyte facet doesn't spew thousands of
+    // lines into session.log.
     //
-    // Audit instrumentation: log every facet the prebuffer
-    // *covers* with its key (`source:profile/facet`). Compared
-    // against the `vectordata: opened …` lines emitted by
-    // [`load_uniform_facet`] / [`GenericFacetDataset::load`],
-    // this surfaces any facet the workload reads at cycle time
-    // that prebuffer did NOT pull — the typical cause of a
-    // "still hitting HTTP after prebuffer" symptom.
-    // Manual facet walk so we can hook the per-chunk
-    // `DownloadProgress` callback (vectordata's
-    // `view.prebuffer_all_with_progress` only fires its outer cb
-    // once per facet *completion*; the per-chunk cb is exposed
-    // via `FacetStorage::prebuffer_with_progress`). Every facet's
-    // chunk-level progress is throttled per facet: ~1 Hz for the first
-    // 10s of its download (fine detail while it ramps), then one line
-    // per 10s for the long tail so a multi-gigabyte facet doesn't spew
-    // thousands of lines into session.log; a final per-facet `covered`
-    // line lands when the download finishes.
-    let mut facet_count: u64 = 0;
-    for (name, _descriptor) in view.facet_manifest() {
-        // Skip facets with unrecognised element types (vectordata's
-        // own default impl skips these — they're not data facets the
-        // typed reader would touch).
-        if view.facet_element_type(&name).is_err() {
-            continue;
-        }
-
-        let storage = match run_blocking_io(|| view.open_facet_storage(&name)) {
-            Ok(s) => s,
-            Err(e) => {
-                crate::library::support::audit::warn(&format!(
-                    "dataset_prebuffer: open '{name}' for prebuffer failed: {e}"
-                ));
-                continue;
+    // Audit instrumentation: log every facet the fetch *covers* with
+    // its key (`source:profile/facet`). Compared against the
+    // `vectordata: opened …` lines emitted by [`load_uniform_facet`] /
+    // [`GenericFacetDataset::load`], this surfaces any facet the
+    // workload reads at cycle time that prebuffer did NOT pull — the
+    // typical cause of a "still hitting HTTP after prebuffer" symptom.
+    //
+    // `fetch` drives `reqwest::blocking`, which spins up a private
+    // tokio runtime per request; `run_blocking_io` parks the outer
+    // worker so dropping that inner runtime doesn't panic. Same
+    // pattern as `load_dataset_group` and `load_uniform_facet`.
+    let mut meter = fetch_meter(&format!("prebuffer {source}"));
+    let facet_count = match run_blocking_io(|| view.fetch(&FetchRequest::all(), &mut meter)) {
+        Ok(report) => {
+            for fetched in &report.facets {
+                crate::library::support::audit::record_prebuffered(
+                    source,
+                    profile,
+                    &fetched.id.facet,
+                );
             }
-        };
-
-        // Inline the closure at the call site so Rust's type
-        // inference can read `&DownloadProgress` straight from
-        // the trait bound on `prebuffer_with_progress`.
-        // The `DownloadProgress` type is `pub(crate)` upstream
-        // (vectordata 1.0.2) so we can't name it ourselves.
-        let prebuf_source = source.to_string();
-        let prebuf_profile = profile.to_string();
-        let prebuf_facet = name.clone();
-        let mut last_done: u64 = 0;
-        let facet_start = std::time::Instant::now();
-        let mut last_log_at = facet_start;
-        // `prebuffer_with_progress` drives `reqwest::blocking`,
-        // which spins up a private tokio runtime per request.
-        // Without parking the outer worker via `block_in_place`,
-        // dropping that inner runtime inside an async context
-        // panics with "Cannot drop a runtime in a context where
-        // blocking is not allowed". Same pattern as
-        // `load_dataset_group` and `load_uniform_facet`.
-        let prebuf_result = run_blocking_io(|| {
-            storage.prebuffer_with_progress(|p| {
-                // Per-facet throttle: ~1 Hz for the first 10s of this
-                // facet's download, then once per 10s, so a gigabyte-sized
-                // facet doesn't spew thousands of progress lines.
-                let now = std::time::Instant::now();
-                let interval =
-                    if now.duration_since(facet_start) < std::time::Duration::from_secs(10) {
-                        std::time::Duration::from_secs(1)
-                    } else {
-                        std::time::Duration::from_secs(10)
-                    };
-                let since_last = now.duration_since(last_log_at);
-                if since_last < interval {
-                    return;
-                }
-                last_log_at = now;
-                let total_b = p.total_bytes();
-                let done_b = p.downloaded_bytes();
-                let total_c = p.total_chunks();
-                let done_c = p.completed_chunks();
-                let pct = p.fraction() * 100.0;
-                // Throughput over the actual gap between log lines, so the
-                // rate reads correctly whichever interval is in force.
-                let delta_mb = (done_b.saturating_sub(last_done)) as f64 / (1024.0 * 1024.0);
-                let rate_mb_s = delta_mb / since_last.as_secs_f64().max(0.001);
-                last_done = done_b;
-                crate::library::support::audit::info(&format!(
-                    "prebuffer: progress {prebuf_source}:{prebuf_profile}/{prebuf_facet} \
-                 {pct:5.1}% ({done_c}/{total_c} chunks, \
-                 {done_mb:.1}/{total_mb:.1} MB, {rate_mb_s:.1} MB/s)",
-                    done_mb = done_b as f64 / (1024.0 * 1024.0),
-                    total_mb = total_b as f64 / (1024.0 * 1024.0),
-                ));
-            })
-        });
-        if let Err(e) = prebuf_result {
-            crate::library::support::audit::warn(&format!(
-                "dataset_prebuffer: download error for '{source}' facet '{name}': {e}"
-            ));
-            continue;
+            report.facets.len() as u64
         }
-        facet_count = facet_count.saturating_add(1);
-        crate::library::support::audit::record_prebuffered(source, profile, &name);
-    }
+        Err(e) => {
+            crate::library::support::audit::warn(&format!(
+                "dataset_prebuffer: download error for '{source}': {e}"
+            ));
+            0
+        }
+    };
     crate::library::support::audit::log_prebuffer_summary(source, profile, facet_count);
     Ok(Arc::new(DatasetHandle::Prebuffered {
         group: group_for_handle,
@@ -1358,15 +1295,41 @@ fn do_dataset_prebuffer_inner(source: &str) -> Result<Arc<DatasetHandle>, String
     }))
 }
 
+/// The progress meter for a fetch, titled `title`: whole lines on the
+/// audit channel — a line as each facet starts and finishes, and a
+/// progress line per 10% of the run but at most one per 10s — and
+/// nothing for data already in the cache.
+fn fetch_meter(title: &str) -> LogMeter {
+    LogMeter::to_lines(title, |level, line| {
+        crate::library::support::audit::log(audit_level(level), line)
+    })
+    .min_interval(std::time::Duration::from_secs(10))
+    .quiet_when_resident(true)
+}
+
+/// The audit level for a line vectordata's fetch meter writes at
+/// `level`: progress at info, a stall at warn, a failure at error.
+fn audit_level(level: log::Level) -> crate::library::support::audit::LogLevel {
+    use crate::library::support::audit::LogLevel;
+    match level {
+        log::Level::Error => LogLevel::Error,
+        log::Level::Warn => LogLevel::Warn,
+        log::Level::Info => LogLevel::Info,
+        log::Level::Debug => LogLevel::Debug,
+        log::Level::Trace => LogLevel::Trace,
+    }
+}
+
 // =================================================================
 // Generic facet access — type-aware scalar/vector readers
 // =================================================================
 
-/// A type-erased facet reader that stores values as i64.
-/// Uses `generic_view().open_facet_typed::<i64>()` which handles all
-/// element types (u8, i32, etc.), caching, and local/remote access.
+/// A type-erased facet reader that reads values as i64.
+/// Uses [`TestDataViewExt::facet_as`] at `i64`, which widens every
+/// integer element type (u8, i32, …) and serves local and remote
+/// facets through the same cache.
 pub(crate) struct GenericFacetDataset {
-    reader: vectordata::typed_access::TypedReader<i64>,
+    reader: Arc<dyn VectorReader<i64>>,
     count: usize,
 }
 
@@ -1375,11 +1338,11 @@ impl GenericFacetDataset {
         let key = (source.to_string(), profile.to_string(), facet.to_string());
         let any = FACET_CACHE.get_or_init(key, || {
             let group = load_dataset_group(source)?;
-            let gv = group
-                .generic_view(profile)
+            let view = group
+                .profile(profile)
                 .ok_or_else(|| format!("profile '{profile}' not found in '{source}'"))?;
             crate::library::support::audit::record_opened(source, profile, facet, "generic-typed");
-            let reader = run_blocking_io(|| gv.open_facet_typed::<i64>(facet))
+            let reader = run_blocking_io(|| view.facet_as::<i64>(facet))
                 .map_err(|e| format!("failed to open {facet} from '{source}:{profile}': {e}"))?;
             let count = reader.count();
             let arc: Arc<Self> = Arc::new(Self { reader, count });
@@ -1393,7 +1356,16 @@ impl GenericFacetDataset {
         if self.count == 0 {
             return 0;
         }
-        self.reader.get_value(index % self.count).unwrap_or(0)
+        let index = index % self.count;
+        match self.reader.get_slice(index) {
+            Some(record) => record.first().copied().unwrap_or(0),
+            None => self
+                .reader
+                .get(index)
+                .ok()
+                .and_then(|record| record.first().copied())
+                .unwrap_or(0),
+        }
     }
 
     fn format_scalar(&self, index: usize) -> String {

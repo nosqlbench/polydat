@@ -11,5 +11,5 @@ profiles:
     prefiltered_neighbor_indices: prefiltered_neighbor_indices.ivec
     prefiltered_neighbor_distances: prefiltered_neighbor_distances.fvec
     metadata_content: metadata_content.u8
-    metadata_predicates: metadata_predicates.i32
+    metadata_predicates: metadata_predicates.i64
     metadata_results: metadata_results.ivvec

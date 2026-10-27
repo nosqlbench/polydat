@@ -6,7 +6,7 @@
 //! `tests/fixtures/vectordata` holds a catalog with one dataset,
 //! `polydat-tiny`, in the on-disk format the `vectordata` crate reads:
 //! six base vectors and three query vectors of dimension 3 (`fvec`),
-//! a `u8` metadata facet with one value per base vector, an `i32`
+//! a `u8` metadata facet with one value per base vector, an `i64`
 //! predicates facet with one value per query, the ground truth of
 //! each query (its two nearest base vectors and their squared
 //! Euclidean distances, and its nearest base vector among those whose
@@ -16,7 +16,10 @@
 //! client configuration at a per-process copy of that catalog and open
 //! the dataset by name, so every read goes through the production
 //! path: catalog resolution, `dataset.yaml`, and the typed, uniform,
-//! and variable-length readers over the files. The answers are the
+//! and variable-length readers over the files. The two scalar facets
+//! take both paths of the scalar reader, which reads at `i64`: the
+//! `u8` metadata widens on each read, and the `i64` predicates borrow
+//! in place. The answers are the
 //! constants below, and every engine that builds the program gives
 //! them.
 //!
@@ -25,11 +28,20 @@
 //! bytes to it, and the ignored `write_the_fixture` writes them.
 //! `the_ground_truth_is_the_true_nearest_neighbors` holds the
 //! ground-truth constants to a brute-force search over the vectors.
+//!
+//! The same facets are also published over HTTP, by a loopback server
+//! each test process starts, as a second catalog naming two copies of
+//! the dataset: `polydat-tiny-remote`, which a test prebuffers, and
+//! `polydat-tiny-remote-open`, which a test reads with no prebuffer.
+//! They are read the way a real remote dataset is: fetched in chunks
+//! into the vectordata cache, then read from there.
 
 #![cfg(feature = "vectordata")]
 
+use std::io::{BufRead, BufReader, Write};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use polydat::ast::{SliceArc, Value};
 use polydat::dsl::compile::{compile_polydat_interpreter, compile_polydat_to_assembler};
@@ -38,6 +50,17 @@ use polydat::{Engine, JitMode, Kernel, Provenance};
 
 /// The dataset and profile the fixture catalog names.
 const SOURCE: &str = "polydat-tiny:default";
+/// The name the fixture server publishes the fixture's dataset under:
+/// another name, because a name two catalogs give is ambiguous.
+const REMOTE_NAME: &str = "polydat-tiny-remote";
+/// The dataset and profile the fixture server publishes for a
+/// prebuffer, under `tiny/`.
+const REMOTE_SOURCE: &str = "polydat-tiny-remote:default";
+/// The name of the second copy the fixture server publishes, under
+/// `open/`, which nothing prebuffers.
+const REMOTE_OPEN_NAME: &str = "polydat-tiny-remote-open";
+/// The dataset and profile of that second copy.
+const REMOTE_OPEN_SOURCE: &str = "polydat-tiny-remote-open:default";
 /// The metadata value of each base vector.
 const METADATA: [u8; 6] = [2, 0, 2, 5, 2, 0];
 /// The predicate value of each query.
@@ -103,8 +126,11 @@ fn facet_files() -> Vec<(&'static str, Vec<u8>)> {
         ),
         ("metadata_content.u8", METADATA.to_vec()),
         (
-            "metadata_predicates.i32",
-            PREDICATES.iter().flat_map(|p| p.to_le_bytes()).collect(),
+            "metadata_predicates.i64",
+            PREDICATES
+                .iter()
+                .flat_map(|p| i64::from(*p).to_le_bytes())
+                .collect(),
         ),
         ("neighbor_indices.ivec", xvec(NEIGHBORS, i32::to_le_bytes)),
         ("neighbor_distances.fvec", xvec(DISTANCES, f32::to_le_bytes)),
@@ -190,8 +216,8 @@ fn copy_tree(from: &Path, to: &Path) {
     }
 }
 
-/// Point the vectordata client at a copy of the fixture catalog, once
-/// per process.
+/// Point the vectordata client at a copy of the fixture catalog, and
+/// at the fixture server publishing another copy, once per process.
 ///
 /// The client reads its catalog list from `catalogs.yaml` under
 /// `$VECTORDATA_HOME`, which is the crate's seam for isolating its
@@ -203,20 +229,63 @@ fn copy_tree(from: &Path, to: &Path) {
 /// writes that only into its own copy. The suite runs one process per
 /// test under nextest, so the variable is set before any thread of
 /// this process reads it.
+///
+/// The server publishes the fixture's `tiny/` directory twice, as
+/// `tiny/` and `open/`, beside a listing naming them [`REMOTE_NAME`]
+/// and [`REMOTE_OPEN_NAME`]: two datasets with files of their own, so
+/// what one test fetches into the cache is never what another test
+/// expects to fetch. With `$VECTORDATA_HOME` set, the
+/// client caches what it fetches under `$VECTORDATA_HOME/cache`, which
+/// starts empty here so the first fetch of a remote facet goes over
+/// HTTP.
 fn use_fixture_catalog() {
     static HOME: OnceLock<PathBuf> = OnceLock::new();
     HOME.get_or_init(|| {
         let home = Path::new(env!("CARGO_TARGET_TMPDIR"))
             .join(format!("vectordata-home-{}", std::process::id()));
-        let copy = home.join("catalog");
-        if copy.exists() {
-            std::fs::remove_dir_all(&copy).expect("clear the catalog copy");
+        for dir in ["catalog", "remote", "cache"] {
+            let dir = home.join(dir);
+            if dir.exists() {
+                std::fs::remove_dir_all(&dir)
+                    .unwrap_or_else(|e| panic!("clear {}: {e}", dir.display()));
+            }
         }
+        let copy = home.join("catalog");
         copy_tree(&fixture_dir(), &copy);
         let catalog = copy.to_string_lossy().replace('\\', "/");
+
+        let remote = home.join("remote");
+        let listing = std::fs::read_to_string(fixture_dir().join("catalog.json"))
+            .expect("read the fixture catalog");
+        let entry = listing
+            .trim()
+            .strip_prefix('[')
+            .and_then(|l| l.strip_suffix(']'))
+            .expect("the fixture catalog is a list of one entry");
+        let (local_name, local_path) = ("\"name\": \"polydat-tiny\"", "\"path\": \"tiny/");
+        assert!(
+            entry.contains(local_name) && entry.contains(local_path),
+            "the fixture catalog's entry is polydat-tiny at tiny/"
+        );
+        let entries: Vec<String> = [(REMOTE_NAME, "tiny"), (REMOTE_OPEN_NAME, "open")]
+            .iter()
+            .map(|(name, dir)| {
+                copy_tree(&fixture_dir().join("tiny"), &remote.join(dir));
+                entry
+                    .replace(local_name, &format!("\"name\": \"{name}\""))
+                    .replace(local_path, &format!("\"path\": \"{dir}/"))
+            })
+            .collect();
+        std::fs::write(
+            remote.join("catalog.json"),
+            format!("[{}]\n", entries.join(",")),
+        )
+        .expect("write the remote catalog");
+        let server = serve(remote);
+
         std::fs::write(
             home.join("catalogs.yaml"),
-            format!("fixture: '{catalog}'\n"),
+            format!("fixture: '{catalog}'\nremote: 'http://{server}/'\n"),
         )
         .expect("write catalogs.yaml");
         // SAFETY: set once, before the first catalog read of this
@@ -224,6 +293,112 @@ fn use_fixture_catalog() {
         unsafe { std::env::set_var("VECTORDATA_HOME", &home) };
         home
     });
+}
+
+/// The facet files the fixture server has been asked for, as
+/// `(directory, file name)`, one entry per request of any method, in
+/// the order they arrived.
+static FACET_REQUESTS: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+
+/// The facet files of the copy under `dir` the fixture server has been
+/// asked for so far, by name.
+fn facet_requests(dir: &str) -> Vec<String> {
+    FACET_REQUESTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .filter(|(d, _)| d == dir)
+        .map(|(_, name)| name.clone())
+        .collect()
+}
+
+/// Serve the files under `root` over HTTP on a loopback port for the
+/// rest of the process, and return its address. Each request for one
+/// of the fixture's facet files is recorded in [`FACET_REQUESTS`].
+fn serve(root: PathBuf) -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind the fixture server");
+    let addr = listener.local_addr().expect("the fixture server's address");
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let root = root.clone();
+            std::thread::spawn(move || answer(stream, &root));
+        }
+    });
+    addr
+}
+
+/// Answer one HTTP/1.1 request on `stream` from the files under
+/// `root`, then close the connection: `GET` and `HEAD`, with a single
+/// `Range: bytes=start-[end]` answered as `206 Partial Content`, the
+/// way a static file server publishes a dataset.
+fn answer(stream: TcpStream, root: &Path) {
+    let mut reader = BufReader::new(&stream);
+    let mut request = String::new();
+    if reader.read_line(&mut request).is_err() {
+        return;
+    }
+    let mut range = None;
+    loop {
+        let mut header = String::new();
+        if reader.read_line(&mut header).unwrap_or(0) == 0 || header.trim().is_empty() {
+            break;
+        }
+        if let Some((name, value)) = header.split_once(':')
+            && name.trim().eq_ignore_ascii_case("range")
+        {
+            range = value.trim().strip_prefix("bytes=").map(str::to_string);
+        }
+    }
+    let mut parts = request.split_whitespace();
+    let (Some(method), Some(target)) = (parts.next(), parts.next()) else {
+        return;
+    };
+    let path = target.split('?').next().unwrap_or("").trim_start_matches('/');
+    if let Some((dir, name)) = path.split_once('/')
+        && facet_files().iter().any(|(facet, _)| *facet == name)
+    {
+        FACET_REQUESTS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((dir.to_string(), name.to_string()));
+    }
+    let body = if path.split('/').any(|segment| segment == "..") {
+        None
+    } else {
+        std::fs::read(root.join(path)).ok()
+    };
+    let mut out = &stream;
+    let Some(body) = body else {
+        let _ = out.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        return;
+    };
+    let total = body.len();
+    let span = range.and_then(|r| {
+        let (start, end) = r.split_once('-')?;
+        let start: usize = start.parse().ok()?;
+        let end = match end {
+            "" => total.checked_sub(1)?,
+            end => end.parse::<usize>().ok()?.min(total.checked_sub(1)?),
+        };
+        (start <= end).then_some((start, end))
+    });
+    let (status, bytes, content_range) = match span {
+        Some((start, end)) => (
+            "206 Partial Content",
+            &body[start..=end],
+            format!("Content-Range: bytes {start}-{end}/{total}\r\n"),
+        ),
+        None => ("200 OK", &body[..], String::new()),
+    };
+    let head = format!(
+        "HTTP/1.1 {status}\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\n{content_range}\
+         Content-Type: application/octet-stream\r\nConnection: close\r\n\r\n",
+        bytes.len()
+    );
+    let _ = out.write_all(head.as_bytes());
+    if method != "HEAD" {
+        let _ = out.write_all(bytes);
+    }
 }
 
 /// Every engine a program can be built on in this build.
@@ -724,6 +899,122 @@ fn every_accessor_agrees_on_a_prebuffered_and_an_opened_handle() {
                 }
             }
         }
+    }
+}
+
+/// `dataset_prebuffer` over HTTP: prebuffering the remote dataset
+/// fetches every one of its facets from the fixture server, and every
+/// accessor then reads the prebuffered handle with no further request
+/// for facet data, answering as it does on the local fixture.
+#[test]
+fn a_prebuffered_remote_dataset_reads_from_the_cache() {
+    use_fixture_catalog();
+    let externs = opened(&[(
+        "pre",
+        format!("dataset_prebuffer(\"{REMOTE_SOURCE}\")"),
+    )]);
+    let prebuffered = facet_requests("tiny");
+    for (facet, _) in facet_files() {
+        assert!(
+            prebuffered.iter().any(|name| name == facet),
+            "the prebuffer did not fetch {facet}; it fetched {prebuffered:?}"
+        );
+    }
+
+    let mut decls = String::from("extern pre: handle\n");
+    decls.push_str(&format!("group := dataset_group_open(\"{SOURCE}\")\n"));
+    for facet in FIXTURE_FACETS {
+        decls.push_str(&format!(
+            "f_{facet} := dataset_open(\"{SOURCE}\", \"{facet}\")\n"
+        ));
+    }
+    let calls = ACCESSORS
+        .iter()
+        .map(|(name, facet, rest)| (*name, format!("f_{facet}"), *rest))
+        .chain(
+            GROUP_ACCESSORS
+                .iter()
+                .map(|(name, rest)| (*name, "group".to_string(), *rest)),
+        );
+    let mut body = String::new();
+    let mut outputs: Vec<(String, String)> = Vec::new();
+    for (name, local, rest) in calls {
+        let (remote_out, local_out) = (format!("remote_{name}"), format!("local_{name}"));
+        body.push_str(&format!("{remote_out} := {name}(pre{rest})\n"));
+        body.push_str(&format!("{local_out} := {name}({local}{rest})\n"));
+        outputs.push((remote_out, local_out));
+    }
+    let src = format!("input cycle: u64\n{decls}{body}");
+    let mut k = kernel_on(Engine::Interpreter(JitMode::Off), &src, &externs);
+    for c in 0..8 {
+        k.set_inputs(&[c]);
+        for (remote, local) in &outputs {
+            assert_eq!(
+                k.pull(remote).to_display_string(),
+                k.pull(local).to_display_string(),
+                "{remote} at cycle {c}\n{src}"
+            );
+        }
+    }
+    assert_eq!(
+        facet_requests("tiny"),
+        prebuffered,
+        "a read after the prebuffer went to the server"
+    );
+}
+
+/// Every accessor reads a remote dataset nothing prebuffered, fetching
+/// what it reads from the fixture server, and answers as it does on
+/// the local fixture. That includes the variable-length
+/// `metadata_results`, which the server publishes with no offset
+/// index, so opening it means fetching it first.
+#[test]
+fn every_accessor_reads_a_remote_dataset_with_no_prebuffer() {
+    use_fixture_catalog();
+    let mut decls = format!(
+        "remote_group := dataset_group_open(\"{REMOTE_OPEN_SOURCE}\")\n\
+         group := dataset_group_open(\"{SOURCE}\")\n"
+    );
+    for facet in FIXTURE_FACETS {
+        decls.push_str(&format!(
+            "remote_f_{facet} := dataset_open(\"{REMOTE_OPEN_SOURCE}\", \"{facet}\")\n\
+             f_{facet} := dataset_open(\"{SOURCE}\", \"{facet}\")\n"
+        ));
+    }
+    let calls = ACCESSORS
+        .iter()
+        .map(|(name, facet, rest)| (*name, format!("f_{facet}"), *rest))
+        .chain(
+            GROUP_ACCESSORS
+                .iter()
+                .map(|(name, rest)| (*name, "group".to_string(), *rest)),
+        );
+    let mut body = String::new();
+    let mut outputs: Vec<(String, String)> = Vec::new();
+    for (name, local, rest) in calls {
+        let (remote_out, local_out) = (format!("remote_{name}"), format!("local_{name}"));
+        body.push_str(&format!("{remote_out} := {name}(remote_{local}{rest})\n"));
+        body.push_str(&format!("{local_out} := {name}({local}{rest})\n"));
+        outputs.push((remote_out, local_out));
+    }
+    let src = format!("input cycle: u64\n{decls}{body}");
+    let mut k = kernel_on(Engine::Interpreter(JitMode::Off), &src, &[]);
+    for c in 0..8 {
+        k.set_inputs(&[c]);
+        for (remote, local) in &outputs {
+            assert_eq!(
+                k.pull(remote).to_display_string(),
+                k.pull(local).to_display_string(),
+                "{remote} at cycle {c}\n{src}"
+            );
+        }
+    }
+    let fetched = facet_requests("open");
+    for (facet, _) in facet_files() {
+        assert!(
+            fetched.iter().any(|name| name == facet),
+            "no read fetched {facet}; the server was asked for {fetched:?}"
+        );
     }
 }
 

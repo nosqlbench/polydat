@@ -48,7 +48,7 @@ serde_json = { version = "1", features = ["preserve_order"] }
 # Shortest round-trip float digits for tile holes
 # (`library::support::float_text`).
 ryu = "1"
-vectordata = { version = "1.2", optional = true }
+vectordata = { version = "4.3.3", optional = true }
 cranelift-jit = { version = "0.116", optional = true }
 cranelift-module = { version = "0.116", optional = true }
 cranelift-codegen = { version = "0.116", optional = true }
@@ -59,13 +59,16 @@ inventory = "0.3.24"
 # around its blocking HTTP client when an outer runtime is current
 # (`library::vectors::run_blocking_io`), so it rides the feature.
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"], optional = true }
+# The level type vectordata's fetch meter hands each line with
+# (`library::vectors::audit_level`), so it rides the feature too.
+log = { version = "0.4", optional = true }
 # Insertion-ordered map for `kernel::ScopeCoord`.
 indexmap = "2"
 half = "2"
 
 [features]
 default = ["jit"]
-vectordata = ["dep:vectordata", "dep:tokio"]
+vectordata = ["dep:vectordata", "dep:tokio", "dep:log"]
 jit = ["dep:cranelift-jit", "dep:cranelift-module", "dep:cranelift-codegen", "dep:cranelift-frontend", "dep:cranelift-native"]
 # The typed tier constructors, for measurement. `compile_slots` picks an
 # engine from a runtime value and so must box; a benchmark knows its tier
