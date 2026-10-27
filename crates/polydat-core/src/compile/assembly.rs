@@ -729,7 +729,7 @@ impl PolydatAssembler {
     }
 
     /// The resource scope every kernel built from this assembler reports
-    /// through [`Kernel::resources`](crate::Kernel::resources). A caller
+    /// through [`Kernel::resources`]. A caller
     /// that builds nodes itself hands each factory a
     /// [`BuildContext`](crate::dsl::factory::BuildContext) over the same
     /// scope, so the nodes and the kernel see one accessor.

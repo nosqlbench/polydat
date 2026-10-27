@@ -886,7 +886,7 @@ fn dataset_profile_names(group: Group) -> String {
 /// (`DefaultResolver::Group`). The spliced `dataset_group_open` yields
 /// the canonical `Value::Handle(Arc<DatasetHandle>)`, so the wire is
 /// resolved as `DatasetHandle` and the group is taken via
-/// [`DatasetHandle::resolve_group`] (downcasting straight to
+/// `DatasetHandle::resolve_group` (downcasting straight to
 /// `TestDataGroup` would fail — the handle is always the unified
 /// `DatasetHandle` enum).
 #[crate::polydat_node(category = RealData)]
@@ -1187,9 +1187,9 @@ fn matching_profile_name_at(
 /// `source` is the canonical `dataset:profile` string. The
 /// returned handle names the dataset rather than one facet: a
 /// facet accessor opens its own facet of `source` from it
-/// ([`DatasetHandle::resolve_facet`]), and a group accessor
+/// (`DatasetHandle::resolve_facet`), and a group accessor
 /// (`dataset_facets`, `dataset_distance_function`, ...) reads
-/// the dataset's group ([`DatasetHandle::resolve_group`]).
+/// the dataset's group (`DatasetHandle::resolve_group`).
 ///
 /// A dataset that does not resolve yields no handle, and the
 /// resolve error goes to the audit log. A profile the dataset

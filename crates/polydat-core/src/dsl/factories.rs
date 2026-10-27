@@ -123,7 +123,7 @@ pub trait NodeFactory: Send + Sync {
     /// wires, their resolved port types, and its constant arguments.
     /// `ctx` says which bindings are under construction and which
     /// resource scope the program tree has
-    /// ([`BuildContext`](crate::dsl::factory::BuildContext)).
+    /// ([`BuildContext`]).
     fn build(
         &self,
         ctx: &BuildContext,
