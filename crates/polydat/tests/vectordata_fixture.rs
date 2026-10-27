@@ -30,18 +30,17 @@
 //! ground-truth constants to a brute-force search over the vectors.
 //!
 //! The same facets are also published over HTTP, by a loopback server
-//! each test process starts, as a second catalog naming two copies of
-//! the dataset: `polydat-tiny-remote`, which a test prebuffers, and
-//! `polydat-tiny-remote-open`, which a test reads with no prebuffer.
-//! They are read the way a real remote dataset is: fetched in chunks
-//! into the vectordata cache, then read from there.
+//! each test process starts, as a second catalog naming a copy of the
+//! dataset per test that reads one ([`REMOTE_COPIES`]). They are read
+//! the way a real remote dataset is: fetched in chunks into the
+//! vectordata cache, then read from there.
 
 #![cfg(feature = "vectordata")]
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Barrier, Mutex, OnceLock};
 
 use polydat::ast::{SliceArc, Value};
 use polydat::dsl::compile::{compile_polydat_interpreter, compile_polydat_to_assembler};
@@ -50,17 +49,26 @@ use polydat::{Engine, JitMode, Kernel, Provenance};
 
 /// The dataset and profile the fixture catalog names.
 const SOURCE: &str = "polydat-tiny:default";
-/// The name the fixture server publishes the fixture's dataset under:
-/// another name, because a name two catalogs give is ambiguous.
-const REMOTE_NAME: &str = "polydat-tiny-remote";
-/// The dataset and profile the fixture server publishes for a
-/// prebuffer, under `tiny/`.
+/// The copies of the fixture's dataset the fixture server publishes,
+/// as `(name, directory)`: one per test that reads one, so what a test
+/// fetches into the cache is never what another expects to fetch. Each
+/// takes another name than the local dataset's, because a name two
+/// catalogs give is ambiguous.
+const REMOTE_COPIES: [(&str, &str); 4] = [
+    ("polydat-tiny-remote", "tiny"),
+    ("polydat-tiny-remote-open", "open"),
+    ("polydat-tiny-remote-solo", "solo"),
+    ("polydat-tiny-remote-herd", "herd"),
+];
+/// The remote copy a test prebuffers.
 const REMOTE_SOURCE: &str = "polydat-tiny-remote:default";
-/// The name of the second copy the fixture server publishes, under
-/// `open/`, which nothing prebuffers.
-const REMOTE_OPEN_NAME: &str = "polydat-tiny-remote-open";
-/// The dataset and profile of that second copy.
+/// The remote copy a test reads with no prebuffer.
 const REMOTE_OPEN_SOURCE: &str = "polydat-tiny-remote-open:default";
+/// The remote copy one thread opens cold, for the requests one open
+/// makes.
+const REMOTE_SOLO_SOURCE: &str = "polydat-tiny-remote-solo:default";
+/// The remote copy many threads open cold at once.
+const REMOTE_HERD_SOURCE: &str = "polydat-tiny-remote-herd:default";
 /// The metadata value of each base vector.
 const METADATA: [u8; 6] = [2, 0, 2, 5, 2, 0];
 /// The predicate value of each query.
@@ -230,11 +238,9 @@ fn copy_tree(from: &Path, to: &Path) {
 /// test under nextest, so the variable is set before any thread of
 /// this process reads it.
 ///
-/// The server publishes the fixture's `tiny/` directory twice, as
-/// `tiny/` and `open/`, beside a listing naming them [`REMOTE_NAME`]
-/// and [`REMOTE_OPEN_NAME`]: two datasets with files of their own, so
-/// what one test fetches into the cache is never what another test
-/// expects to fetch. With `$VECTORDATA_HOME` set, the
+/// The server publishes a copy of the fixture's `tiny/` directory per
+/// entry of [`REMOTE_COPIES`], beside a listing naming each. With
+/// `$VECTORDATA_HOME` set, the
 /// client caches what it fetches under `$VECTORDATA_HOME/cache`, which
 /// starts empty here so the first fetch of a remote facet goes over
 /// HTTP.
@@ -267,7 +273,7 @@ fn use_fixture_catalog() {
             entry.contains(local_name) && entry.contains(local_path),
             "the fixture catalog's entry is polydat-tiny at tiny/"
         );
-        let entries: Vec<String> = [(REMOTE_NAME, "tiny"), (REMOTE_OPEN_NAME, "open")]
+        let entries: Vec<String> = REMOTE_COPIES
             .iter()
             .map(|(name, dir)| {
                 copy_tree(&fixture_dir().join("tiny"), &remote.join(dir));
@@ -1016,6 +1022,119 @@ fn every_accessor_reads_a_remote_dataset_with_no_prebuffer() {
             "no read fetched {facet}; the server was asked for {fetched:?}"
         );
     }
+}
+
+/// A program reading every facet accessor through the source string
+/// `source`, and its outputs, one per accessor.
+fn every_accessor_of(source: &str) -> (String, Vec<String>) {
+    let mut src = String::from("input cycle: u64\n");
+    let mut outputs = Vec::new();
+    for (name, _, rest) in ACCESSORS {
+        let out = format!("out_{name}");
+        src.push_str(&format!("{out} := {name}(\"{source}\"{rest})\n"));
+        outputs.push(out);
+    }
+    (src, outputs)
+}
+
+/// Every facet accessor of `source` at cycles `0..8`, as display text,
+/// read through a kernel compiled for the calling thread.
+fn read_every_accessor(source: &str) -> Vec<String> {
+    let (src, outputs) = every_accessor_of(source);
+    let mut k = compile_polydat_interpreter(&src).unwrap_or_else(|e| panic!("{e}\n{src}"));
+    let mut answers = Vec::new();
+    for c in 0..8 {
+        k.set_inputs(&[c]);
+        for out in &outputs {
+            answers.push(k.pull_ref(out).to_display_string());
+        }
+    }
+    answers
+}
+
+/// Threads compiling programs over a remote dataset no one has opened,
+/// all at the same moment, read what the local fixture reads, and
+/// between them ask the server for what one thread's open asks for:
+/// the opens share one reader per facet rather than each fetching its
+/// own.
+#[test]
+fn threads_opening_a_cold_remote_dataset_share_its_fetches() {
+    use_fixture_catalog();
+    let expected = read_every_accessor(SOURCE);
+    assert_eq!(read_every_accessor(REMOTE_SOLO_SOURCE), expected);
+    let mut solo = facet_requests("solo");
+    solo.sort();
+    assert!(!solo.is_empty(), "the solo open fetched nothing");
+
+    const THREADS: usize = 16;
+    let start = Barrier::new(THREADS);
+    std::thread::scope(|s| {
+        let readers: Vec<_> = (0..THREADS)
+            .map(|_| {
+                s.spawn(|| {
+                    start.wait();
+                    read_every_accessor(REMOTE_HERD_SOURCE)
+                })
+            })
+            .collect();
+        for (t, reader) in readers.into_iter().enumerate() {
+            assert_eq!(reader.join().expect("a reader thread"), expected, "thread {t}");
+        }
+    });
+    let mut herd = facet_requests("herd");
+    herd.sort();
+    assert_eq!(
+        herd, solo,
+        "{THREADS} concurrent opens asked the server for other than one open does"
+    );
+}
+
+/// Fibers sharing one compiled program, each with a state of its own,
+/// read at every cycle what one fiber reads there, however their reads
+/// interleave.
+#[test]
+fn fibers_sharing_a_program_read_what_one_fiber_reads() {
+    use_fixture_catalog();
+    let (src, outputs) = every_accessor_of(SOURCE);
+    let program = compile_polydat_interpreter(&src)
+        .unwrap_or_else(|e| panic!("{e}\n{src}"))
+        .into_program();
+    let read = |state: &mut polydat::kernel::PolydatState, c: u64| -> Vec<String> {
+        state.set_inputs(&[c]);
+        outputs
+            .iter()
+            .map(|out| state.pull(&program, out).to_display_string())
+            .collect()
+    };
+    const CYCLES: u64 = 64;
+    let mut one = program.create_state();
+    let expected: Vec<Vec<String>> = (0..CYCLES).map(|c| read(&mut one, c)).collect();
+
+    const FIBERS: u64 = 32;
+    let start = Barrier::new(FIBERS as usize);
+    std::thread::scope(|s| {
+        let fibers: Vec<_> = (0..FIBERS)
+            .map(|fiber| {
+                let (start, read, expected, program) = (&start, &read, &expected, &program);
+                s.spawn(move || {
+                    let mut state = program.create_state();
+                    start.wait();
+                    // Each fiber walks the cycles in an order of its own,
+                    // yielding now and then so the walks interleave.
+                    for i in 0..4 * CYCLES {
+                        let c = (i * 7 + fiber) % CYCLES;
+                        assert_eq!(read(&mut state, c), expected[c as usize], "fiber {fiber} at cycle {c}");
+                        if i % 5 == 0 {
+                            std::thread::yield_now();
+                        }
+                    }
+                })
+            })
+            .collect();
+        for fiber in fibers {
+            fiber.join().expect("a fiber");
+        }
+    });
 }
 
 /// The vector answers, by output name.

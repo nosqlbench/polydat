@@ -173,12 +173,8 @@ mod v3_names;
 mod variadic_lowering;
 #[path = "vector_set_ops.rs"]
 mod vector_set_ops;
-#[path = "vectordata_concurrency.rs"]
-mod vectordata_concurrency;
 #[path = "vectordata_fixture.rs"]
 mod vectordata_fixture;
-#[path = "vectordata_integration.rs"]
-mod vectordata_integration;
 #[path = "volatile_is_never_current.rs"]
 mod volatile_is_never_current;
 #[path = "wire_type_fidelity.rs"]
