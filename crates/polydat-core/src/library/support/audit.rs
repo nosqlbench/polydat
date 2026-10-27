@@ -158,31 +158,34 @@ pub fn record_prebuffer_entered(source: &str) {
     debug(&format!("prebuffer: entered dataset_prebuffer({source:?})"));
 }
 
-/// Record that the prebuffer pass covered a facet. Emitted once per
-/// facet in the report of the prebuffer's `view.fetch`.
-pub fn record_prebuffered(source: &str, profile: &str, facet: &str) {
-    debug(&format!("prebuffer: covered {source}:{profile}/{facet}"));
+/// Record that the prebuffer pass covered `facet` of `profile` of the
+/// dataset named `dataset`. Emitted once per facet in the report of
+/// the prebuffer's `view.fetch`.
+pub fn record_prebuffered(dataset: &str, profile: &str, facet: &str) {
+    debug(&format!("prebuffer: covered {dataset}:{profile}/{facet}"));
 }
 
-/// Record that a reader was opened for a facet. Emitted from
+/// Record that a reader was opened for `facet` of `profile` of the
+/// dataset named `dataset`. Emitted from
 /// every `vectors::*` reader-open path *before* the actual
 /// `view.<facet>_as()` / `view.facet_as()` call so the line lands
 /// even if the open errors. `kind` distinguishes the open shape
 /// (`uniform`, `ivvec32`, `generic-typed`, …) for at-a-glance
 /// debugging.
-pub fn record_opened(source: &str, profile: &str, facet: &str, kind: &str) {
+pub fn record_opened(dataset: &str, profile: &str, facet: &str, kind: &str) {
     debug(&format!(
-        "vectordata: opened {source}:{profile}/{facet} (kind={kind})"
+        "vectordata: opened {dataset}:{profile}/{facet} (kind={kind})"
     ));
 }
 
-/// One-line summary at the end of `dataset_prebuffer`. Pairs
+/// One-line summary at the end of `dataset_prebuffer` over `profile`
+/// of the dataset named `dataset`. Pairs
 /// with the per-facet `prebuffer: covered …` lines above and
 /// the `vectordata: opened …` lines below to make the
 /// covered-vs-opened delta easy to read.
-pub fn log_prebuffer_summary(source: &str, profile: &str, facet_count: u64) {
+pub fn log_prebuffer_summary(dataset: &str, profile: &str, facet_count: u64) {
     debug(&format!(
-        "prebuffer: done {source}:{profile} (covered {facet_count} facet(s))"
+        "prebuffer: done {dataset}:{profile} (covered {facet_count} facet(s))"
     ));
 }
 
