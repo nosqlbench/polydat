@@ -200,14 +200,25 @@ mod tests {
 
     #[test]
     fn the_bridge_forwards_vectordata_and_its_veks_crates() {
-        for target in ["vectordata", "vectordata::fetch", "veks_io::reader::vvec", "veks_apicore"] {
+        for target in [
+            "vectordata",
+            "vectordata::fetch",
+            "veks_io::reader::vvec",
+            "veks_apicore",
+        ] {
             assert!(enabled(target, log::Level::Warn), "{target}");
         }
     }
 
     #[test]
     fn the_bridge_leaves_other_crates_to_the_host() {
-        for target in ["reqwest::connect", "hyper", "vectordatax", "veks", "polydat_core"] {
+        for target in [
+            "reqwest::connect",
+            "hyper",
+            "vectordatax",
+            "veks",
+            "polydat_core",
+        ] {
             assert!(!enabled(target, log::Level::Error), "{target}");
         }
     }

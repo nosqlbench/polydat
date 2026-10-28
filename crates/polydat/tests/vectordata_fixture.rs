@@ -359,7 +359,11 @@ fn answer(stream: TcpStream, root: &Path) {
     let (Some(method), Some(target)) = (parts.next(), parts.next()) else {
         return;
     };
-    let path = target.split('?').next().unwrap_or("").trim_start_matches('/');
+    let path = target
+        .split('?')
+        .next()
+        .unwrap_or("")
+        .trim_start_matches('/');
     if let Some((dir, name)) = path.split_once('/')
         && facet_files().iter().any(|(facet, _)| *facet == name)
     {
@@ -375,7 +379,8 @@ fn answer(stream: TcpStream, root: &Path) {
     };
     let mut out = &stream;
     let Some(body) = body else {
-        let _ = out.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        let _ = out
+            .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
         return;
     };
     let total = body.len();
@@ -915,10 +920,7 @@ fn every_accessor_agrees_on_a_prebuffered_and_an_opened_handle() {
 #[test]
 fn a_prebuffered_remote_dataset_reads_from_the_cache() {
     use_fixture_catalog();
-    let externs = opened(&[(
-        "pre",
-        format!("dataset_prebuffer(\"{REMOTE_SOURCE}\")"),
-    )]);
+    let externs = opened(&[("pre", format!("dataset_prebuffer(\"{REMOTE_SOURCE}\")"))]);
     let prebuffered = facet_requests("tiny");
     for (facet, _) in facet_files() {
         assert!(
@@ -1078,7 +1080,11 @@ fn threads_opening_a_cold_remote_dataset_share_its_fetches() {
             })
             .collect();
         for (t, reader) in readers.into_iter().enumerate() {
-            assert_eq!(reader.join().expect("a reader thread"), expected, "thread {t}");
+            assert_eq!(
+                reader.join().expect("a reader thread"),
+                expected,
+                "thread {t}"
+            );
         }
     });
     let mut herd = facet_requests("herd");
@@ -1123,7 +1129,11 @@ fn fibers_sharing_a_program_read_what_one_fiber_reads() {
                     // yielding now and then so the walks interleave.
                     for i in 0..4 * CYCLES {
                         let c = (i * 7 + fiber) % CYCLES;
-                        assert_eq!(read(&mut state, c), expected[c as usize], "fiber {fiber} at cycle {c}");
+                        assert_eq!(
+                            read(&mut state, c),
+                            expected[c as usize],
+                            "fiber {fiber} at cycle {c}"
+                        );
                         if i % 5 == 0 {
                             std::thread::yield_now();
                         }

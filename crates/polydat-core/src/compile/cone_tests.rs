@@ -75,7 +75,7 @@ impl crate::ast::PolydatNode for LateRejected {
     fn compiled_u64(&self) -> Option<crate::ast::CompiledU64Op> {
         use std::sync::atomic::Ordering;
         self.offers
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
             .ok()?;
         Some(Box::new(|i: &[u64], o: &mut [u64]| {
             o[0] = i[0].wrapping_mul(3)

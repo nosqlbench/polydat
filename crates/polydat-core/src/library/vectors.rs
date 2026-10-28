@@ -170,7 +170,12 @@ fn load_uniform_facet<T: Send + Sync + 'static>(
         // `get_or_init`'s closure, this fires exactly once per
         // (source, profile, facet) — the prior shape logged
         // once per concurrent miss (storms of N for N fibers).
-        crate::library::support::audit::record_opened(parse_source_specifier(source).0, profile, facet, "uniform");
+        crate::library::support::audit::record_opened(
+            parse_source_specifier(source).0,
+            profile,
+            facet,
+            "uniform",
+        );
         let reader = run_blocking_io(|| open_fn(view.as_ref()))
             .map_err(|e| format!("failed to access {facet} from '{source}': {e}"))?;
         let count = reader.count();
@@ -769,7 +774,7 @@ impl Ivvec32Dataset {
             let reader = run_blocking_io(|| {
                 view.metadata_results_fetching_as(&mut fetch_meter(&format!("open {source}")))
             })
-                .map_err(|e| format!("failed to access metadata_results from '{source}': {e}"))?;
+            .map_err(|e| format!("failed to access metadata_results from '{source}': {e}"))?;
             let count = reader.count();
             let arc: Arc<Self> = Arc::new(Self { reader, count });
             Ok(arc as Arc<dyn std::any::Any + Send + Sync>)
@@ -1288,7 +1293,11 @@ fn do_dataset_prebuffer_inner(source: &str) -> Result<Arc<DatasetHandle>, String
             0
         }
     };
-    crate::library::support::audit::log_prebuffer_summary(parse_source_specifier(source).0, profile, facet_count);
+    crate::library::support::audit::log_prebuffer_summary(
+        parse_source_specifier(source).0,
+        profile,
+        facet_count,
+    );
     Ok(Arc::new(DatasetHandle::Prebuffered {
         group: group_for_handle,
         source: source.to_string(),
@@ -1328,7 +1337,12 @@ impl GenericFacetDataset {
             let view = group
                 .profile(profile)
                 .ok_or_else(|| format!("profile '{profile}' not found in '{source}'"))?;
-            crate::library::support::audit::record_opened(parse_source_specifier(source).0, profile, facet, "generic-typed");
+            crate::library::support::audit::record_opened(
+                parse_source_specifier(source).0,
+                profile,
+                facet,
+                "generic-typed",
+            );
             let reader = run_blocking_io(|| view.facet_as::<i64>(facet))
                 .map_err(|e| format!("failed to open {facet} from '{source}:{profile}': {e}"))?;
             let count = reader.count();
