@@ -1,4 +1,6 @@
 # Link with rust-lld, which ships with the toolchain, in place of MSVC
+[alias]
+ws-release = ["ws", "publish", "--force", "*", "--all", "--exact", "--allow-branch", "main"]
 # link.exe: measured 2026-09-12 on the all-features test build (63
 # binaries), a cold build went from 880 s to 560 s, relinking every
 # binary after a library change from 377 s to 226 s, and one touched
