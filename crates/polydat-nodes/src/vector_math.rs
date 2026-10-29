@@ -66,6 +66,47 @@ fn vec_cosine(a: &[f32], b: &[f32]) -> f64 {
     cosine_f32(a, b)
 }
 
+/// `vec_distance(metric, a, b)` — the distance between two f32
+/// vectors as a dataset's ground truth records it, accumulated in
+/// f64. Smaller is closer under every metric:
+///
+/// - `EUCLIDEAN`: squared Euclidean distance (the square root is
+///   monotonic, so ground truth leaves it out);
+/// - `COSINE`: `1 − a·b / (|a|·|b|)`, and `1.0` when either operand
+///   has zero length;
+/// - `DOT_PRODUCT`: `−a·b`, so a larger inner product is closer;
+/// - `MANHATTAN`: `Σ|aᵢ − bᵢ|`.
+///
+/// `metric` is a name as `dataset_distance_function` returns it, so a
+/// host recomputes a stored neighbor distance with
+/// `vec_distance(dataset_distance_function(group), query, base)`.
+/// Any other name panics naming it, as do differing lengths: a
+/// distance under a guessed metric would make every comparison
+/// against the stored one meaningless.
+#[polydat::polydat_node(category = Arithmetic)]
+fn vec_distance(metric: &str, a: &[f32], b: &[f32]) -> f64 {
+    check_lens("vec_distance", a.len(), b.len());
+    let pairs = || a.iter().zip(b).map(|(x, y)| (f64::from(*x), f64::from(*y)));
+    match metric {
+        "EUCLIDEAN" => pairs().map(|(x, y)| (x - y) * (x - y)).sum(),
+        "COSINE" => {
+            let (dot, aa, bb) = pairs().fold((0.0, 0.0, 0.0), |(d, aa, bb), (x, y)| {
+                (d + x * y, aa + x * x, bb + y * y)
+            });
+            if aa == 0.0 || bb == 0.0 {
+                1.0
+            } else {
+                1.0 - dot / (aa.sqrt() * bb.sqrt())
+            }
+        }
+        "DOT_PRODUCT" => -pairs().map(|(x, y)| x * y).sum::<f64>(),
+        "MANHATTAN" => pairs().map(|(x, y)| (x - y).abs()).sum(),
+        other => panic!(
+            "vec_distance: unknown metric {other:?}; expected EUCLIDEAN, COSINE, DOT_PRODUCT or MANHATTAN"
+        ),
+    }
+}
+
 /// `vec_norm(a)` — scale an f32 vector to unit L2 magnitude.
 /// A zero vector passes through unchanged (there is no direction
 /// to normalize onto, and emitting NaNs would poison downstream
@@ -177,6 +218,41 @@ mod tests {
 
         let cos_self = eval2(&VecCosine::new(), a.clone(), a.clone()).as_f64();
         assert!((cos_self - 1.0).abs() < 1e-4, "self-cosine = {cos_self}");
+    }
+
+    fn distance(metric: &str, a: Vec<f32>, b: Vec<f32>) -> f64 {
+        let mut out = [Value::None];
+        VecDistance::new().eval(&[Value::Str(metric.into()), vecv(a), vecv(b)], &mut out);
+        out[0].as_f64()
+    }
+
+    /// Each metric in the ground-truth convention, smaller is closer,
+    /// on vectors whose distances are exact in binary.
+    #[test]
+    fn vec_distance_follows_the_ground_truth_convention() {
+        let (a, b) = (vec![1.0, 2.0, 0.0], vec![4.0, -2.0, 0.0]);
+        assert_eq!(distance("EUCLIDEAN", a.clone(), b.clone()), 25.0);
+        assert_eq!(distance("MANHATTAN", a.clone(), b.clone()), 7.0);
+        assert_eq!(
+            distance("DOT_PRODUCT", vec![1.0, 2.0], vec![3.0, 4.0]),
+            -11.0
+        );
+        assert_eq!(
+            distance("COSINE", vec![3.0, 4.0], vec![4.0, 3.0]),
+            1.0 - 24.0 / 25.0
+        );
+        assert_eq!(distance("COSINE", vec![0.0, 0.0], vec![4.0, 3.0]), 1.0);
+        // An f32 sift-scale distance is exact: integer coordinates.
+        assert_eq!(
+            distance("EUCLIDEAN", vec![0.0; 2], vec![200.0, 207.0]),
+            82849.0
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "unknown metric \"euclidean\"")]
+    fn vec_distance_refuses_an_unknown_metric() {
+        distance("euclidean", vec![1.0], vec![2.0]);
     }
 
     #[test]

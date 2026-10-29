@@ -1,8 +1,9 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Element and set operations over the integer vector carriers, and
-//! elementwise equality over every vector carrier.
+//! Element and set operations over the integer vector carriers,
+//! element access over the float carriers, and elementwise equality
+//! over every vector carrier.
 //!
 //! The float vector nodes ([`super::vector_math`]) compute over
 //! embeddings; these read integer vectors as *lists*: how many
@@ -54,6 +55,38 @@ fn vec_at_i32(v: &[i32], i: u64) -> i64 {
 #[polydat::polydat_node(category = Arithmetic)]
 fn vec_at_i64(v: &[i64], i: u64) -> i64 {
     v.get(i as usize).copied().unwrap_or(0)
+}
+
+/// `vec_len_f32(v)` — how many elements the vector holds.
+#[polydat::polydat_node(category = Arithmetic)]
+fn vec_len_f32(v: &[f32]) -> u64 {
+    v.len() as u64
+}
+
+/// `vec_len_f64(v)` — how many elements the vector holds.
+#[polydat::polydat_node(category = Arithmetic)]
+fn vec_len_f64(v: &[f64]) -> u64 {
+    v.len() as u64
+}
+
+/// `vec_at_f32(v, i)` — the element at `i`, widened to f64, or `0.0`
+/// past the end.
+///
+/// A float vector read as a list rather than an embedding: a row of
+/// stored distances, one per neighbor, where the question is what one
+/// entry holds. Widening f32 to f64 is exact, so two elements that are
+/// equal as stored compare equal through `f64_eq`. Out of range answers
+/// `0.0` like the integer forms; a caller that cares compares `i` with
+/// `vec_len_f32` first.
+#[polydat::polydat_node(category = Arithmetic)]
+fn vec_at_f32(v: &[f32], i: u64) -> f64 {
+    v.get(i as usize).copied().map_or(0.0, f64::from)
+}
+
+/// `vec_at_f64(v, i)` — the element at `i`, or `0.0` past the end.
+#[polydat::polydat_node(category = Arithmetic)]
+fn vec_at_f64(v: &[f64], i: u64) -> f64 {
+    v.get(i as usize).copied().unwrap_or(0.0)
 }
 
 /// `vec_max_i32(v)` — the largest element, or `0` for an empty list.

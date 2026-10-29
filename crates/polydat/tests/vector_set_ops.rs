@@ -183,6 +183,56 @@ fn the_recall_audit_quantities_are_functions_of_the_list() {
     }
 }
 
+// ── float element access ────────────────────────────────────────────
+
+/// A float vector read as a list: its length and one element, on every
+/// engine. The tie case is the reason the nodes exist — two stored f32
+/// distances that are equal stay equal through the exact widening to
+/// f64, so `f64_eq` over two `vec_at_f32` reads is the stored-tie test
+/// a ground-truth audit needs.
+#[test]
+fn a_float_vector_answers_its_length_and_elements() {
+    use polydat::ast::{SliceArc, Value};
+    let src = concat!(
+        "input cycle: u64\n",
+        "extern d: vec_f32\n",
+        "extern w: vec_f64\n",
+        "n := vec_len_f32(d)\n",
+        "second := vec_at_f32(d, 1)\n",
+        "third := vec_at_f32(d, 2)\n",
+        "past := vec_at_f32(d, 99)\n",
+        "tie := f64_eq(vec_at_f32(d, 2), vec_at_f32(d, 3))\n",
+        "no_tie := f64_eq(vec_at_f32(d, 1), vec_at_f32(d, 2))\n",
+        "wn := vec_len_f64(w)\n",
+        "wat := vec_at_f64(w, 1)\n",
+        "wpast := vec_at_f64(w, 2)\n",
+    );
+    // 0.1f32 is not 0.1f64: the read must widen the stored value, not
+    // round-trip it through decimal text.
+    let d = vec![1.0f32, 0.1, 84117.0, 84117.0];
+    for engine in vec_eq_engines() {
+        let asm = polydat::dsl::compile::compile_polydat_to_assembler(src)
+            .unwrap_or_else(|e| panic!("{e}\n{src}"));
+        let mut k = asm
+            .compile_with(engine)
+            .unwrap_or_else(|e| panic!("{engine}: {e}\n{src}"));
+        k.set_inputs(&[0]);
+        k.set_input("d", Value::VecF32(SliceArc::from_vec(d.clone())))
+            .unwrap_or_else(|e| panic!("{engine}: set d: {e}"));
+        k.set_input("w", Value::VecF64(SliceArc::from_vec(vec![0.5, 2.25])))
+            .unwrap_or_else(|e| panic!("{engine}: set w: {e}"));
+        assert_eq!(k.pull("n").as_u64(), 4, "{engine}");
+        assert_eq!(k.pull("third").as_f64(), 84117.0, "{engine}");
+        assert_eq!(k.pull("past").as_f64(), 0.0, "{engine}");
+        assert_eq!(k.pull("tie").as_u64(), 1, "{engine}");
+        assert_eq!(k.pull("no_tie").as_u64(), 0, "{engine}");
+        assert_eq!(k.pull("wn").as_u64(), 2, "{engine}");
+        assert_eq!(k.pull("wat").as_f64(), 2.25, "{engine}");
+        assert_eq!(k.pull("wpast").as_f64(), 0.0, "{engine}");
+        assert_eq!(k.pull("second").as_f64(), f64::from(0.1f32), "{engine}");
+    }
+}
+
 // ── vec_eq ──────────────────────────────────────────────────────────
 
 /// One engine of each kind: the interpreter, the closure tier, native,

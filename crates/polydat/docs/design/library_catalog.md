@@ -255,6 +255,24 @@ which distinguishes `vec_eq_i32` from `vec_set_eq_i32`. None of them has
 a native lowering: each runs its kit on the closure tier and from native
 code.
 
+`vec_len_f32(v)` / `vec_len_f64(v)` and `vec_at_f32(v, i)` /
+`vec_at_f64(v, i)` read a float vector as a list rather than an
+embedding, as `vec_len_i32` and `vec_at_i32` read an integer one. The
+element comes out as an `f64`; widening an f32 is exact, so two
+elements equal as stored compare equal through `f64_eq`, which is how a
+ground-truth audit tests two stored neighbor distances for a tie. Past
+the end the element is `0.0`, as the integer forms answer `0`.
+
+`vec_distance(metric, a, b)` recomputes a distance the way a dataset's
+ground truth stores it, smaller being closer: squared Euclidean for
+`EUCLIDEAN`, `1 − cos θ` for `COSINE`, `−a·b` for `DOT_PRODUCT`, and
+`Σ|aᵢ − bᵢ|` for `MANHATTAN`, accumulated in f64. `metric` is a name as
+`dataset_distance_function` returns it, and any other name fails naming
+it. Together with `vec_at_f32` over a stored distance row, it lets a
+host verify a ground-truth entry that differs from a reference only by
+how a tie at the depth boundary was broken: the entry is admissible
+when its recomputed distance equals the reference row's last distance.
+
 `metadata_ordinals_of(handle, value)` and
 `predicate_ordinals_of(handle, value)` (feature `vectordata`) return,
 as a `vec_i32` in ascending order, the base ordinals whose
