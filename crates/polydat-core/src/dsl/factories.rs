@@ -166,6 +166,15 @@ impl PolydatRuntime {
         crate::dsl::registry::by_category()
     }
 
+    /// The overloaded names, such as `vec_dot`, grouped by category in
+    /// display order: what a program calls beside [`Self::by_category`],
+    /// which lists only the registered forms, such as `vec_dot_f32`.
+    pub fn overloads_by_category(
+        &self,
+    ) -> Vec<(FuncCategory, Vec<&'static crate::dsl::registry::Overload>)> {
+        crate::dsl::registry::overloads_by_category()
+    }
+
     /// The `--lib` search paths.
     pub fn polydat_lib_paths(&self) -> &[PathBuf] {
         &self.polydat_lib_paths

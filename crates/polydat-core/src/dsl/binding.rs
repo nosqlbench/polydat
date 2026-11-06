@@ -189,8 +189,8 @@ pub(super) fn infer_expr_type(
             // wire arguments' types resolve it to.
             let f = match crate::dsl::registry::overload(&call.func) {
                 Some(overload) => {
-                    let params = crate::dsl::registry::lookup_call(&call.func)
-                        .map_or(&[][..], |sig| sig.params);
+                    let params =
+                        crate::dsl::registry::lookup(&call.func).map_or(&[][..], |sig| sig.params);
                     let wire_types: Vec<PortType> = call
                         .args
                         .iter()
@@ -416,7 +416,7 @@ impl Compiler {
                 // treating it as a build-time constant. An overloaded
                 // name's forms share their parameters, so its first
                 // form answers before the wire types are known.
-                let sig = registry::lookup_call(&call.func);
+                let sig = registry::lookup(&call.func);
 
                 // Build an iterator over the param slot-types.  We step
                 // through it once per argument, wire-position by wire-position

@@ -212,6 +212,20 @@ impl Overload {
         }
         best.func
     }
+
+    /// The signature of the first form, which a call to the name is
+    /// checked against before its wire types are known: every form
+    /// shares its parameters. Its `name` is the form's, such as
+    /// `vec_dot_f32`, not the overload's. `None` only when the first
+    /// form names no registered function.
+    pub fn signature(&self) -> Option<&'static FuncSig> {
+        lookup_registered(self.forms[0].func)
+    }
+
+    /// The category the name is listed under: its first form's.
+    pub fn category(&self) -> Option<FuncCategory> {
+        self.signature().map(|sig| sig.category)
+    }
 }
 
 /// Every overloaded name linked into the registry.
@@ -232,10 +246,36 @@ pub fn resolve_call<'a>(name: &'a str, wire_types: &[crate::ast::PortType]) -> &
 }
 
 /// The signature a call to `name` is checked against before its wire
-/// types are known: the registered function `name`, or the first form
-/// of the overload `name`, whose parameters every form shares.
+/// types are known; the same as [`lookup`].
+#[deprecated(
+    since = "0.8.1",
+    note = "`lookup` answers for overloaded names; use it"
+)]
 pub fn lookup_call(name: &str) -> Option<&'static FuncSig> {
-    lookup(name).or_else(|| overload(name).and_then(|o| lookup(o.forms[0].func)))
+    lookup(name)
+}
+
+/// Every overloaded name, grouped by its [`Overload::category`] in
+/// display order and sorted by name within a category: the names
+/// [`by_category`] leaves out, since it lists registered functions.
+/// A listing of what a program can call shows both.
+pub fn overloads_by_category() -> Vec<(FuncCategory, Vec<&'static Overload>)> {
+    let mut groups: std::collections::HashMap<FuncCategory, Vec<&'static Overload>> =
+        std::collections::HashMap::new();
+    for o in overloads() {
+        if let Some(category) = o.category() {
+            groups.entry(category).or_default().push(o);
+        }
+    }
+    FuncCategory::display_order()
+        .iter()
+        .filter_map(|cat| {
+            groups.remove(cat).map(|mut names| {
+                names.sort_unstable_by_key(|o| o.name);
+                (*cat, names)
+            })
+        })
+        .collect()
 }
 
 /// Register a node module's signatures and builder with the Polydat runtime.
@@ -845,10 +885,23 @@ pub fn suggest_function(name: &str) -> Option<&'static str> {
     best.map(|(name, _)| name)
 }
 
-/// Find a registered function by name: the signature of the factory
-/// that builds it. Every factory is `'static`, so its signatures are
-/// too, and no allocation is needed.
+/// The signature of what a program calls by `name`: the registered
+/// function `name`, or, for an [`Overload`] such as `vec_dot`, its
+/// first form's ([`Overload::signature`]), whose parameters every form
+/// shares. `None` means no call to `name` can build. For an overload
+/// the signature's `name` is the form's, such as `vec_dot_f32`;
+/// [`resolve_call`] names the form a call with given wire types builds,
+/// and [`lookup_registered`] answers only for registered functions.
+/// Every factory is `'static`, so its signatures are too, and no
+/// allocation is needed.
 pub fn lookup(name: &str) -> Option<&'static FuncSig> {
+    lookup_registered(name).or_else(|| overload(name).and_then(Overload::signature))
+}
+
+/// Find a registered function by its exact name: the signature of the
+/// factory that builds it. Unlike [`lookup`], it answers `None` for an
+/// overloaded name, which no factory builds itself.
+pub fn lookup_registered(name: &str) -> Option<&'static FuncSig> {
     factories().find_map(|factory| factory.signatures().iter().find(|sig| sig.name == name))
 }
 
@@ -898,6 +951,21 @@ mod tests {
                 sig.name
             );
         }
+    }
+
+    #[test]
+    fn lookup_answers_for_an_overloaded_name_and_lookup_registered_does_not() {
+        for o in overloads() {
+            let sig = lookup(o.name).unwrap_or_else(|| panic!("{} is not callable", o.name));
+            assert_eq!(sig.name, o.forms[0].func, "{}", o.name);
+            assert!(lookup_registered(o.name).is_none(), "{}", o.name);
+        }
+    }
+
+    #[test]
+    fn overloads_by_category_lists_every_overload_once() {
+        let listed: usize = overloads_by_category().iter().map(|(_, o)| o.len()).sum();
+        assert_eq!(listed, overloads().count());
     }
 
     #[test]

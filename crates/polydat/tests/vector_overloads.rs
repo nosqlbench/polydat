@@ -76,14 +76,14 @@ fn each_vector_name_builds_the_form_its_operands_match() {
 fn every_overload_form_is_the_node_it_declares() {
     let mut seen = 0;
     for overload in registry::overloads() {
-        let first = registry::lookup(overload.forms[0].func).unwrap_or_else(|| {
+        let first = registry::lookup_registered(overload.forms[0].func).unwrap_or_else(|| {
             panic!(
                 "{}: {} is not registered",
                 overload.name, overload.forms[0].func
             )
         });
         for form in overload.forms {
-            let sig = registry::lookup(form.func)
+            let sig = registry::lookup_registered(form.func)
                 .unwrap_or_else(|| panic!("{}: {} is not registered", overload.name, form.func));
             let params = |s: &registry::FuncSig| {
                 s.params
@@ -116,7 +116,7 @@ fn every_overload_form_is_the_node_it_declares() {
                 overload.name, form.func
             );
             assert!(
-                registry::lookup(overload.name).is_none(),
+                registry::lookup_registered(overload.name).is_none(),
                 "{} is both an overload and a registered function",
                 overload.name
             );
@@ -240,4 +240,37 @@ fn the_vector_names_read_f32_and_widened_operands_as_before() {
             assert_eq!(k.pull("ints").as_f64(), 11.0, "{engine}");
         }
     }
+}
+
+/// A host asks `lookup` whether a program can call a name, so it
+/// answers for every overloaded name, with the first form's signature,
+/// while `lookup_registered` answers only for the forms; and the
+/// overloaded names are listed beside the registered ones, under their
+/// first form's category.
+#[test]
+fn a_host_finds_and_lists_the_overloaded_names_as_programs_call_them() {
+    for name in [
+        "vec_add",
+        "vec_scale",
+        "vec_norm",
+        "vec_dot",
+        "vec_l2",
+        "vec_cosine",
+        "vec_distance",
+    ] {
+        let sig = registry::lookup(name).unwrap_or_else(|| panic!("{name} is not callable"));
+        assert_eq!(sig.name, format!("{name}_f32"));
+        assert!(registry::lookup_registered(name).is_none(), "{name}");
+        let listed = polydat::dsl::factories::PolydatRuntime::new()
+            .overloads_by_category()
+            .into_iter()
+            .find(|(_, names)| names.iter().any(|o| o.name == name))
+            .unwrap_or_else(|| panic!("{name} is not listed"));
+        assert_eq!(listed.0, sig.category, "{name}");
+    }
+    let listed: usize = registry::overloads_by_category()
+        .iter()
+        .map(|(_, names)| names.len())
+        .sum();
+    assert_eq!(listed, registry::overloads().count());
 }

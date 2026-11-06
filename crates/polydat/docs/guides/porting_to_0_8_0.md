@@ -71,7 +71,8 @@ Nothing that compiled under 0.7.0 stops compiling.
 | Change | Who notices | What to do |
 |---|---|---|
 | A call to an unsuffixed vector name builds a suffixed node, so the node's `meta().name`, a panic, and an explanation name `vec_dot_f32` where 0.7.0 named `vec_dot` | a host or test matching on a node name or a panic message, such as `vec_dot: operand lengths differ (1 vs 2)` | match the suffixed name; the program text is unchanged |
-| `registry::registry()` lists `vec_dot_f32` and `vec_dot_f64` where it listed `vec_dot`, and likewise for `vec_add`, `vec_scale`, `vec_norm`, `vec_l2` and `vec_cosine`; the unsuffixed names are listed by `registry::overloads()` | a host that lists or looks up the library by name | look an unsuffixed name up with `registry::lookup_call`, which answers for an overloaded name with its first form's signature, or resolve it for given wire types with `registry::resolve_call` |
+| `registry::registry()` and `by_category()` list `vec_dot_f32` and `vec_dot_f64` where they listed `vec_dot`, and likewise for `vec_add`, `vec_scale`, `vec_norm`, `vec_l2` and `vec_cosine`; the unsuffixed names are listed by `registry::overloads()` | a host that lists the library | list the names a program calls with `overloads_by_category()` (0.8.1) beside `by_category()`, or `overloads()` |
+| Under 0.8.0 only, `registry::lookup` answers `None` for an unsuffixed vector name, so a host that asks it whether a name is callable treats `vec_norm(v)` as a reference to a wire named `vec_norm`. 0.8.1 corrects this: `lookup` answers for an overloaded name with its first form's signature, as it answered for the name under 0.7.0, and `lookup_registered` answers only for registered functions | a host that uses `lookup` to tell a call from a wire reference, on 0.8.0 | update to 0.8.1. A host that switched to `lookup_call` can switch back to `lookup`; `lookup_call` is deprecated in 0.8.1 |
 | The README install lines name the current release | nobody's program; 0.7.0's lines named 0.6, and `readme_install_lines_name_the_current_release` failed on it | none |
 
 ## Part 3: new capabilities
@@ -83,8 +84,9 @@ Nothing that compiled under 0.7.0 stops compiling.
   most of its operands' types, position by position, the earliest among
   equals, and operands no form agrees with build the first form, which
   the adapters reach. `registry::overloads()`, `overload(name)`,
-  `resolve_call(name, wire_types)` and `lookup_call(name)` answer for
-  them, and the node reference lists them under "Overloaded names".
+  `resolve_call(name, wire_types)`, `lookup(name)` (0.8.1) and
+  `overloads_by_category()` (0.8.1) answer for them, and the node
+  reference lists them under "Overloaded names".
 - **f64 vector operations.** `vec_add_f64`, `vec_scale_f64`,
   `vec_norm_f64`, `vec_dot_f64`, `vec_l2_f64`, `vec_cosine_f64` and
   `vec_distance_f64`. Under 0.7.0 an f64 vector passed to `vec_dot` was

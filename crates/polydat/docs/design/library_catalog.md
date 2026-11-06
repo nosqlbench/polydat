@@ -281,6 +281,16 @@ producers return a vector of their form's width and the distances an
 `vec_l2` and `vec_cosine` have native lowerings; the f64 forms and both
 `vec_distance` forms run their kits.
 
+A host asks about the names as a program calls them.
+`registry::lookup("vec_dot")` answers with the first form's signature,
+whose parameters every form shares, and `registry::resolve_call` names
+the form a call with given operand types builds.
+`registry::lookup_registered` answers only for registered functions, so
+it answers `None` for an overloaded name. `by_category()` lists the
+registered forms, and `overloads_by_category()` lists the overloaded
+names under their first form's category, so a listing of what a
+program can call shows both.
+
 The first three answer the textbook quantity: `vec_dot` is `a·b`,
 `vec_l2` is `|a − b|`, and `vec_cosine` is the similarity `cos θ`, `0.0`
 when either operand has zero length. `vec_distance(metric, a, b)`
