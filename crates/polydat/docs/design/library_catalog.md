@@ -255,23 +255,47 @@ which distinguishes `vec_eq_i32` from `vec_set_eq_i32`. None of them has
 a native lowering: each runs its kit on the closure tier and from native
 code.
 
-`vec_len_f32(v)` / `vec_len_f64(v)` and `vec_at_f32(v, i)` /
-`vec_at_f64(v, i)` read a float vector as a list rather than an
-embedding, as `vec_len_i32` and `vec_at_i32` read an integer one. The
-element comes out as an `f64`; widening an f32 is exact, so two
-elements equal as stored compare equal through `f64_eq`, which is how a
-ground-truth audit tests two stored neighbor distances for a tie. Past
-the end the element is `0.0`, as the integer forms answer `0`.
+`vec_len_<t>(v)` and `vec_at_<t>(v, i)` exist for every vector carrier,
+as `vec_eq_<t>` does. They read a vector as a list: how many elements,
+and what one holds. An integer element comes out as an `i64` and a
+float one as an `f64`, both exactly, so two float elements equal as
+stored compare equal through `f64_eq`, which is how a ground-truth
+audit tests two stored neighbor distances for a tie. Past the end the
+element is `0`, or `0.0` for a float carrier. `str_to_vec_f32(s)` puts
+a JSON array of numbers onto a `vec_f32` wire, as `str_to_vec_f64`,
+`str_to_vec_i32` and `str_to_vec_i64` do for theirs; each element is
+the f32 nearest the f64 its text parses as.
 
-`vec_distance(metric, a, b)` recomputes a distance the way a dataset's
-ground truth stores it, smaller being closer: squared Euclidean for
-`EUCLIDEAN`, `1 − cos θ` for `COSINE`, `−a·b` for `DOT_PRODUCT`, and
-`Σ|aᵢ − bᵢ|` for `MANHATTAN`, accumulated in f64. `metric` is a name as
-`dataset_distance_function` returns it, and any other name fails naming
-it. Together with `vec_at_f32` over a stored distance row, it lets a
-host verify a ground-truth entry that differs from a reference only by
-how a tie at the depth boundary was broken: the entry is admissible
-when its recomputed distance equals the reference row's last distance.
+The vector operations `vec_add`, `vec_scale`, `vec_norm`, `vec_dot`,
+`vec_l2`, `vec_cosine` and `vec_distance` are each an f32 and an f64
+form, `vec_add_f32` and `vec_add_f64` and so on, and the unsuffixed
+name is an overload of the two (`polydat::dsl::registry::Overload`). A
+call builds the form agreeing with the most of its operands' types, so
+an f64 vector is never narrowed to f32 on the way in: `vec_scale(v, 2)`
+over a `vec_f64` builds `vec_scale_f64` and widens the integer factor.
+Operands agreeing with neither form reach the f32 form through the
+assembler's adapters, as they reached the name before it had an f64
+form: `vec_dot` over two `vec_i32` lists widens them to f32. The
+producers return a vector of their form's width and the distances an
+`f64`. The f32 forms of `vec_add`, `vec_scale`, `vec_norm`, `vec_dot`,
+`vec_l2` and `vec_cosine` have native lowerings; the f64 forms and both
+`vec_distance` forms run their kits.
+
+The first three answer the textbook quantity: `vec_dot` is `a·b`,
+`vec_l2` is `|a − b|`, and `vec_cosine` is the similarity `cos θ`, `0.0`
+when either operand has zero length. `vec_distance(metric, a, b)`
+answers the quantity a dataset's ground truth stores, smaller being
+closer: squared Euclidean for `EUCLIDEAN`, `1 − cos θ` for `COSINE`
+(`1.0` for a zero-length operand), `−a·b` for `DOT_PRODUCT`, and
+`Σ|aᵢ − bᵢ|` for `MANHATTAN`, accumulated in f64. The two families
+differ on purpose, so a stored distance is compared with
+`vec_distance`, never with `vec_l2` or `vec_cosine`. `metric` is a name
+as `dataset_distance_function` returns it, and any other name fails
+naming it. Together with `vec_at_f32` over a stored distance row,
+`vec_distance` lets a host verify a ground-truth entry that differs from
+a reference only by how a tie at the depth boundary was broken: the
+entry is admissible when its recomputed distance equals the reference
+row's last distance.
 
 `metadata_ordinals_of(handle, value)` and
 `predicate_ordinals_of(handle, value)` (feature `vectordata`) return,
@@ -317,6 +341,13 @@ in one of two forms, both linked at build time through `inventory`:
 
 Either way the factory's `build` receives the node's name, wires, wire types, and
 constant arguments, and first of all its **build context**.
+
+A factory's signatures are built with `FuncSig::new(name, category, params)` and
+`ParamSpec::new(name, slot_type)` (or `ParamSpec::wire(name)`), refined by their
+`const` `with_` methods, so they can live in a `static`. Both structs are
+`#[non_exhaustive]`: a field added in a later release arrives with its default and
+breaks no host. A module that gives one name several typed forms submits an
+`Overload` naming them, as the vector operations do.
 
 #### Build context
 

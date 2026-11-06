@@ -202,21 +202,21 @@ fn the_vector_and_register_groups_have_named_lowerings() {
     use polydat::library::{register, vector_math};
     let vec2 = [PT::VecF32, PT::VecF32];
     assert_eq!(
-        classify_node_typed(&vector_math::VecAdd::new(), &vec2),
+        classify_node_typed(&vector_math::VecAddF32::new(), &vec2),
         JitOp::VecProduce {
             kind: VecProducer::Add,
             scratch_base: 0
         }
     );
     assert_eq!(
-        classify_node_typed(&vector_math::VecScale::new(), &[PT::VecF32, PT::F64]),
+        classify_node_typed(&vector_math::VecScaleF32::new(), &[PT::VecF32, PT::F64]),
         JitOp::VecProduce {
             kind: VecProducer::Scale,
             scratch_base: 0
         }
     );
     assert_eq!(
-        classify_node_typed(&vector_math::VecNorm::new(), &[PT::VecF32]),
+        classify_node_typed(&vector_math::VecNormF32::new(), &[PT::VecF32]),
         JitOp::VecProduce {
             kind: VecProducer::Norm,
             scratch_base: 0
@@ -244,15 +244,15 @@ fn the_vector_and_register_groups_have_named_lowerings() {
         }
     );
     assert_eq!(
-        classify_node_typed(&vector_math::VecDot::new(), &vec2),
+        classify_node_typed(&vector_math::VecDotF32::new(), &vec2),
         JitOp::VecReduce(VecReducer::Dot)
     );
     assert_eq!(
-        classify_node_typed(&vector_math::VecL2::new(), &vec2),
+        classify_node_typed(&vector_math::VecL2F32::new(), &vec2),
         JitOp::VecReduce(VecReducer::L2)
     );
     assert_eq!(
-        classify_node_typed(&vector_math::VecCosine::new(), &vec2),
+        classify_node_typed(&vector_math::VecCosineF32::new(), &vec2),
         JitOp::VecReduce(VecReducer::Cosine)
     );
     assert_eq!(

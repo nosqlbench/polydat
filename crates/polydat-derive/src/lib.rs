@@ -2318,13 +2318,16 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
                     .and_then(program_literal)
                     .unwrap_or_default(),
             };
+            // `ParamSpec` is `#[non_exhaustive]`, so the spec starts from
+            // its constructor and each field the signature decides is
+            // set on it.
             Some(quote! {
-                polydat::dsl::registry::ParamSpec {
-                    name: #name_str,
-                    slot_type: #slot_type,
-                    required: #required,
-                    example: #example,
-                    constraint: #constraint,
+                {
+                    let mut spec = polydat::dsl::registry::ParamSpec::new(#name_str, #slot_type);
+                    spec.required = #required;
+                    spec.example = #example;
+                    spec.constraint = #constraint;
+                    spec
                 }
             })
         })
@@ -4769,23 +4772,29 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
         // `consts` slice, falling back to per-arg
         // `#[poly_default(...)]` values if the slice is short.
         const _: () = {
-            static SIGS: &[polydat::dsl::registry::FuncSig] = &[
-                polydat::dsl::registry::FuncSig {
-                    name: #func_name_str,
-                    category: polydat::dsl::registry::FuncCategory::#category,
-                    outputs: #output_count_lit,
-                    description: #description_lit,
-                    help: #help_lit,
-                    identity: #identity_field,
-                    variadic_ctor: #variadic_ctor_field,
-                    params: &[ #( #param_specs ),* ],
-                    arity: #arity_field,
-                    commutativity: #commutativity_field,
-                    default_resolver: #default_resolver_field,
-                    output_type: #output_type_tokens,
-                    output_port: #output_port_field,
-                },
-            ];
+            // `FuncSig` is `#[non_exhaustive]`: the signature starts
+            // from its constructor and sets each field this node
+            // decides, commutativity through its setter because the
+            // value it replaces cannot be dropped in a `const`.
+            static PARAMS: &[polydat::dsl::registry::ParamSpec] = &[ #( #param_specs ),* ];
+            static SIGS: &[polydat::dsl::registry::FuncSig] = &[{
+                let mut sig = polydat::dsl::registry::FuncSig::new(
+                    #func_name_str,
+                    polydat::dsl::registry::FuncCategory::#category,
+                    PARAMS,
+                )
+                .with_commutativity(#commutativity_field);
+                sig.outputs = #output_count_lit;
+                sig.description = #description_lit;
+                sig.help = #help_lit;
+                sig.identity = #identity_field;
+                sig.variadic_ctor = #variadic_ctor_field;
+                sig.arity = #arity_field;
+                sig.default_resolver = #default_resolver_field;
+                sig.output_type = #output_type_tokens;
+                sig.output_port = #output_port_field;
+                sig
+            }];
 
             fn signatures() -> &'static [polydat::dsl::registry::FuncSig] { SIGS }
 

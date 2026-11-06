@@ -381,10 +381,10 @@ shape the named lowering does not take (a concatenation over a mixed
 wire) takes the slot call.
 
 The vector and register groups have named lowerings on the same
-ownership. A vector producer (`vec_add`, `vec_scale`, `vec_norm`,
+ownership. A vector producer (`vec_add_f32`, `vec_scale_f32`, `vec_norm_f32`,
 `hash_vec`, `xxhash3_vec`, `reg_to_vec_f32`) owns one `F32` entry and
 its helper writes the result there and publishes the pair; a vector
-reduction (`vec_dot`, `vec_l2`, `vec_cosine`, `lid_mle`) returns its
+reduction (`vec_dot_f32`, `vec_l2_f32`, `vec_cosine_f32`, `lid_mle`) returns its
 `f64` bits; a register lane read (`reg_lane_f32`, `reg_lane_i16`,
 `reg_lane_i64`) returns the lane as the word its port stores, and a
 register producer whose body checks a bound or does what Cranelift has

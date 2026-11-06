@@ -184,8 +184,28 @@ pub(super) fn infer_expr_type(
             // only the fallback for hand registrations without one
             // — it rotted silently as f64-returning functions were
             // added (vec_dot et al. inferred as U64, lowering
-            // `vec_dot(..) * x` to u64_mul and failing resolve).
-            let f = call.func.as_str();
+            // `vec_dot(..) * x` to u64_mul and failing resolve). An
+            // overloaded name answers for the form its arguments'
+            // wire arguments' types resolve it to.
+            let f = match crate::dsl::registry::overload(&call.func) {
+                Some(overload) => {
+                    let params = crate::dsl::registry::lookup_call(&call.func)
+                        .map_or(&[][..], |sig| sig.params);
+                    let wire_types: Vec<PortType> = call
+                        .args
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, _)| params.get(*i).is_none_or(|p| p.slot_type.is_wire()))
+                        .map(|(_, arg)| match arg {
+                            Arg::Positional(e) | Arg::Named(_, e) => {
+                                infer_expr_type(e, asm, input_names)
+                            }
+                        })
+                        .collect();
+                    overload.resolve(&wire_types)
+                }
+                None => call.func.as_str(),
+            };
             if let Some(port) = crate::dsl::registry::lookup(f).and_then(|sig| sig.output_port) {
                 return port;
             }
@@ -393,8 +413,10 @@ impl Compiler {
                 // arg positions are wire slots vs const slots.  When a
                 // literal appears in a wire slot we promote it to an
                 // anonymous const node and wire from it instead of
-                // treating it as a build-time constant.
-                let sig = registry::lookup(&call.func);
+                // treating it as a build-time constant. An overloaded
+                // name's forms share their parameters, so its first
+                // form answers before the wire types are known.
+                let sig = registry::lookup_call(&call.func);
 
                 // Build an iterator over the param slot-types.  We step
                 // through it once per argument, wire-position by wire-position

@@ -179,7 +179,9 @@ impl BuildContext {
 /// list `func` ([`registry::factories`]): the parameters' declared
 /// constraints are checked, then the factory's
 /// [`validate`](crate::dsl::factories::NodeFactory::validate), then its
-/// [`build`](crate::dsl::factories::NodeFactory::build).
+/// [`build`](crate::dsl::factories::NodeFactory::build). An overloaded
+/// `func` builds the form `wire_types` resolve it to
+/// ([`registry::resolve_call`]).
 pub fn build_node(
     ctx: &BuildContext,
     func: &str,
@@ -187,6 +189,7 @@ pub fn build_node(
     wire_types: &[crate::ast::PortType],
     consts: &[ConstArg],
 ) -> Result<Box<dyn PolydatNode>, String> {
+    let func = registry::resolve_call(func, wire_types);
     for factory in registry::factories() {
         // The signatures say which factory owns `func`; validation runs
         // before construction, so a constructor never sees a constant

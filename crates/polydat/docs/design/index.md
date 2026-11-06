@@ -4,7 +4,7 @@
 * [The Composition Substrate](composition_substrate.md) - The three pillars of free graph composition (context synthesis, type safety, state layering), their S, T, and L axioms, and the boundary handlers between them.
 * [Comprehension Forms](comprehension_forms.md) - The comprehension algebra: constructors, closure and validity axioms, boundedness, algebraic equivalences, the operator IR, and dispense semantics.
 * [Cross-Fiber Cell Invalidation](cross_fiber_invalidation.md) - The SharedCell publish and consume protocol: revisions, intent bits, memory ordering, and happens-before across fibers on all four engines.
-* [Cursor Partitions](cursor_partitions.md) - Partition values, the partition-spec language, resolution and rounding, ordering, metadata wires, and cursor narrowing with over.
+* [Cursor Partitions](cursor_partitions.md) - Partition values, the partition-spec language, resolution and rounding, ordering, metadata wires, cursor narrowing with over, and the source factories that hand a cursor's ordinals to fibers.
 * [Execution Engines](engines.md) - The P1, P2, P3, and pure-native engines, the rules every engine follows, provenance modes, the selector, slot representation, and engine equivalence.
 * [Evaluation Model](evaluation_model.md) - The program/state split, provenance-based invalidation, the two evaluation lifecycles, the const binding contract, input spaces, and external-write inputs.
 * [The Expression Engine](expression_engine.md) - Polydat as a host-embeddable evaluator: the expression surfaces, the E-axioms of the embedding contract, and the host and polydat obligations at the boundary.

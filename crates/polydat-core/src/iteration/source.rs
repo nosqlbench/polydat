@@ -1290,30 +1290,6 @@ impl ExtensionPolicy for OrPolicy {
     }
 }
 
-/// Back-compat alias for the original time-only policy.
-/// Constructs an [`UntilElapsedPolicy`] with delta = base.
-pub struct TimeElapsedPolicy {
-    inner: UntilElapsedPolicy,
-}
-
-impl TimeElapsedPolicy {
-    /// A policy extending in steps of `base` until `min_ms` have elapsed.
-    pub fn new(base: u64, min_ms: u64) -> Self {
-        Self {
-            inner: UntilElapsedPolicy {
-                min_ms,
-                delta: base,
-            },
-        }
-    }
-}
-
-impl ExtensionPolicy for TimeElapsedPolicy {
-    fn next_extension(&self, ctx: &ExtensionContext) -> Option<u64> {
-        self.inner.next_extension(ctx)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1743,13 +1719,6 @@ mod tests {
         // Both done → stop.
         assert_eq!(or.next_extension(&ctx_at(5000, 300, 100)), None);
     }
-
-    #[test]
-    fn time_elapsed_policy_compat_alias_still_works() {
-        let p = TimeElapsedPolicy::new(7, 1);
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        assert_eq!(p.next_extension(&ctx_at(20, 0, 0)), None);
-    }
 }
 
 #[cfg(test)]
@@ -1918,7 +1887,10 @@ mod rewind_tests {
             "rows",
             0,
             BASE,
-            Arc::new(TimeElapsedPolicy::new(BASE, 40)),
+            Arc::new(UntilElapsedPolicy {
+                min_ms: 40,
+                delta: BASE,
+            }),
         );
         fn round(reader: &mut dyn DataSource) -> u64 {
             let mut claimed = 0u64;

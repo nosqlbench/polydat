@@ -24,7 +24,9 @@
 //!
 //! Each operation exists for `vec_i32` and `vec_i64`, since the carrier
 //! is part of the wire's type and polydat does not silently widen one
-//! to the other. An index or a value that is out of range answers
+//! to the other. `vec_len` and `vec_at` exist for every carrier, as
+//! `vec_eq` does: the integer elements come out as `i64` and the float
+//! ones as `f64`, both exactly. An index or a value that is out of range answers
 //! rather than panicking, because a miss is an ordinary result here:
 //! `vec_position` returns the length when the value is absent, which is
 //! "past the end" and the same convention `vec_len` bounds.
@@ -87,6 +89,43 @@ fn vec_at_f32(v: &[f32], i: u64) -> f64 {
 #[polydat::polydat_node(category = Arithmetic)]
 fn vec_at_f64(v: &[f64], i: u64) -> f64 {
     v.get(i as usize).copied().unwrap_or(0.0)
+}
+
+/// `vec_len_f16(v)` — how many elements the vector holds.
+#[polydat::polydat_node(category = Arithmetic)]
+fn vec_len_f16(v: &[polydat::half::f16]) -> u64 {
+    v.len() as u64
+}
+
+/// `vec_at_f16(v, i)` — the element at `i`, widened to f64, or `0.0`
+/// past the end. Widening f16 to f64 is exact, as it is from f32.
+#[polydat::polydat_node(category = Arithmetic)]
+fn vec_at_f16(v: &[polydat::half::f16], i: u64) -> f64 {
+    v.get(i as usize).copied().map_or(0.0, f64::from)
+}
+
+/// `vec_len_i8(v)` — how many elements the list holds.
+#[polydat::polydat_node(category = Arithmetic)]
+fn vec_len_i8(v: &[i8]) -> u64 {
+    v.len() as u64
+}
+
+/// `vec_at_i8(v, i)` — the element at `i`, or `0` past the end.
+#[polydat::polydat_node(category = Arithmetic)]
+fn vec_at_i8(v: &[i8], i: u64) -> i64 {
+    v.get(i as usize).copied().map_or(0, i64::from)
+}
+
+/// `vec_len_i16(v)` — how many elements the list holds.
+#[polydat::polydat_node(category = Arithmetic)]
+fn vec_len_i16(v: &[i16]) -> u64 {
+    v.len() as u64
+}
+
+/// `vec_at_i16(v, i)` — the element at `i`, or `0` past the end.
+#[polydat::polydat_node(category = Arithmetic)]
+fn vec_at_i16(v: &[i16], i: u64) -> i64 {
+    v.get(i as usize).copied().map_or(0, i64::from)
 }
 
 /// `vec_max_i32(v)` — the largest element, or `0` for an empty list.
@@ -315,16 +354,41 @@ fn str_to_vec_i64(s: &str) -> Vec<i64> {
 /// anything that is not a JSON array of numbers.
 #[polydat::polydat_node(category = Conversions)]
 fn str_to_vec_f64(s: &str) -> Vec<f64> {
+    parse_float_array("str_to_vec_f64", s)
+}
+
+/// `str_to_vec_f32(s)` — a JSON array of numbers as a `vec_f32` wire,
+/// the carrier of embeddings and of stored neighbor distances. Each
+/// element is the f32 nearest the f64 its text parses as. Fails by
+/// name on anything that is not a JSON array of numbers, and on a
+/// number too large for an f32, rather than storing an infinity.
+#[polydat::polydat_node(category = Conversions)]
+fn str_to_vec_f32(s: &str) -> Vec<f32> {
+    parse_float_array("str_to_vec_f32", s)
+        .into_iter()
+        .map(|x| {
+            let narrowed = x as f32;
+            if narrowed.is_infinite() {
+                panic!("str_to_vec_f32: element {x:?} is outside the f32 range");
+            }
+            narrowed
+        })
+        .collect()
+}
+
+/// The shared parse of the float forms: a JSON array of numbers, or a
+/// failure naming the node, the text, and what was wrong with it.
+fn parse_float_array(node: &str, s: &str) -> Vec<f64> {
     let raw = s.trim();
     let parsed: serde_json::Value = serde_json::from_str(raw)
-        .unwrap_or_else(|e| panic!("str_to_vec_f64: cannot parse {raw:?} as a JSON array: {e}"));
+        .unwrap_or_else(|e| panic!("{node}: cannot parse {raw:?} as a JSON array: {e}"));
     let arr = parsed
         .as_array()
-        .unwrap_or_else(|| panic!("str_to_vec_f64: parsed JSON is not an array: {raw:?}"));
+        .unwrap_or_else(|| panic!("{node}: parsed JSON is not an array: {raw:?}"));
     arr.iter()
         .map(|j| {
             j.as_f64()
-                .unwrap_or_else(|| panic!("str_to_vec_f64: element {j} is not a number in {raw:?}"))
+                .unwrap_or_else(|| panic!("{node}: element {j} is not a number in {raw:?}"))
         })
         .collect()
 }

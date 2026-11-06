@@ -233,6 +233,71 @@ fn a_float_vector_answers_its_length_and_elements() {
     }
 }
 
+/// The narrow carriers answer their length and elements as the wide
+/// ones do, a negative integer staying negative and an f16 element
+/// widening exactly; and a parsed `vec_f32` holds the f32 nearest each
+/// number, so `0.1` reads back as `0.1f32`, not as `0.1`.
+#[test]
+fn the_narrow_carriers_and_a_parsed_f32_list_answer_their_elements() {
+    use polydat::ast::{SliceArc, Value};
+    let src = concat!(
+        "input cycle: u64\n",
+        "extern h: vec_f16\n",
+        "extern b: vec_i8\n",
+        "extern s: vec_i16\n",
+        "hn := vec_len_f16(h)\n",
+        "hat := vec_at_f16(h, 1)\n",
+        "hpast := vec_at_f16(h, 2)\n",
+        "bn := vec_len_i8(b)\n",
+        "bat := vec_at_i8(b, 1)\n",
+        "bpast := vec_at_i8(b, 3)\n",
+        "sn := vec_len_i16(s)\n",
+        "sat := vec_at_i16(s, 0)\n",
+        "f := str_to_vec_f32(\"[1.5, 0.1, 84117]\")\n",
+        "fn_ := vec_len_f32(f)\n",
+        "fat := vec_at_f32(f, 1)\n",
+        "flast := vec_at_f32(f, 2)\n",
+    );
+    let half = |x: f32| polydat::half::f16::from_f32(x);
+    for engine in vec_eq_engines() {
+        let asm = polydat::dsl::compile::compile_polydat_to_assembler(src)
+            .unwrap_or_else(|e| panic!("{e}\n{src}"));
+        let mut k = asm
+            .compile_with(engine)
+            .unwrap_or_else(|e| panic!("{engine}: {e}\n{src}"));
+        k.set_inputs(&[0]);
+        k.set_input(
+            "h",
+            Value::VecF16(SliceArc::from_vec(vec![half(1.0), half(-0.375)])),
+        )
+        .unwrap_or_else(|e| panic!("{engine}: set h: {e}"));
+        k.set_input("b", Value::VecI8(SliceArc::from_vec(vec![7, -128, 127])))
+            .unwrap_or_else(|e| panic!("{engine}: set b: {e}"));
+        k.set_input("s", Value::VecI16(SliceArc::from_vec(vec![-32768])))
+            .unwrap_or_else(|e| panic!("{engine}: set s: {e}"));
+        assert_eq!(k.pull("hn").as_u64(), 2, "{engine}");
+        assert_eq!(k.pull("hat").as_f64(), -0.375, "{engine}");
+        assert_eq!(k.pull("hpast").as_f64(), 0.0, "{engine}");
+        assert_eq!(k.pull("bn").as_u64(), 3, "{engine}");
+        assert_eq!(k.pull("bat").as_i64(), -128, "{engine}");
+        assert_eq!(k.pull("bpast").as_i64(), 0, "{engine}");
+        assert_eq!(k.pull("sn").as_u64(), 1, "{engine}");
+        assert_eq!(k.pull("sat").as_i64(), -32768, "{engine}");
+        assert_eq!(k.pull("fn_").as_u64(), 3, "{engine}");
+        assert_eq!(k.pull("fat").as_f64(), f64::from(0.1f32), "{engine}");
+        assert_eq!(k.pull("flast").as_f64(), 84117.0, "{engine}");
+    }
+}
+
+#[test]
+#[should_panic(expected = "str_to_vec_f32: element 1e300 is outside the f32 range")]
+fn a_number_too_large_for_f32_is_refused_by_name() {
+    run(
+        "input cycle: u64\nout := str_to_vec_f32(\"[1e300]\")",
+        &["out"],
+    );
+}
+
 // ── vec_eq ──────────────────────────────────────────────────────────
 
 /// One engine of each kind: the interpreter, the closure tier, native,

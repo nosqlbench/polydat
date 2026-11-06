@@ -793,11 +793,11 @@ impl JitOp {
 /// publishes the pair.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VecProducer {
-    /// `vec_add(a, b)` over two `vec_f32` wires.
+    /// `vec_add_f32(a, b)` over two `vec_f32` wires.
     Add,
-    /// `vec_scale(a, k)` over a `vec_f32` and an `f64` wire.
+    /// `vec_scale_f32(a, k)` over a `vec_f32` and an `f64` wire.
     Scale,
-    /// `vec_norm(a)` over a `vec_f32` wire.
+    /// `vec_norm_f32(a)` over a `vec_f32` wire.
     Norm,
     /// `hash_vec(seed, dim)`.
     HashVec,
@@ -811,11 +811,11 @@ pub enum VecProducer {
 /// bits of its `f64` result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VecReducer {
-    /// `vec_dot(a, b)`.
+    /// `vec_dot_f32(a, b)`.
     Dot,
-    /// `vec_l2(a, b)`.
+    /// `vec_l2_f32(a, b)`.
     L2,
-    /// `vec_cosine(a, b)`.
+    /// `vec_cosine_f32(a, b)`.
     Cosine,
     /// `lid_mle(distances, k)`.
     LidMle,
@@ -910,7 +910,7 @@ macro_rules! vec_producer {
 
 vec_producer!(jit_vec_add, |out, a_ptr, a_len, b_ptr, b_len| {
     let (a, b) = (vec_f32_of(a_ptr, a_len), vec_f32_of(b_ptr, b_len));
-    crate::numeric::vector::check_lens("vec_add", a.len(), b.len());
+    crate::numeric::vector::check_lens("vec_add_f32", a.len(), b.len());
     crate::numeric::vector::add_f32_into(a, b, out)
 });
 vec_producer!(jit_vec_scale, |out, a_ptr, a_len, k_bits, _z| {
@@ -947,17 +947,17 @@ macro_rules! vec_reducer {
 
 vec_reducer!(jit_vec_dot, |a_ptr, a_len, b_ptr, b_len| {
     let (a, b) = (vec_f32_of(a_ptr, a_len), vec_f32_of(b_ptr, b_len));
-    crate::numeric::vector::check_lens("vec_dot", a.len(), b.len());
+    crate::numeric::vector::check_lens("vec_dot_f32", a.len(), b.len());
     crate::numeric::vector::dot_f32(a, b) as f64
 });
 vec_reducer!(jit_vec_l2, |a_ptr, a_len, b_ptr, b_len| {
     let (a, b) = (vec_f32_of(a_ptr, a_len), vec_f32_of(b_ptr, b_len));
-    crate::numeric::vector::check_lens("vec_l2", a.len(), b.len());
+    crate::numeric::vector::check_lens("vec_l2_f32", a.len(), b.len());
     (crate::numeric::vector::l2sq_f32(a, b) as f64).sqrt()
 });
 vec_reducer!(jit_vec_cosine, |a_ptr, a_len, b_ptr, b_len| {
     let (a, b) = (vec_f32_of(a_ptr, a_len), vec_f32_of(b_ptr, b_len));
-    crate::numeric::vector::check_lens("vec_cosine", a.len(), b.len());
+    crate::numeric::vector::check_lens("vec_cosine_f32", a.len(), b.len());
     crate::numeric::vector::cosine_f32(a, b)
 });
 vec_reducer!(jit_lid_mle, |d_ptr, d_len, k_bits, _z| {
@@ -1272,15 +1272,17 @@ pub fn classify_node_typed(node: &dyn PolydatNode, wire_types: &[crate::ast::Por
         // the wires' slices and writes into the step's entry or
         // returns its scalar. Keyed on the exact wire types the body
         // is written for; any adapted shape takes the kit.
-        "vec_add" if wire_types == [PT::VecF32, PT::VecF32] => vec_produce(VecProducer::Add),
-        "vec_scale" if wire_types == [PT::VecF32, PT::F64] => vec_produce(VecProducer::Scale),
-        "vec_norm" if wire_types == [PT::VecF32] => vec_produce(VecProducer::Norm),
+        "vec_add_f32" if wire_types == [PT::VecF32, PT::VecF32] => vec_produce(VecProducer::Add),
+        "vec_scale_f32" if wire_types == [PT::VecF32, PT::F64] => vec_produce(VecProducer::Scale),
+        "vec_norm_f32" if wire_types == [PT::VecF32] => vec_produce(VecProducer::Norm),
         "hash_vec" if wire_types == [PT::U64, PT::U64] => vec_produce(VecProducer::HashVec),
         "xxhash3_vec" if wire_types == [PT::U64, PT::U64] => vec_produce(VecProducer::XxHash3Vec),
         "reg_to_vec_f32" if wire_types == [PT::RegF32x4] => vec_produce(VecProducer::RegToVec),
-        "vec_dot" if wire_types == [PT::VecF32, PT::VecF32] => JitOp::VecReduce(VecReducer::Dot),
-        "vec_l2" if wire_types == [PT::VecF32, PT::VecF32] => JitOp::VecReduce(VecReducer::L2),
-        "vec_cosine" if wire_types == [PT::VecF32, PT::VecF32] => {
+        "vec_dot_f32" if wire_types == [PT::VecF32, PT::VecF32] => {
+            JitOp::VecReduce(VecReducer::Dot)
+        }
+        "vec_l2_f32" if wire_types == [PT::VecF32, PT::VecF32] => JitOp::VecReduce(VecReducer::L2),
+        "vec_cosine_f32" if wire_types == [PT::VecF32, PT::VecF32] => {
             JitOp::VecReduce(VecReducer::Cosine)
         }
         "lid_mle" if wire_types == [PT::VecF32, PT::F64] => JitOp::VecReduce(VecReducer::LidMle),

@@ -70,6 +70,36 @@ fn section() -> String {
         }
         out.push('\n');
     }
+    out.push_str(&overloads_section());
+    out
+}
+
+/// The overloaded names: each with the node it builds for each set of
+/// operand types, the first of which it builds for any other.
+fn overloads_section() -> String {
+    let mut overloads: Vec<_> = polydat::dsl::registry::overloads().collect();
+    overloads.sort_unstable_by_key(|o| o.name);
+    let mut out = format!(
+        "### Overloaded names ({})\n\n\
+         Each of these names stands for one node per operand type. A call \
+         builds the node agreeing with the most of its operands' types, the \
+         first listed among equals, and the assembler's adapters reach the \
+         node's other ports.\n\n\
+         | Name | Builds |\n|---|---|\n",
+        overloads.len()
+    );
+    for o in overloads {
+        let forms: Vec<String> = o
+            .forms
+            .iter()
+            .map(|f| {
+                let types: Vec<&str> = f.wires.iter().map(|t| t.to_keyword()).collect();
+                format!("`{}` for ({})", f.func, types.join(", "))
+            })
+            .collect();
+        out.push_str(&format!("| `{}` | {} |\n", o.name, forms.join("; ")));
+    }
+    out.push('\n');
     out
 }
 

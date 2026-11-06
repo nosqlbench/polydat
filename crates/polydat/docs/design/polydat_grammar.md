@@ -1537,8 +1537,8 @@ T-Call:        func declared (p_1: T_1, …, p_k: T_k) -> (out: U)
                ⊢  func(args)  :  U
 
 T-Call-OverloadResolve:
-               func has signatures S_1 … S_m, exactly one S_i matching
-               the argument types
+               func an overload of forms S_1 … S_m; S_i the earliest
+               form agreeing with the most argument types by position
                ⊢  func(args)  :  U_i
 
 T-BinOp:       a : U64, b : U64   ⊢  a + b  ≡  u64_add(a, b)  :  U64
@@ -1552,7 +1552,13 @@ T-FieldAccess: source declared with type S, S projecting "field" : T
 The operator rules depend on overload resolution: `add` exists as both
 `u64_add` and `f64_add`, and the desugar picks by operand type
 (§[6.2](#sec-arithmetic)). A cross-type operator causes an adapter from
-the catalog to be inserted. A source's field projections come from the
+the catalog to be inserted. A call to an overloaded name resolves the
+same way, against the forms a node module registers for it
+(`dsl::registry::Overload`): `vec_dot` over two `vec_f64` wires builds
+`vec_dot_f64`, `vec_scale(v, 2)` over a `vec_f64` builds `vec_scale_f64`
+and widens the integer, and over operands no form agrees with,
+`vec_dot` builds its first form, `vec_dot_f32`, which the adapters then
+reach. A source's field projections come from the
 source binding's declared type, so the grammar does not enumerate them
 (§[11.2](#sec-cursors)).
 

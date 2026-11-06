@@ -175,7 +175,7 @@ pub(crate) fn validate_expr(
             // A module the program defines takes the call before the
             // registry does, as it does in the compiler, so a call to
             // one is not an unknown function.
-            if !modules.contains(&call.func) && registry::lookup(&call.func).is_none() {
+            if !modules.contains(&call.func) && registry::lookup_call(&call.func).is_none() {
                 let msg = format!("unknown function: '{}'", call.func);
                 let hint = if let Some(suggestion) = registry::suggest_function(&call.func) {
                     format!("did you mean '{suggestion}'?")

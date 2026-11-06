@@ -171,6 +171,8 @@ mod ui;
 mod v3_names;
 #[path = "variadic_lowering.rs"]
 mod variadic_lowering;
+#[path = "vector_overloads.rs"]
+mod vector_overloads;
 #[path = "vector_set_ops.rs"]
 mod vector_set_ops;
 #[path = "vectordata_fixture.rs"]

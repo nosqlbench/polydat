@@ -16,9 +16,7 @@ use polydat::compile::assembly::WireRef;
 use polydat::dsl::compile::{CompileOptions, compile_polydat_with_engine};
 use polydat::dsl::factories::{NodeFactory, PolydatRuntime};
 use polydat::dsl::factory::{BuildContext, ConstArg, build_node};
-use polydat::dsl::registry::{
-    Arity, FactoryRegistration, FuncCategory, FuncSig, OutputType, ParamSpec, lookup,
-};
+use polydat::dsl::registry::{FactoryRegistration, FuncCategory, FuncSig, ParamSpec, lookup};
 use polydat::{Engine, JitMode, Provenance};
 
 /// `counted_mod(x, m)`: `mod(x, m)`, built by the host. The factory
@@ -28,36 +26,16 @@ struct CountingFactory {
     built_for: Mutex<Vec<String>>,
 }
 
-static SIGS: &[FuncSig] = &[FuncSig {
-    name: "counted_mod",
-    category: FuncCategory::Arithmetic,
-    outputs: 1,
-    description: "mod, built by a host factory that records its builds",
-    help: "",
-    identity: None,
-    variadic_ctor: None,
-    params: &[
-        ParamSpec {
-            name: "x",
-            slot_type: SlotType::Wire,
-            required: true,
-            example: "cycle",
-            constraint: None,
-        },
-        ParamSpec {
-            name: "m",
-            slot_type: SlotType::ConstU64,
-            required: true,
-            example: "7",
-            constraint: None,
-        },
+static SIGS: &[FuncSig] = &[FuncSig::new(
+    "counted_mod",
+    FuncCategory::Arithmetic,
+    &[
+        ParamSpec::wire("x"),
+        ParamSpec::new("m", SlotType::ConstU64).with_example("7"),
     ],
-    arity: Arity::Fixed,
-    commutativity: polydat::ast::Commutativity::Positional,
-    default_resolver: None,
-    output_type: OutputType::Fixed,
-    output_port: Some(PortType::U64),
-}];
+)
+.with_description("mod, built by a host factory that records its builds")
+.with_output_port(PortType::U64)];
 
 impl NodeFactory for CountingFactory {
     fn signatures(&self) -> &[FuncSig] {

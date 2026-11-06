@@ -18,55 +18,116 @@
 //! truncating to the shorter operand would corrupt distance
 //! semantics ("never ignore silently").
 
+use polydat::ast::PortType;
+use polydat::dsl::registry::{Overload, OverloadForm};
 pub use polydat::numeric::vector::{
     add_f32, add_f32_into, check_lens, cosine_f32, dot_f32, dot_scalar, hash_vec_into, l2sq_f32,
     l2sq_scalar, lid_mle_of, norm_f32_into, scale_f32, scale_f32_into, xxhash3_vec_into,
 };
 
 // ── Library nodes ──────────────────────────────────────────────
+//
+// Each node over vector operands has an f32 and an f64 form, and its
+// unsuffixed name is an overload of the two
+// (`polydat::dsl::registry::Overload`): a call builds the form its
+// operands' types agree with, and operands agreeing with neither reach
+// the f32 form through the assembler's adapters, as the unsuffixed
+// name did before it had an f64 form.
 
-/// `vec_add(a, b)` — element-wise sum of two f32 vectors.
+/// `vec_add_f32(a, b)` — element-wise sum of two f32 vectors.
 /// Panics when the lengths differ.
 #[polydat::polydat_node(category = Arithmetic)]
-fn vec_add(a: &[f32], b: &[f32]) -> Vec<f32> {
-    check_lens("vec_add", a.len(), b.len());
+fn vec_add_f32(a: &[f32], b: &[f32]) -> Vec<f32> {
+    check_lens("vec_add_f32", a.len(), b.len());
     add_f32(a, b)
 }
 
-/// `vec_scale(a, k)` — multiply every element of an f32 vector by
+/// `vec_add_f64(a, b)` — element-wise sum of two f64 vectors.
+/// Panics when the lengths differ.
+#[polydat::polydat_node(category = Arithmetic)]
+fn vec_add_f64(a: &[f64], b: &[f64]) -> Vec<f64> {
+    check_lens("vec_add_f64", a.len(), b.len());
+    a.iter().zip(b).map(|(x, y)| x + y).collect()
+}
+
+/// `vec_scale_f32(a, k)` — multiply every element of an f32 vector by
 /// scalar `k` (applied at f32 precision).
 #[polydat::polydat_node(category = Arithmetic)]
-fn vec_scale(a: &[f32], k: f64) -> Vec<f32> {
+fn vec_scale_f32(a: &[f32], k: f64) -> Vec<f32> {
     scale_f32(a, k as f32)
 }
 
-/// `vec_dot(a, b)` — dot product of two f32 vectors, widened to
+/// `vec_scale_f64(a, k)` — multiply every element of an f64 vector by
+/// scalar `k`.
+#[polydat::polydat_node(category = Arithmetic)]
+fn vec_scale_f64(a: &[f64], k: f64) -> Vec<f64> {
+    a.iter().map(|x| x * k).collect()
+}
+
+// ── Distances ──────────────────────────────────────────────────
+
+/// `vec_dot_f32(a, b)` — dot product of two f32 vectors, widened to
 /// f64 on the output wire. Panics when the lengths differ.
 #[polydat::polydat_node(category = Arithmetic)]
-fn vec_dot(a: &[f32], b: &[f32]) -> f64 {
-    check_lens("vec_dot", a.len(), b.len());
+fn vec_dot_f32(a: &[f32], b: &[f32]) -> f64 {
+    check_lens("vec_dot_f32", a.len(), b.len());
     dot_f32(a, b) as f64
 }
 
-/// `vec_l2(a, b)` — Euclidean (L2) distance between two f32
+/// `vec_dot_f64(a, b)` — dot product of two f64 vectors. Panics when
+/// the lengths differ.
+#[polydat::polydat_node(category = Arithmetic)]
+fn vec_dot_f64(a: &[f64], b: &[f64]) -> f64 {
+    check_lens("vec_dot_f64", a.len(), b.len());
+    a.iter().zip(b).map(|(x, y)| x * y).sum()
+}
+
+/// `vec_l2_f32(a, b)` — Euclidean (L2) distance between two f32
 /// vectors. Panics when the lengths differ.
 #[polydat::polydat_node(category = Arithmetic)]
-fn vec_l2(a: &[f32], b: &[f32]) -> f64 {
-    check_lens("vec_l2", a.len(), b.len());
+fn vec_l2_f32(a: &[f32], b: &[f32]) -> f64 {
+    check_lens("vec_l2_f32", a.len(), b.len());
     (l2sq_f32(a, b) as f64).sqrt()
 }
 
-/// `vec_cosine(a, b)` — cosine similarity of two f32 vectors:
+/// `vec_l2_f64(a, b)` — Euclidean (L2) distance between two f64
+/// vectors. Panics when the lengths differ.
+#[polydat::polydat_node(category = Arithmetic)]
+fn vec_l2_f64(a: &[f64], b: &[f64]) -> f64 {
+    check_lens("vec_l2_f64", a.len(), b.len());
+    a.iter()
+        .zip(b)
+        .map(|(x, y)| (x - y) * (x - y))
+        .sum::<f64>()
+        .sqrt()
+}
+
+/// `vec_cosine_f32(a, b)` — cosine similarity of two f32 vectors:
 /// `dot(a,b) / (|a| * |b|)`. Returns 0.0 when either vector has
 /// zero magnitude (the conventional degenerate-case value: no
 /// direction, no similarity). Panics when the lengths differ.
 #[polydat::polydat_node(category = Arithmetic)]
-fn vec_cosine(a: &[f32], b: &[f32]) -> f64 {
-    check_lens("vec_cosine", a.len(), b.len());
+fn vec_cosine_f32(a: &[f32], b: &[f32]) -> f64 {
+    check_lens("vec_cosine_f32", a.len(), b.len());
     cosine_f32(a, b)
 }
 
-/// `vec_distance(metric, a, b)` — the distance between two f32
+/// `vec_cosine_f64(a, b)` — cosine similarity of two f64 vectors:
+/// `dot(a,b) / (|a| * |b|)`, and 0.0 when either vector has zero
+/// magnitude, as `vec_cosine_f32` answers. Panics when the lengths
+/// differ.
+#[polydat::polydat_node(category = Arithmetic)]
+fn vec_cosine_f64(a: &[f64], b: &[f64]) -> f64 {
+    check_lens("vec_cosine_f64", a.len(), b.len());
+    let (dot, aa, bb) = dot_and_squares(a, b);
+    if aa == 0.0 || bb == 0.0 {
+        0.0
+    } else {
+        dot / (aa.sqrt() * bb.sqrt())
+    }
+}
+
+/// `vec_distance_f32(metric, a, b)` — the distance between two f32
 /// vectors as a dataset's ground truth records it, accumulated in
 /// f64. Smaller is closer under every metric:
 ///
@@ -84,38 +145,100 @@ fn vec_cosine(a: &[f32], b: &[f32]) -> f64 {
 /// distance under a guessed metric would make every comparison
 /// against the stored one meaningless.
 #[polydat::polydat_node(category = Arithmetic)]
-fn vec_distance(metric: &str, a: &[f32], b: &[f32]) -> f64 {
-    check_lens("vec_distance", a.len(), b.len());
-    let pairs = || a.iter().zip(b).map(|(x, y)| (f64::from(*x), f64::from(*y)));
+fn vec_distance_f32(metric: &str, a: &[f32], b: &[f32]) -> f64 {
+    ground_truth_distance("vec_distance_f32", metric, a, b)
+}
+
+/// `vec_distance_f64(metric, a, b)` — the distance between two f64
+/// vectors as a dataset's ground truth records it, under the metrics
+/// and conventions of `vec_distance_f32`.
+#[polydat::polydat_node(category = Arithmetic)]
+fn vec_distance_f64(metric: &str, a: &[f64], b: &[f64]) -> f64 {
+    ground_truth_distance("vec_distance_f64", metric, a, b)
+}
+
+/// The distance `metric` puts between `a` and `b`, smaller being
+/// closer, accumulated in f64: the body of the `vec_distance` forms,
+/// which `node` names in a panic.
+fn ground_truth_distance<T: Copy + Into<f64>>(node: &str, metric: &str, a: &[T], b: &[T]) -> f64 {
+    check_lens(node, a.len(), b.len());
+    let pairs = || a.iter().zip(b).map(|(x, y)| ((*x).into(), (*y).into()));
     match metric {
-        "EUCLIDEAN" => pairs().map(|(x, y)| (x - y) * (x - y)).sum(),
+        "EUCLIDEAN" => pairs().map(|(x, y): (f64, f64)| (x - y) * (x - y)).sum(),
         "COSINE" => {
-            let (dot, aa, bb) = pairs().fold((0.0, 0.0, 0.0), |(d, aa, bb), (x, y)| {
-                (d + x * y, aa + x * x, bb + y * y)
-            });
+            let (dot, aa, bb) = dot_and_squares(a, b);
             if aa == 0.0 || bb == 0.0 {
                 1.0
             } else {
                 1.0 - dot / (aa.sqrt() * bb.sqrt())
             }
         }
-        "DOT_PRODUCT" => -pairs().map(|(x, y)| x * y).sum::<f64>(),
-        "MANHATTAN" => pairs().map(|(x, y)| (x - y).abs()).sum(),
+        "DOT_PRODUCT" => -pairs().map(|(x, y): (f64, f64)| x * y).sum::<f64>(),
+        "MANHATTAN" => pairs().map(|(x, y): (f64, f64)| (x - y).abs()).sum(),
         other => panic!(
-            "vec_distance: unknown metric {other:?}; expected EUCLIDEAN, COSINE, DOT_PRODUCT or MANHATTAN"
+            "{node}: unknown metric {other:?}; expected EUCLIDEAN, COSINE, DOT_PRODUCT or MANHATTAN"
         ),
     }
 }
 
-/// `vec_norm(a)` — scale an f32 vector to unit L2 magnitude.
+/// `(a·b, a·a, b·b)` accumulated in f64, for the cosine forms.
+fn dot_and_squares<T: Copy + Into<f64>>(a: &[T], b: &[T]) -> (f64, f64, f64) {
+    a.iter()
+        .zip(b)
+        .map(|(x, y)| ((*x).into(), (*y).into()))
+        .fold((0.0, 0.0, 0.0), |(d, aa, bb), (x, y): (f64, f64)| {
+            (d + x * y, aa + x * x, bb + y * y)
+        })
+}
+
+/// The overload `name` of an f32 form and an f64 form, each with the
+/// wire types it takes.
+macro_rules! float_overload {
+    ($name:literal: [$($w32:ident),*] => $f32:literal, [$($w64:ident),*] => $f64:literal) => {
+        polydat::inventory::submit! {
+            Overload {
+                name: $name,
+                forms: &[
+                    OverloadForm { wires: &[$(PortType::$w32),*], func: $f32 },
+                    OverloadForm { wires: &[$(PortType::$w64),*], func: $f64 },
+                ],
+            }
+        }
+    };
+}
+
+float_overload!("vec_add": [VecF32, VecF32] => "vec_add_f32", [VecF64, VecF64] => "vec_add_f64");
+float_overload!("vec_scale": [VecF32, F64] => "vec_scale_f32", [VecF64, F64] => "vec_scale_f64");
+float_overload!("vec_norm": [VecF32] => "vec_norm_f32", [VecF64] => "vec_norm_f64");
+float_overload!("vec_dot": [VecF32, VecF32] => "vec_dot_f32", [VecF64, VecF64] => "vec_dot_f64");
+float_overload!("vec_l2": [VecF32, VecF32] => "vec_l2_f32", [VecF64, VecF64] => "vec_l2_f64");
+float_overload!("vec_cosine": [VecF32, VecF32] => "vec_cosine_f32", [VecF64, VecF64] => "vec_cosine_f64");
+float_overload!(
+    "vec_distance": [Str, VecF32, VecF32] => "vec_distance_f32",
+    [Str, VecF64, VecF64] => "vec_distance_f64"
+);
+
+/// `vec_norm_f32(a)` — scale an f32 vector to unit L2 magnitude.
 /// A zero vector passes through unchanged (there is no direction
 /// to normalize onto, and emitting NaNs would poison downstream
 /// distance math silently).
 #[polydat::polydat_node(category = Arithmetic)]
-fn vec_norm(a: &[f32]) -> Vec<f32> {
+fn vec_norm_f32(a: &[f32]) -> Vec<f32> {
     let mut out = Vec::new();
     norm_f32_into(a, &mut out);
     out
+}
+
+/// `vec_norm_f64(a)` — scale an f64 vector to unit L2 magnitude, a
+/// zero vector passing through unchanged as `vec_norm_f32` passes it.
+#[polydat::polydat_node(category = Arithmetic)]
+fn vec_norm_f64(a: &[f64]) -> Vec<f64> {
+    let mag = a.iter().map(|x| x * x).sum::<f64>().sqrt();
+    if mag == 0.0 {
+        a.to_vec()
+    } else {
+        a.iter().map(|x| x / mag).collect()
+    }
 }
 
 /// `lid_mle(distances, k)` — Levina–Bickel maximum-likelihood estimate of
@@ -202,28 +325,100 @@ mod tests {
         let a = test_vec(1029, 1);
         let b = test_vec(1029, 2);
 
-        let dot = eval2(&VecDot::new(), a.clone(), b.clone()).as_f64();
+        let dot = eval2(&VecDotF32::new(), a.clone(), b.clone()).as_f64();
         let dot_ref = dot_scalar(&a, &b) as f64;
         assert!((dot - dot_ref).abs() / dot_ref.abs().max(1e-6) < 1e-4);
 
-        let l2 = eval2(&VecL2::new(), a.clone(), b.clone()).as_f64();
+        let l2 = eval2(&VecL2F32::new(), a.clone(), b.clone()).as_f64();
         let l2_ref = (l2sq_scalar(&a, &b) as f64).sqrt();
         assert!((l2 - l2_ref).abs() / l2_ref.max(1e-6) < 1e-4);
 
-        let sum = eval2(&VecAdd::new(), a.clone(), b.clone());
+        let sum = eval2(&VecAddF32::new(), a.clone(), b.clone());
         let sum = sum.as_vec_f32();
         for i in 0..a.len() {
             assert_eq!(sum[i], a[i] + b[i], "vec_add lane {i}");
         }
 
-        let cos_self = eval2(&VecCosine::new(), a.clone(), a.clone()).as_f64();
+        let cos_self = eval2(&VecCosineF32::new(), a.clone(), a.clone()).as_f64();
         assert!((cos_self - 1.0).abs() < 1e-4, "self-cosine = {cos_self}");
     }
 
+    fn vecd(v: Vec<f32>) -> Value {
+        Value::VecF64(SliceArc::from_vec(v.into_iter().map(f64::from).collect()))
+    }
+
+    /// `node` over `a` and `b` as f32 vectors and as f64 vectors: the two
+    /// forms of one distance, with any leading wires in `lead`.
+    fn both_forms<N32: PolydatNode, N64: PolydatNode>(
+        f32_form: &N32,
+        f64_form: &N64,
+        lead: &[Value],
+        a: Vec<f32>,
+        b: Vec<f32>,
+    ) -> (f64, f64) {
+        let eval = |node: &dyn PolydatNode, a: Value, b: Value| {
+            let mut ins = lead.to_vec();
+            ins.extend([a, b]);
+            let mut out = [Value::None];
+            node.eval(&ins, &mut out);
+            out[0].as_f64()
+        };
+        (
+            eval(f32_form, vecv(a.clone()), vecv(b.clone())),
+            eval(f64_form, vecd(a), vecd(b)),
+        )
+    }
+
+    /// The f64 forms compute what the f32 forms do, on vectors whose
+    /// products and sums are exact in both widths.
+    #[test]
+    fn the_f64_forms_agree_with_the_f32_forms() {
+        let (a, b) = (vec![1.0, 2.0, 3.0], vec![4.0, -2.0, 2.0]);
+        let (d32, d64) = both_forms(
+            &VecDotF32::new(),
+            &VecDotF64::new(),
+            &[],
+            a.clone(),
+            b.clone(),
+        );
+        assert_eq!((d32, d64), (6.0, 6.0));
+        let (l32, l64) = both_forms(
+            &VecL2F32::new(),
+            &VecL2F64::new(),
+            &[],
+            a.clone(),
+            b.clone(),
+        );
+        assert_eq!((l32, l64), (26f64.sqrt(), 26f64.sqrt()));
+        let (c32, c64) = both_forms(
+            &VecCosineF32::new(),
+            &VecCosineF64::new(),
+            &[],
+            vec![3.0, 4.0],
+            vec![4.0, 3.0],
+        );
+        assert_eq!((c32, c64), (24.0 / 25.0, 24.0 / 25.0));
+        let (z32, z64) = both_forms(
+            &VecCosineF32::new(),
+            &VecCosineF64::new(),
+            &[],
+            vec![0.0, 0.0],
+            vec![4.0, 3.0],
+        );
+        assert_eq!((z32, z64), (0.0, 0.0));
+    }
+
+    /// `vec_distance` under `metric` in both forms, which must agree.
     fn distance(metric: &str, a: Vec<f32>, b: Vec<f32>) -> f64 {
-        let mut out = [Value::None];
-        VecDistance::new().eval(&[Value::Str(metric.into()), vecv(a), vecv(b)], &mut out);
-        out[0].as_f64()
+        let (d32, d64) = both_forms(
+            &VecDistanceF32::new(),
+            &VecDistanceF64::new(),
+            &[Value::Str(metric.into())],
+            a,
+            b,
+        );
+        assert_eq!(d32, d64, "{metric}: the f32 and f64 forms differ");
+        d32
     }
 
     /// Each metric in the ground-truth convention, smaller is closer,
@@ -259,21 +454,21 @@ mod tests {
     fn vec_scale_and_norm() {
         let a = test_vec(37, 3);
         let mut out = [Value::None];
-        VecScale::new().eval(&[vecv(a.clone()), Value::F64(2.0)], &mut out);
+        VecScaleF32::new().eval(&[vecv(a.clone()), Value::F64(2.0)], &mut out);
         let scaled = out[0].as_vec_f32();
         for i in 0..a.len() {
             assert_eq!(scaled[i], a[i] * 2.0, "vec_scale lane {i}");
         }
 
         let mut out = [Value::None];
-        VecNorm::new().eval(&[vecv(a.clone())], &mut out);
+        VecNormF32::new().eval(&[vecv(a.clone())], &mut out);
         let unit = out[0].as_vec_f32().to_vec();
         let mag = (dot_scalar(&unit, &unit) as f64).sqrt();
         assert!((mag - 1.0).abs() < 1e-4, "norm magnitude = {mag}");
 
         // Zero vector passes through unchanged.
         let mut out = [Value::None];
-        VecNorm::new().eval(&[vecv(vec![0.0; 4])], &mut out);
+        VecNormF32::new().eval(&[vecv(vec![0.0; 4])], &mut out);
         assert_eq!(out[0].as_vec_f32(), &[0.0, 0.0, 0.0, 0.0]);
     }
 
@@ -416,8 +611,8 @@ mod tests {
     fn vec_length_mismatch_panics() {
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let mut out = [Value::None];
-            VecDot::new().eval(&[vecv(vec![1.0]), vecv(vec![1.0, 2.0])], &mut out);
+            VecDotF32::new().eval(&[vecv(vec![1.0]), vecv(vec![1.0, 2.0])], &mut out);
         }));
-        assert!(r.is_err(), "vec_dot accepted mismatched lengths");
+        assert!(r.is_err(), "vec_dot_f32 accepted mismatched lengths");
     }
 }

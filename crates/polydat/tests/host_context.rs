@@ -21,9 +21,7 @@ use polydat::dsl::compile::{
     CompileOptions, compile_polydat_interpreter_with_options, compile_polydat_with_engine,
 };
 use polydat::dsl::factory::{BuildContext, ConstArg};
-use polydat::dsl::registry::{
-    Arity, FuncCategory, FuncSig, NodeRegistration, OutputType, ParamSpec,
-};
+use polydat::dsl::registry::{FuncCategory, FuncSig, NodeRegistration, ParamSpec};
 use polydat::dsl::stub::{ExprStub, GraphMatter, ScopedExpr};
 use polydat::kernel::bind_under;
 use polydat::kernel::subcontext::{BodyFragment, SourceContext, SubcontextBuilder};
@@ -82,45 +80,21 @@ impl PolydatNode for ResourceRead {
 }
 
 const fn sig(name: &'static str, params: &'static [ParamSpec], output: PortType) -> FuncSig {
-    FuncSig {
-        name,
-        category: FuncCategory::Context,
-        outputs: 1,
-        description: "a host node reading its build context",
-        help: "",
-        identity: None,
-        variadic_ctor: None,
-        params,
-        arity: Arity::Fixed,
-        commutativity: polydat::ast::Commutativity::Positional,
-        default_resolver: None,
-        output_type: OutputType::Fixed,
-        output_port: Some(output),
-    }
+    FuncSig::new(name, FuncCategory::Context, params)
+        .with_description("a host node reading its build context")
+        .with_output_port(output)
 }
 
 static SIGS: &[FuncSig] = &[
     sig("host_binding_chain", &[], PortType::Str),
     sig(
         "host_binding_tag",
-        &[ParamSpec {
-            name: "s",
-            slot_type: SlotType::Wire,
-            required: true,
-            example: "\"a\"",
-            constraint: None,
-        }],
+        &[ParamSpec::wire("s").with_example("\"a\"")],
         PortType::Str,
     ),
     sig(
         "host_resource",
-        &[ParamSpec {
-            name: "key",
-            slot_type: SlotType::ConstStr,
-            required: true,
-            example: "\"session\"",
-            constraint: None,
-        }],
+        &[ParamSpec::new("key", SlotType::ConstStr).with_example("\"session\"")],
         PortType::U64,
     ),
 ];

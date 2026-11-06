@@ -145,6 +145,99 @@ pub fn factories() -> impl Iterator<Item = &'static dyn NodeFactory> {
         )
 }
 
+/// A function name that stands for one node per argument type, as
+/// `vec_dot` stands for `vec_dot_f32` and `vec_dot_f64`
+/// (polydat_grammar.md §18.1, `T-Call-OverloadResolve`).
+///
+/// A call to the name builds the form that agrees with the most of the
+/// call's wire types, position by position, and the earliest such form
+/// when several agree with as many: the form matching every type when
+/// one does. The assembler's adapters then reach the form's other
+/// ports, as they reach any node's. So `vec_scale(v, 2)` over a
+/// `vec_f64` builds the f64 form and widens the integer, rather than
+/// narrowing the vector to reach a form that takes neither operand as
+/// given. The first form is the one the name meant before it had others,
+/// so operands no form agrees with build it, and a program that
+/// compiled against the name still does. A node module submits one at
+/// link time:
+///
+/// ```ignore
+/// polydat::inventory::submit! {
+///     polydat::dsl::registry::Overload {
+///         name: "vec_dot",
+///         forms: &[
+///             OverloadForm { wires: &[PortType::VecF32, PortType::VecF32], func: "vec_dot_f32" },
+///             OverloadForm { wires: &[PortType::VecF64, PortType::VecF64], func: "vec_dot_f64" },
+///         ],
+///     }
+/// }
+/// ```
+///
+/// Every form takes the same parameters in the same order, so the name's
+/// parameters are those of any form; only the wires' types differ.
+pub struct Overload {
+    /// The name programs call.
+    pub name: &'static str,
+    /// The forms the name resolves to, the default first.
+    pub forms: &'static [OverloadForm],
+}
+
+/// One form of an [`Overload`]: the registered function a call builds
+/// when its wires have these types.
+pub struct OverloadForm {
+    /// The port types of the form's wire inputs, in order.
+    pub wires: &'static [crate::ast::PortType],
+    /// The registered function this form builds.
+    pub func: &'static str,
+}
+
+inventory::collect!(Overload);
+
+impl Overload {
+    /// The function a call whose wires have `wire_types` builds: the
+    /// form agreeing with the most of them, the earliest among equals.
+    pub fn resolve(&self, wire_types: &[crate::ast::PortType]) -> &'static str {
+        let agreement = |form: &OverloadForm| {
+            form.wires
+                .iter()
+                .zip(wire_types)
+                .filter(|(declared, given)| declared == given)
+                .count()
+        };
+        let mut best = &self.forms[0];
+        for form in &self.forms[1..] {
+            if agreement(form) > agreement(best) {
+                best = form;
+            }
+        }
+        best.func
+    }
+}
+
+/// Every overloaded name linked into the registry.
+pub fn overloads() -> impl Iterator<Item = &'static Overload> {
+    inventory::iter::<Overload>.into_iter()
+}
+
+/// The overloaded name `name`, if it is one.
+pub fn overload(name: &str) -> Option<&'static Overload> {
+    overloads().find(|o| o.name == name)
+}
+
+/// The function a call to `name` with wires of `wire_types` builds:
+/// the resolved form when `name` is an [`Overload`], `name` itself
+/// otherwise.
+pub fn resolve_call<'a>(name: &'a str, wire_types: &[crate::ast::PortType]) -> &'a str {
+    overload(name).map_or(name, |o| o.resolve(wire_types))
+}
+
+/// The signature a call to `name` is checked against before its wire
+/// types are known: the registered function `name`, or the first form
+/// of the overload `name`, whose parameters every form shares.
+pub fn lookup_call(name: &str) -> Option<&'static FuncSig> {
+    lookup(name).or_else(|| overload(name).and_then(|o| lookup(o.forms[0].func)))
+}
+
 /// Register a node module's signatures and builder with the Polydat runtime.
 ///
 /// Place this call at module scope in each node module. The inventory crate
@@ -349,7 +442,13 @@ use crate::ast::SlotType;
 /// A "slot template" — the type-level version of a `Slot` without
 /// a concrete value. Parameters are listed in positional order
 /// matching the DSL syntax.
+///
+/// A parameter is built with [`ParamSpec::new`] or [`ParamSpec::wire`]
+/// and the `with_` methods, all `const`, so a signature can live in a
+/// `static`. The struct is `#[non_exhaustive]`: a field added later is
+/// not a breaking change to a host that builds one.
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub struct ParamSpec {
     /// Parameter name (for error messages and describe output).
     pub name: &'static str,
@@ -371,8 +470,45 @@ pub struct ParamSpec {
 }
 
 impl ParamSpec {
-    /// Convenience: chainable on a literal to attach a constraint.
-    /// Used by node modules that want to keep the literal compact.
+    /// A required parameter `name` of the slot type `slot_type`, with no
+    /// constraint. Its example is `cycle` for a wire, which every
+    /// program can pass, and empty for a constant, which has none to
+    /// offer until [`Self::with_example`] gives one.
+    pub const fn new(name: &'static str, slot_type: SlotType) -> Self {
+        Self {
+            name,
+            slot_type,
+            required: true,
+            example: if matches!(slot_type, SlotType::Wire) {
+                "cycle"
+            } else {
+                ""
+            },
+            constraint: None,
+        }
+    }
+
+    /// A required wire parameter `name`.
+    pub const fn wire(name: &'static str) -> Self {
+        Self::new(name, SlotType::Wire)
+    }
+
+    /// The parameter, but one a call may leave out: a constant with a
+    /// default, or a variadic tail that may be empty.
+    pub const fn optional(mut self) -> Self {
+        self.required = false;
+        self
+    }
+
+    /// The parameter with `example` as its example value, written as
+    /// program text.
+    pub const fn with_example(mut self, example: &'static str) -> Self {
+        self.example = example;
+        self
+    }
+
+    /// The parameter with the constraint `c`, which the factory checks
+    /// before it builds the node.
     pub const fn with_constraint(
         mut self,
         c: crate::dsl::const_constraints::ConstConstraint,
@@ -436,6 +572,28 @@ pub enum OutputType {
 }
 
 /// Description of a registered function's signature.
+///
+/// A signature is built with [`FuncSig::new`] and the `with_` methods,
+/// all `const`, so a module's signatures can live in a `static`:
+///
+/// ```
+/// use polydat_core::ast::{PortType, SlotType};
+/// use polydat_core::dsl::registry::{FuncCategory, FuncSig, ParamSpec};
+///
+/// static SIGS: &[FuncSig] = &[FuncSig::new(
+///     "counted_mod",
+///     FuncCategory::Arithmetic,
+///     &[ParamSpec::wire("x"), ParamSpec::new("m", SlotType::ConstU64).with_example("7")],
+/// )
+/// .with_description("mod, built by a host factory")
+/// .with_output_port(PortType::U64)];
+/// # assert_eq!(SIGS[0].outputs, 1);
+/// ```
+///
+/// The struct is `#[non_exhaustive]`: a field added later is not a
+/// breaking change to a host that builds one, since the new field
+/// arrives with its default.
+#[non_exhaustive]
 pub struct FuncSig {
     /// Function name as used in the DSL.
     pub name: &'static str,
@@ -495,6 +653,105 @@ pub enum DefaultResolver {
 }
 
 impl FuncSig {
+    /// The signature of `name` in `category` taking `params`: one
+    /// output of a fixed type not stated here, a fixed arity, positional
+    /// inputs, no description or help, and none of the optional parts.
+    /// The `with_` methods change each of these.
+    pub const fn new(
+        name: &'static str,
+        category: FuncCategory,
+        params: &'static [ParamSpec],
+    ) -> Self {
+        Self {
+            name,
+            category,
+            outputs: 1,
+            description: "",
+            help: "",
+            identity: None,
+            variadic_ctor: None,
+            params,
+            arity: Arity::Fixed,
+            commutativity: crate::ast::Commutativity::Positional,
+            default_resolver: None,
+            output_type: OutputType::Fixed,
+            output_port: None,
+        }
+    }
+
+    /// The signature with `outputs` output ports (0 for a count fixed at
+    /// compile time).
+    pub const fn with_outputs(mut self, outputs: usize) -> Self {
+        self.outputs = outputs;
+        self
+    }
+
+    /// The signature with the short description `description`.
+    pub const fn with_description(mut self, description: &'static str) -> Self {
+        self.description = description;
+        self
+    }
+
+    /// The signature with the long-form help text `help`.
+    pub const fn with_help(mut self, help: &'static str) -> Self {
+        self.help = help;
+        self
+    }
+
+    /// The signature of a variadic function whose identity element, for
+    /// zero inputs, is `identity`.
+    pub const fn with_identity(mut self, identity: u64) -> Self {
+        self.identity = Some(identity);
+        self
+    }
+
+    /// The signature of a variadic function whose node for a given
+    /// wire count `ctor` builds.
+    pub const fn with_variadic_ctor(
+        mut self,
+        ctor: fn(usize) -> Box<dyn crate::ast::PolydatNode>,
+    ) -> Self {
+        self.variadic_ctor = Some(ctor);
+        self
+    }
+
+    /// The signature with the arity `arity`.
+    pub const fn with_arity(mut self, arity: Arity) -> Self {
+        self.arity = arity;
+        self
+    }
+
+    /// The signature with the input commutativity `commutativity`.
+    pub const fn with_commutativity(mut self, commutativity: crate::ast::Commutativity) -> Self {
+        // `Commutativity::Groups` owns a `Vec`, so a `const fn` cannot
+        // drop the value it replaces and forgets it instead. A static
+        // signature cannot hold a `Groups` (no `Vec` is built in a
+        // `const` context), so what is forgotten there owns nothing;
+        // a runtime caller replacing a `Groups` leaks its lists.
+        let replaced = std::mem::replace(&mut self.commutativity, commutativity);
+        std::mem::forget(replaced);
+        self
+    }
+
+    /// The signature whose `Handle` inputs, wired from a `Str`, are
+    /// resolved by `resolver`.
+    pub const fn with_default_resolver(mut self, resolver: DefaultResolver) -> Self {
+        self.default_resolver = Some(resolver);
+        self
+    }
+
+    /// The signature with the output-type contract `output_type`.
+    pub const fn with_output_type(mut self, output_type: OutputType) -> Self {
+        self.output_type = output_type;
+        self
+    }
+
+    /// The signature whose single output has the port type `port`.
+    pub const fn with_output_port(mut self, port: crate::ast::PortType) -> Self {
+        self.output_port = Some(port);
+        self
+    }
+
     /// Number of wire inputs in the fixed parameter list.
     pub fn wire_input_count(&self) -> usize {
         self.params.iter().filter(|p| p.slot_type.is_wire()).count()
@@ -570,14 +827,19 @@ pub fn by_category() -> Vec<(FuncCategory, Vec<FuncSig>)> {
         .collect()
 }
 
-/// Find the closest function name to a misspelling.
+/// Find the closest function name to a misspelling, among the
+/// registered functions and the [`Overload`] names.
 pub fn suggest_function(name: &str) -> Option<&'static str> {
     let reg = registry();
+    let names = reg
+        .iter()
+        .map(|sig| sig.name)
+        .chain(overloads().map(|o| o.name));
     let mut best: Option<(&str, usize)> = None;
-    for sig in &reg {
-        let dist = edit_distance(name, sig.name);
+    for candidate in names {
+        let dist = edit_distance(name, candidate);
         if dist <= 3 && (best.is_none() || dist < best.unwrap().1) {
-            best = Some((sig.name, dist));
+            best = Some((candidate, dist));
         }
     }
     best.map(|(name, _)| name)
