@@ -2271,9 +2271,9 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "slabtastic"
-version = "4.3.3"
+version = "4.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "863eb0198b517ae31b1d0e954040823ff1819783816f5b6da703e4c54af9b4fd"
+checksum = "18ee4a87de6d79fb00c5226f77244db6bffadc1cac912c9ebbc2c163651d5e5c"
 dependencies = [
  "csv",
  "memmap2",
@@ -2765,9 +2765,9 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "vectordata"
-version = "4.3.3"
+version = "4.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e4fb36b164325a12938634779d68902f454a635afa5443e2607ffef403cba2c5"
+checksum = "ce5d60653fb096bc4a1a667145b2049abb52c18d947ac1a533972edd0ac7d22e"
 dependencies = [
  "anyhow",
  "byteorder",
@@ -2806,9 +2806,9 @@ dependencies = [
 
 [[package]]
 name = "veks-anode"
-version = "4.3.3"
+version = "4.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57ad617cb796c3d066bd0793d217f69cc1643bf8ee1964beb4806de26a1f2abd"
+checksum = "ccc33e0d27afc4253b7a155dc4bd75e73d1435336062c788690a0adf51530908"
 dependencies = [
  "byteorder",
  "indexmap",
@@ -2817,9 +2817,9 @@ dependencies = [
 
 [[package]]
 name = "veks-apicore"
-version = "4.3.3"
+version = "4.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ad09d92de7a09b0e0997a0d98a708311cfec119d1146813e6b67637a469b94a"
+checksum = "6d2e8d2bd4211164e24c498c679dd3b7fa894171cdfb061e6491eff9fb953552"
 dependencies = [
  "indexmap",
  "log",
@@ -2834,15 +2834,15 @@ dependencies = [
 
 [[package]]
 name = "veks-completion"
-version = "4.3.3"
+version = "4.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b9882a9ce41b637d71c0d2b4b9e74fd226c5fe4487fc93c4e7a04593cae8baf0"
+checksum = "56867dbd78970a2b21891bb870dea43b3522d1caca7ca6add2f570e0c1520b68"
 
 [[package]]
 name = "veks-completion-derive"
-version = "4.3.3"
+version = "4.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85a1fa5c32520917eaab0a9a2322d49df49816ff80ea4eae5df0213a40831089"
+checksum = "862b6ba000e4b13c620d2960f7e8e6d4cdba68426b42343020e8b3de0de6bf85"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2851,18 +2851,18 @@ dependencies = [
 
 [[package]]
 name = "veks-datatypes"
-version = "4.3.3"
+version = "4.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d36b0a64c9fa15f0a9c82ae38d7060e3854c7b37f196faf80091abf784dacf6e"
+checksum = "1330455e71eaf7377a64ec4383fd42b68ff15cf2dca7be5258fd1f5de9840e19"
 dependencies = [
  "half",
 ]
 
 [[package]]
 name = "veks-io"
-version = "4.3.3"
+version = "4.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b280dcabf33cdbdf3d94ede82b32e56728248f451ffbb69147576b76f400baa0"
+checksum = "c5a242935f543eb17f7f3bb6e7d928284628999fc3e6b29f6659a954502219c2"
 dependencies = [
  "byteorder",
  "half",
@@ -2877,9 +2877,9 @@ dependencies = [
 
 [[package]]
 name = "veks-simd"
-version = "4.3.3"
+version = "4.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7197a6b0fa93a425176a43e3ab66335cd029c6019c47a5aa3649360c56c480c"
+checksum = "1e9ffd24f4ee6e1d95eaacd5a16a19eef14a63a3bca3d2f8632b506cfb31c63f"
 dependencies = [
  "fearless_simd",
  "fearless_simd_macros",
@@ -2889,9 +2889,9 @@ dependencies = [
 
 [[package]]
 name = "veks-transport"
-version = "4.3.3"
+version = "4.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4326c103278142f2404150b1feed02cec44f5251f732994884d604af9c295f7b"
+checksum = "224170d1742275aa94f8f72aaa6539e30405c43de84ab4cfbcf42a8317cd1f7e"
 dependencies = [
  "byteorder",
  "filetime",

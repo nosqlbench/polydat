@@ -289,7 +289,11 @@ the form a call with given operand types builds.
 it answers `None` for an overloaded name. `by_category()` lists the
 registered forms, and `overloads_by_category()` lists the overloaded
 names under their first form's category, so a listing of what a
-program can call shows both.
+program can call shows both. An overload whose first form names no
+registered function, such as a host's misspelled registration, has no
+category, so neither `lookup` nor `overloads_by_category()` answers for
+it; `unlisted_overloads()` names those, and a host checks that it is
+empty.
 
 The first three answer the textbook quantity: `vec_dot` is `a·b`,
 `vec_l2` is `|a − b|`, and `vec_cosine` is the similarity `cos θ`, `0.0`

@@ -86,7 +86,9 @@ Nothing that compiled under 0.7.0 stops compiling.
   the adapters reach. `registry::overloads()`, `overload(name)`,
   `resolve_call(name, wire_types)`, `lookup(name)` (0.8.1) and
   `overloads_by_category()` (0.8.1) answer for them, and the node
-  reference lists them under "Overloaded names".
+  reference lists them under "Overloaded names". `unlisted_overloads()`
+  (0.8.2) names the overloads whose first form is not registered, which
+  the listing leaves out, so a host can check its own registrations.
 - **f64 vector operations.** `vec_add_f64`, `vec_scale_f64`,
   `vec_norm_f64`, `vec_dot_f64`, `vec_l2_f64`, `vec_cosine_f64` and
   `vec_distance_f64`. Under 0.7.0 an f64 vector passed to `vec_dot` was

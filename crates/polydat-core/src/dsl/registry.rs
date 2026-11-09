@@ -259,6 +259,10 @@ pub fn lookup_call(name: &str) -> Option<&'static FuncSig> {
 /// display order and sorted by name within a category: the names
 /// [`by_category`] leaves out, since it lists registered functions.
 /// A listing of what a program can call shows both.
+///
+/// An overload whose first form names no registered function has no
+/// category and is left out; nothing can call it either. Those are
+/// registration errors, and [`unlisted_overloads`] names them.
 pub fn overloads_by_category() -> Vec<(FuncCategory, Vec<&'static Overload>)> {
     let mut groups: std::collections::HashMap<FuncCategory, Vec<&'static Overload>> =
         std::collections::HashMap::new();
@@ -276,6 +280,18 @@ pub fn overloads_by_category() -> Vec<(FuncCategory, Vec<&'static Overload>)> {
             })
         })
         .collect()
+}
+
+/// Every overload whose first form names no registered function,
+/// sorted by name: a registration error, such as a misspelled form or
+/// a form whose module is not linked. [`lookup`] answers `None` for
+/// these names and [`overloads_by_category`] leaves them out, so a
+/// host checks that this is empty, in a test or at startup, to find
+/// its own broken registrations.
+pub fn unlisted_overloads() -> Vec<&'static Overload> {
+    let mut unlisted: Vec<_> = overloads().filter(|o| o.signature().is_none()).collect();
+    unlisted.sort_unstable_by_key(|o| o.name);
+    unlisted
 }
 
 /// Register a node module's signatures and builder with the Polydat runtime.
@@ -955,7 +971,7 @@ mod tests {
 
     #[test]
     fn lookup_answers_for_an_overloaded_name_and_lookup_registered_does_not() {
-        for o in overloads() {
+        for o in overloads().filter(|o| lookup_registered(o.forms[0].func).is_some()) {
             let sig = lookup(o.name).unwrap_or_else(|| panic!("{} is not callable", o.name));
             assert_eq!(sig.name, o.forms[0].func, "{}", o.name);
             assert!(lookup_registered(o.name).is_none(), "{}", o.name);
@@ -963,9 +979,34 @@ mod tests {
     }
 
     #[test]
-    fn overloads_by_category_lists_every_overload_once() {
+    fn overloads_by_category_lists_every_overload_but_the_unlisted_once() {
         let listed: usize = overloads_by_category().iter().map(|(_, o)| o.len()).sum();
-        assert_eq!(listed, overloads().count());
+        assert_eq!(listed + unlisted_overloads().len(), overloads().count());
+    }
+
+    // An overload whose first form is not registered, as a host's
+    // misspelled registration would be.
+    inventory::submit! {
+        Overload {
+            name: "registry_test_misspelled_overload",
+            forms: &[OverloadForm {
+                wires: &[crate::ast::PortType::U64],
+                func: "registry_test_no_such_function",
+            }],
+        }
+    }
+
+    #[test]
+    fn an_overload_of_no_registered_function_is_unlisted_and_uncallable() {
+        let name = "registry_test_misspelled_overload";
+        let unlisted: Vec<_> = unlisted_overloads().iter().map(|o| o.name).collect();
+        assert_eq!(unlisted, [name]);
+        assert!(lookup(name).is_none());
+        assert!(
+            overloads_by_category()
+                .iter()
+                .all(|(_, names)| names.iter().all(|o| o.name != name))
+        );
     }
 
     #[test]

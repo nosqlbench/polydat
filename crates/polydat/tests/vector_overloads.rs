@@ -273,4 +273,8 @@ fn a_host_finds_and_lists_the_overloaded_names_as_programs_call_them() {
         .map(|(_, names)| names.len())
         .sum();
     assert_eq!(listed, registry::overloads().count());
+    assert!(
+        registry::unlisted_overloads().is_empty(),
+        "an overload's first form is not registered"
+    );
 }

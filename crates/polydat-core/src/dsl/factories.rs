@@ -175,6 +175,13 @@ impl PolydatRuntime {
         crate::dsl::registry::overloads_by_category()
     }
 
+    /// The overloads whose first form names no registered function,
+    /// which [`Self::overloads_by_category`] leaves out: registration
+    /// errors a host checks for ([`crate::dsl::registry::unlisted_overloads`]).
+    pub fn unlisted_overloads(&self) -> Vec<&'static crate::dsl::registry::Overload> {
+        crate::dsl::registry::unlisted_overloads()
+    }
+
     /// The `--lib` search paths.
     pub fn polydat_lib_paths(&self) -> &[PathBuf] {
         &self.polydat_lib_paths

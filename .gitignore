@@ -23,3 +23,6 @@ target
 /.idea/modules.xml
 /.idea/polydat.iml
 /.idea/vcs.xml
+
+# Local working notes, never committed
+/local/
