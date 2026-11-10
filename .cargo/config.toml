@@ -1,6 +1,7 @@
 [alias]
-# Release every crate together: `cargo ws-release patch` (or minor,
-# major, `custom 0.9.0`); add `--dry-run` to rehearse it. It runs
+# Release every crate together: `cargo ws-release`, which asks for the
+# version once the checks pass, or `cargo ws-release patch` (or minor,
+# major, `custom 0.9.0`) to name it; add `--dry-run` to rehearse it. It runs
 # `xtask release`, which runs every check CI runs, and the rustdoc
 # examples, and only when they all pass runs `cargo ws publish --force
 # '*' --all --exact --allow-branch main` with the options given

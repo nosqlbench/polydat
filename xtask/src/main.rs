@@ -4,12 +4,14 @@
 //! Repository tasks, run through the cargo aliases in
 //! `.cargo/config.toml`.
 //!
-//! `cargo ws-release <bump> [cargo-workspaces options]` runs
+//! `cargo ws-release [bump] [cargo-workspaces options]` runs
 //! `xtask release`: every check CI runs, and the rustdoc examples, and
 //! then, only when all of them pass, `cargo ws publish` with the
 //! release's fixed options and the ones given
-//! (`crates/polydat/docs/guides/releasing.md`). `--dry-run` passes
-//! through to `cargo ws publish`, so a rehearsal is gated the same way.
+//! (`crates/polydat/docs/guides/releasing.md`). With no bump,
+//! `cargo ws publish` asks for the version, offering the next patch,
+//! minor and major versions. `--dry-run` passes through to
+//! `cargo ws publish`, so a rehearsal is gated the same way.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -169,7 +171,7 @@ fn main() -> ExitCode {
         Some((task, rest)) if task == "release" => release(rest),
         _ => {
             eprintln!(
-                "usage: cargo ws-release <patch|minor|major|custom X.Y.Z> [cargo-workspaces options]"
+                "usage: cargo ws-release [patch|minor|major|custom X.Y.Z] [cargo-workspaces options]"
             );
             ExitCode::FAILURE
         }
@@ -177,12 +179,9 @@ fn main() -> ExitCode {
 }
 
 /// Run the gate, then publish with `publish_args` after the fixed
-/// options.
+/// options. With no `publish_args`, `cargo ws publish` prompts for the
+/// version on the terminal this task inherits.
 fn release(publish_args: &[String]) -> ExitCode {
-    if publish_args.is_empty() {
-        eprintln!("cargo ws-release: name the bump, such as `patch` or `minor`");
-        return ExitCode::FAILURE;
-    }
     let root = workspace_root();
     for (index, check) in GATE.iter().enumerate() {
         eprintln!(
@@ -205,7 +204,7 @@ fn release(publish_args: &[String]) -> ExitCode {
         }
     }
     eprintln!(
-        "\n==> release gate passed; publishing with cargo ws publish {}",
+        "\n==> release gate passed; running cargo ws publish {}",
         publish_args.join(" ")
     );
     let mut command = cargo(&root);

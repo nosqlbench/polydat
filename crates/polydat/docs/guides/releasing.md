@@ -54,9 +54,11 @@ crate makes Cargo move the host's lockfile to that version.
    native, or pure-native evaluation loops, against a same-hour
    baseline ([Engine-ladder performance](performance.md)). The release
    gate does not run it.
-3. **Release.** From a clean `main`, `cargo ws-release minor` for a
-   release with a breaking change and `cargo ws-release patch`
-   otherwise (`custom X.Y.Z` names the version); add `--dry-run` to
+3. **Release.** From a clean `main`, run `cargo ws-release`. Once the
+   gate passes it asks for the version, offering the next patch, minor
+   and major versions: the minor version for a release with a breaking
+   change, the patch version otherwise. `cargo ws-release minor`,
+   `patch` or `custom X.Y.Z` names it instead; add `--dry-run` to
    rehearse it. The alias runs `xtask release`, which:
    - **gates the tree** on every check CI runs, and stops before
      versioning anything at the first that fails:
