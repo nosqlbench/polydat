@@ -1,0 +1,16 @@
+# Copyright 2024-2026 Jonathan Shook
+# SPDX-License-Identifier: Apache-2.0
+#
+# `xtask` — repository tasks, run through cargo aliases in
+# .cargo/config.toml. `cargo ws-release` runs `xtask release`, which
+# gates a release on the checks CI runs before it publishes
+# (crates/polydat/docs/guides/releasing.md). Never published.
+
+[package]
+name = "xtask"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]

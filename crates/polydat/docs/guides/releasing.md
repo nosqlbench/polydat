@@ -45,38 +45,48 @@ crate makes Cargo move the host's lockfile to that version.
 
 ## Steps
 
-1. **Gate the tree.** From the repository root:
-   - `cargo fmt --all --check`
-   - `cargo clippy --workspace --all-targets`
-   - `cargo nextest run --workspace`
-   - `cargo nextest run -p polydat --all-features -E 'test(/nodes_reference|engine_parity/)'`
-     (the node reference and the engine matrix are checked against the
-     whole library)
-   - `cargo check -p polydat --no-default-features`
-   - After a change to the closure-tier, native, or pure-native
-     evaluation loops, the engine ladder against a same-hour baseline
-     ([Engine-ladder performance](performance.md)).
-2. **Bump the versions.** `cargo workspaces version` bumps the crates
-   that changed and the workspace version they inherit, to the next
-   minor version when the release contains a breaking change and to the
-   next patch version otherwise.
-   For a minor release, first write
+1. **Write the porting guide** (a minor release only). Write
    `crates/polydat/docs/guides/porting_to_X_Y_0.md`, add it to the
-   Guides list in `crates/polydat/docs/README.md`, newest first, and
-   regenerate the indexes with `ct okf gen-index --recursive`.
-3. **Raise the internal requirements.** In the root `Cargo.toml`, under
-   `[workspace.dependencies]`, set the `version` of every internal crate
-   this release publishes to the version it is being published at. A
-   crate this release does not publish keeps the requirement that names
-   its newest published version. This has to follow step 2: a
-   requirement may not name a version the crate in the tree does not
-   yet have.
-4. **Check the packages.** `cargo publish --dry-run -p <crate>` for each
-   crate being published, in dependency order: `polydat-derive`,
-   `polydat-grammar`, `polydat-core`, `polydat-nodes`, `polydat`.
-5. **Publish.** `cargo workspaces publish --from-git` publishes the
-   bumped crates in dependency order and commits `Release <version>`.
-6. **Verify from a host's side.** In a project that already depends on
+   Guides list in `crates/polydat/docs/README.md`, newest first,
+   regenerate the indexes with `ct okf gen-index --recursive`, and
+   commit it.
+2. **Run the engine ladder** after a change to the closure-tier,
+   native, or pure-native evaluation loops, against a same-hour
+   baseline ([Engine-ladder performance](performance.md)). The release
+   gate does not run it.
+3. **Release.** From a clean `main`, `cargo ws-release minor` for a
+   release with a breaking change and `cargo ws-release patch`
+   otherwise (`custom X.Y.Z` names the version); add `--dry-run` to
+   rehearse it. The alias runs `xtask release`, which:
+   - **gates the tree** on every check CI runs, and stops before
+     versioning anything at the first that fails:
+     - `cargo fmt --all --check`;
+     - `cargo clippy --workspace --all-targets -- -D warnings`, and
+       `cargo doc --workspace --no-deps` with `RUSTDOCFLAGS=-D warnings`,
+       each with default features, `--no-default-features` and
+       `--all-features`;
+     - `cargo nextest run --workspace --profile ci` with the same three
+       feature sets, which includes the node reference and the engine
+       matrix checked against the whole library;
+     - `cargo test --doc --workspace --all-features`, the rustdoc
+       examples, which nextest does not run;
+     - `cargo check --release --workspace --all-features --all-targets`;
+     - the node attribute diagnostics (`ui::`, run with
+       `--run-ignored ignored-only`);
+   - then runs `cargo ws publish --force '*' --all --exact
+     --allow-branch main` with the options given. It versions every
+     crate together, at the version the workspace inherits; raises
+     every internal requirement under `[workspace.dependencies]` to
+     that version, exactly (`--exact`); commits `Release <version>`,
+     tags it, and pushes both; and publishes the crates in dependency order: `polydat-derive`,
+     `polydat-grammar`, `polydat-core`, `polydat-nodes`, `polydat`.
+     `xtask` is versioned with them and never published.
+4. **If a publish stops** on a crate whose dependency crates.io does
+   not list yet (`failed to select a version for the requirement`),
+   the index has not caught up with the crate published just before
+   it; wait a minute and publish the rest with `cargo publish -p
+   <crate>`, in the same order.
+5. **Verify from a host's side.** In a project that already depends on
    polydat, run `cargo update -p polydat` and then `cargo tree -i
    polydat-core`; every internal crate must resolve to the version this
    release published or, for a crate it did not publish, to that

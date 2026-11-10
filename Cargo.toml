@@ -5,6 +5,8 @@ members = [
     "crates/polydat-core",
     "crates/polydat-nodes",
     "crates/polydat-derive",
+    # Repository tasks (`cargo ws-release`); never published.
+    "xtask",
 ]
 resolver = "3"
 
