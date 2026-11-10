@@ -188,7 +188,13 @@ pub use polydat_grammar::viz;
 /// use polydat_core::dsl::{CompileOptions, compile_ast_with_engine, parse_polydat};
 /// use polydat_core::tile::{Span, TileOptions, add_tiles, tile_from_text};
 ///
-/// let tile = tile_from_text("greeting", "hi ${who}", &TileOptions::default(), Span::default())?;
+/// let tile = tile_from_text(
+///     "greeting",
+///     "text",
+///     "hi ${who}",
+///     &TileOptions::default(),
+///     Span { line: 1, col: 1 },
+/// )?;
 /// let source = "input cycle: u64\nwho := \"world\"\n";
 /// let mut program = parse_polydat(source)?;
 /// add_tiles(&mut program, vec![tile])?;

@@ -80,7 +80,8 @@ trybuild = "1.0.121"
 [lib]
 # The suite runs under nextest, which runs no doctests; the rustdoc
 # examples are mirrored in tests/rustdoc_examples.rs and the
-# compile-fail seal in tests/ui/seal.
+# compile-fail seal in tests/ui/seal. CI also runs the examples
+# themselves with `cargo test --doc`.
 doctest = false
 
 [[bin]]

@@ -688,7 +688,11 @@ const CONST_EXPR_CACHE_CAP: usize = 8192;
 ///
 /// # Examples
 ///
-/// ```
+/// Through the `polydat` facade, which links the node library the
+/// expression compiles against; `tests/rustdoc_examples.rs` in
+/// `polydat` runs it.
+///
+/// ```ignore
 /// use polydat::dsl::compile::eval_const_expr;
 /// let v = eval_const_expr("4 * 4").unwrap();
 /// assert_eq!(v.as_u64(), 16);  // both int literals → u64_mul

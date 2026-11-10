@@ -158,6 +158,12 @@ jobs:
       - name: Test (all features)
         run: cargo nextest run --workspace --all-features --profile ci
 
+      # nextest runs no doctests, and each crate sets `doctest = false`
+      # so a plain `cargo test` skips them too; `--doc` runs them
+      # anyway, so an example rustdoc shows cannot drift from the API.
+      - name: Doc examples
+        run: cargo test --doc --workspace --all-features
+
       # Rustdoc is kept warning-free: a broken intra-doc link or a
       # link to a private item fails the build here.
       - name: Rustdoc (warnings are errors)
