@@ -38,6 +38,7 @@ The release makes three things true that a host builds on:
 | `Overload` and `OverloadForm` are `#[non_exhaustive]` | an `Overload { name, forms }` or `OverloadForm { wires, func }` literal in a host's `inventory::submit!` (E0639) | `Overload::new(name, forms)` and `OverloadForm::new(wires, func)`, both `const`, so the submission is unchanged otherwise; see the example below. The fields stay public |
 | `Overload::category()` returns `FuncCategory`, not `Option<FuncCategory>` | code that matched `Some`/`None` on it | use the value; `FuncCategory::Uncategorised` is what `None` was, an overload whose first form is not registered |
 | `#[polydat_node(category = Uncategorised)]` is refused | a node that declared it, which 0.8 had no such variant for | name the category the node belongs to |
+| `registry::lookup_call`, deprecated in 0.8.1, is removed | a call to it (E0425) | call `registry::lookup`, which answers the same for every name |
 
 A host overload becomes a constructor call:
 

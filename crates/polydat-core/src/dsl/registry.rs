@@ -288,16 +288,6 @@ pub fn resolve_call<'a>(name: &'a str, wire_types: &[crate::ast::PortType]) -> &
     overload(name).map_or(name, |o| o.resolve(wire_types))
 }
 
-/// The signature a call to `name` is checked against before its wire
-/// types are known; the same as [`lookup`].
-#[deprecated(
-    since = "0.8.1",
-    note = "`lookup` answers for overloaded names; use it"
-)]
-pub fn lookup_call(name: &str) -> Option<&'static FuncSig> {
-    lookup(name)
-}
-
 /// Every overloaded name, grouped by its [`Overload::category`] in
 /// display order and sorted by name within a category: the names
 /// [`by_category`] leaves out, since it lists registered functions.
