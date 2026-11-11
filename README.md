@@ -14,7 +14,7 @@ Add Polydat to a Rust 2024 project:
 
 ```toml
 [dependencies]
-polydat = "0.8"
+polydat = "0.9"
 ```
 
 Compile a graph from DSL source and pull named results:
@@ -387,7 +387,7 @@ For an interpreter-and-closures library build without Cranelift or the binary:
 
 ```toml
 [dependencies]
-polydat = { version = "0.8", default-features = false }
+polydat = { version = "0.9", default-features = false }
 ```
 
 ## Workspace and development

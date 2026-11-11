@@ -3,11 +3,13 @@
 
 //! The vector names `vec_add`, `vec_scale`, `vec_norm`, `vec_dot`,
 //! `vec_l2`, `vec_cosine` and `vec_distance` are overloads of an f32
-//! and an f64 form (`polydat::dsl::registry::Overload`). A call builds
-//! the form its operands' types agree with most, so f64 vectors are
-//! never narrowed to f32 on the way in, and operands agreeing with
-//! neither form reach the f32 form through the assembler's adapters, as
-//! the names did before they had f64 forms.
+//! and an f64 form (`polydat::dsl::registry::Overload`). A call builds,
+//! among the forms its operands reach without narrowing, the one their
+//! types agree with most, so f64 vectors are never narrowed to f32 on
+//! the way in and an f32 vector beside an f64 one widens. Operands that
+//! reach both forms equally, such as integer lists, reach the f32 form
+//! through the assembler's adapters, as the names did before they had
+//! f64 forms.
 
 use polydat::ast::{PortType, SliceArc, Value};
 use polydat::compile::assembly::WireRef;
@@ -66,6 +68,53 @@ fn each_vector_name_builds_the_form_its_operands_match() {
     // and the factor widens, rather than the vector narrowing.
     assert_eq!(built("vec_scale", &[VecF64, U64]), "vec_scale_f64");
     assert_eq!(built("vec_scale", &[VecF32, U64]), "vec_scale_f32");
+    // Mixed widths: only the f64 form is reachable without narrowing,
+    // so it is built in either operand order and the f32 one widens.
+    for name in ["vec_add", "vec_dot", "vec_l2", "vec_cosine"] {
+        assert_eq!(built(name, &[VecF64, VecF32]), format!("{name}_f64"));
+        assert_eq!(built(name, &[VecF32, VecF64]), format!("{name}_f64"));
+    }
+    assert_eq!(
+        built("vec_distance", &[Str, VecF32, VecF64]),
+        "vec_distance_f64"
+    );
+}
+
+/// An f32 operand beside an f64 one widens, exactly, and the call
+/// computes in f64 on every engine; under 0.8 it was refused.
+#[test]
+fn mixed_width_operands_compute_in_f64_on_every_engine() {
+    let a = [0.1f64, 0.2, 0.7];
+    let b32 = [0.3f32, -0.4, 0.5];
+    let b: Vec<f64> = b32.iter().map(|&x| f64::from(x)).collect();
+    let dot: f64 = a.iter().zip(&b).map(|(x, y)| x * y).sum();
+    let sq: f64 = a.iter().zip(&b).map(|(x, y)| (x - y) * (x - y)).sum();
+    let src = concat!(
+        "input cycle: u64\n",
+        "extern a: vec_f64\n",
+        "extern b: vec_f32\n",
+        "dot := vec_dot(a, b)\n",
+        "rdot := vec_dot(b, a)\n",
+        "sq := vec_distance(\"EUCLIDEAN\", b, a)\n",
+        "sum := vec_add(b, a)\n",
+    );
+    for engine in engines() {
+        let asm = polydat::dsl::compile::compile_polydat_to_assembler(src)
+            .unwrap_or_else(|e| panic!("{e}\n{src}"));
+        let mut k = asm
+            .compile_with(engine)
+            .unwrap_or_else(|e| panic!("{engine}: {e}\n{src}"));
+        k.set_inputs(&[0]);
+        k.set_input("a", Value::VecF64(SliceArc::from_vec(a.to_vec())))
+            .unwrap_or_else(|e| panic!("{engine}: set a: {e}"));
+        k.set_input("b", Value::VecF32(SliceArc::from_vec(b32.to_vec())))
+            .unwrap_or_else(|e| panic!("{engine}: set b: {e}"));
+        assert_eq!(k.pull("dot").as_f64(), dot, "{engine}");
+        assert_eq!(k.pull("rdot").as_f64(), dot, "{engine}");
+        assert_eq!(k.pull("sq").as_f64(), sq, "{engine}");
+        let want_sum: Vec<f64> = a.iter().zip(&b).map(|(x, y)| y + x).collect();
+        assert_eq!(k.pull("sum").as_vec_f64(), &want_sum[..], "{engine}");
+    }
 }
 
 /// Every form of every overload declares the wire types its node

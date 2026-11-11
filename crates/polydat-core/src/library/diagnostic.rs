@@ -195,7 +195,7 @@ mod tests {
         let node = TypeOf::new(PortType::Str);
         let mut out = [Value::None];
         node.eval(&[Value::Str("hello".into())], &mut out);
-        assert_eq!(out[0].as_str(), "String");
+        assert_eq!(out[0].as_str(), "str");
     }
 
     #[test]

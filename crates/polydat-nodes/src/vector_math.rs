@@ -196,13 +196,13 @@ fn dot_and_squares<T: Copy + Into<f64>>(a: &[T], b: &[T]) -> (f64, f64, f64) {
 macro_rules! float_overload {
     ($name:literal: [$($w32:ident),*] => $f32:literal, [$($w64:ident),*] => $f64:literal) => {
         polydat::inventory::submit! {
-            Overload {
-                name: $name,
-                forms: &[
-                    OverloadForm { wires: &[$(PortType::$w32),*], func: $f32 },
-                    OverloadForm { wires: &[$(PortType::$w64),*], func: $f64 },
+            Overload::new(
+                $name,
+                &[
+                    OverloadForm::new(&[$(PortType::$w32),*], $f32),
+                    OverloadForm::new(&[$(PortType::$w64),*], $f64),
                 ],
-            }
+            )
         }
     };
 }

@@ -154,45 +154,12 @@ pub enum PortType {
     Dyn,
 }
 
+/// A port type displays as its keyword ([`PortType::to_keyword`]), so
+/// source synthesized through `Display`, such as `extern x: {ty}`,
+/// parses back to the same type.
 impl fmt::Display for PortType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            PortType::U64 => write!(f, "u64"),
-            PortType::F64 => write!(f, "f64"),
-            PortType::U32 => write!(f, "u32"),
-            PortType::I32 => write!(f, "i32"),
-            PortType::I64 => write!(f, "i64"),
-            PortType::F32 => write!(f, "f32"),
-            PortType::U8 => write!(f, "u8"),
-            PortType::I8 => write!(f, "i8"),
-            PortType::U16 => write!(f, "u16"),
-            PortType::I16 => write!(f, "i16"),
-            PortType::F16 => write!(f, "f16"),
-            PortType::U128 => write!(f, "u128"),
-            PortType::I128 => write!(f, "i128"),
-            PortType::Reg128 => write!(f, "reg128"),
-            PortType::RegI8x16 => write!(f, "reg_i8x16"),
-            PortType::RegI16x8 => write!(f, "reg_i16x8"),
-            PortType::RegI32x4 => write!(f, "reg_i32x4"),
-            PortType::RegI64x2 => write!(f, "reg_i64x2"),
-            PortType::RegF16x8 => write!(f, "reg_f16x8"),
-            PortType::RegF32x4 => write!(f, "reg_f32x4"),
-            PortType::RegF64x2 => write!(f, "reg_f64x2"),
-            PortType::Bool => write!(f, "bool"),
-            PortType::Str => write!(f, "String"),
-            PortType::Bytes => write!(f, "bytes"),
-            PortType::Json => write!(f, "json"),
-            PortType::Ext => write!(f, "ext"),
-            PortType::Handle => write!(f, "handle"),
-            PortType::VecF32 => write!(f, "vec_f32"),
-            PortType::VecI32 => write!(f, "vec_i32"),
-            PortType::VecF64 => write!(f, "vec_f64"),
-            PortType::VecI64 => write!(f, "vec_i64"),
-            PortType::VecF16 => write!(f, "vec_f16"),
-            PortType::VecI16 => write!(f, "vec_i16"),
-            PortType::VecI8 => write!(f, "vec_i8"),
-            PortType::Dyn => write!(f, "dyn"),
-        }
+        f.write_str(self.to_keyword())
     }
 }
 

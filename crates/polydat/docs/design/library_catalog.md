@@ -270,12 +270,15 @@ The vector operations `vec_add`, `vec_scale`, `vec_norm`, `vec_dot`,
 `vec_l2`, `vec_cosine` and `vec_distance` are each an f32 and an f64
 form, `vec_add_f32` and `vec_add_f64` and so on, and the unsuffixed
 name is an overload of the two (`polydat::dsl::registry::Overload`). A
-call builds the form agreeing with the most of its operands' types, so
-an f64 vector is never narrowed to f32 on the way in: `vec_scale(v, 2)`
-over a `vec_f64` builds `vec_scale_f64` and widens the integer factor.
-Operands agreeing with neither form reach the f32 form through the
-assembler's adapters, as they reached the name before it had an f64
-form: `vec_dot` over two `vec_i32` lists widens them to f32. The
+call builds, among the forms its operands reach without narrowing, the
+one agreeing with the most of their types, so an f64 vector is never
+narrowed to f32 on the way in: `vec_scale(v, 2)` over a `vec_f64`
+builds `vec_scale_f64` and widens the integer factor, and `vec_dot`
+over a `vec_f64` and a `vec_f32` builds `vec_dot_f64` and widens the
+`vec_f32`, exactly. Operands that reach both forms equally reach the
+f32 form through the assembler's adapters, as they reached the name
+before it had an f64 form: `vec_dot` over two `vec_i32` lists widens
+them to f32. The
 producers return a vector of their form's width and the distances an
 `f64`. The f32 forms of `vec_add`, `vec_scale`, `vec_norm`, `vec_dot`,
 `vec_l2` and `vec_cosine` have native lowerings; the f64 forms and both
@@ -291,9 +294,12 @@ registered forms, and `overloads_by_category()` lists the overloaded
 names under their first form's category, so a listing of what a
 program can call shows both. An overload whose first form names no
 registered function, such as a host's misspelled registration, has no
-category, so neither `lookup` nor `overloads_by_category()` answers for
-it; `unlisted_overloads()` names those, and a host checks that it is
-empty.
+category of its own: `lookup` answers `None` for it, and
+`overloads_by_category()` lists it last, under `Uncategorised`, which
+no registered function has and `#[polydat_node]` refuses.
+`unlisted_overloads()` names those, and a host checks that it is
+empty. A host submits an overload with `Overload::new(name, forms)`
+and `OverloadForm::new(wires, func)`, both `const`.
 
 The first three answer the textbook quantity: `vec_dot` is `a·b`,
 `vec_l2` is `|a − b|`, and `vec_cosine` is the similarity `cos θ`, `0.0`

@@ -94,7 +94,8 @@ use syn::{
 ///
 /// - `category = <ident>` — the polydat `FuncCategory` variant
 ///   the node belongs to (`Comparison`, `Math`, `String`, etc.).
-///   Required; there is no default.
+///   Required; there is no default. `Uncategorised` is refused: it
+///   is where a listing puts a broken overload registration.
 /// - `struct_name = <Ident>` — the Rust name of the generated node
 ///   struct. Defaults to the function name in PascalCase, so a node
 ///   `fn geo_cell` produces `struct GeoCell`; set this when that name
@@ -289,17 +290,27 @@ fn parse_attrs(attr: TokenStream2) -> syn::Result<NodeAttrs> {
                                  (a polydat `FuncCategory` variant name).",
                             ));
                         };
-                        category = Some(
-                            p.path
-                                .get_ident()
-                                .ok_or_else(|| {
-                                    syn::Error::new_spanned(
-                                        &nv.value,
-                                        "`category` value must be a single identifier.",
-                                    )
-                                })?
-                                .clone(),
-                        );
+                        let ident = p
+                            .path
+                            .get_ident()
+                            .ok_or_else(|| {
+                                syn::Error::new_spanned(
+                                    &nv.value,
+                                    "`category` value must be a single identifier.",
+                                )
+                            })?
+                            .clone();
+                        // `Uncategorised` is where a listing puts an
+                        // overload whose first form is not registered;
+                        // a node that had it would be indistinguishable.
+                        if ident == "Uncategorised" {
+                            return Err(syn::Error::new_spanned(
+                                &nv.value,
+                                "`Uncategorised` lists broken overload registrations; \
+                                 name the category the node belongs to.",
+                            ));
+                        }
+                        category = Some(ident);
                     }
                     "compiled_u64" => {
                         let syn::Expr::Path(p) = &nv.value else {

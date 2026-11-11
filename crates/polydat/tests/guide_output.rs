@@ -596,11 +596,27 @@ fn readmes() -> Vec<PathBuf> {
 
 /// Every install line a README gives, `polydat… = "X.Y"` or
 /// `polydat… = { version = "X.Y", … }`, names the minor version the
-/// workspace is at, so a reader who copies it gets this release.
+/// workspace is at, so a reader who copies it gets this release. Once
+/// the next minor release's porting guide is written
+/// (`guides/porting_to_X_Y_0.md`, releasing.md), the tree is that
+/// release in the making and the lines name it instead: the release
+/// gate runs before the version is bumped, and the lines must be right
+/// on both sides of the bump.
 #[test]
 fn readme_install_lines_name_the_current_release() {
     let version = env!("CARGO_PKG_VERSION");
-    let minor = version.rsplit_once('.').unwrap().0;
+    let (major, rest) = version.split_once('.').unwrap();
+    let current: u64 = rest.split_once('.').unwrap().0.parse().unwrap();
+    let next_guide = manifest_dir().join(format!(
+        "docs/guides/porting_to_{major}_{}_0.md",
+        current + 1
+    ));
+    let minor = if next_guide.exists() {
+        format!("{major}.{}", current + 1)
+    } else {
+        format!("{major}.{current}")
+    };
+    let minor = minor.as_str();
     let mut stale = Vec::new();
     for file in readmes() {
         let text = std::fs::read_to_string(&file).unwrap();

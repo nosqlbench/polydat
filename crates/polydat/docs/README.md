@@ -51,6 +51,10 @@ How the parts work and how to use them from a host program.
   version, the porting guide every minor release ships, and the steps
   of a release, including raising the internal dependency requirements so a host's
   lockfile picks up every crate the release publishes.
+- [Porting to 0.9.0](guides/porting_to_0_9_0.md): every change a host
+  sees from 0.8 to 0.9.0: the registry types that became
+  non-exhaustive, `str` printed for the string type, and mixed-width
+  vector calls computed in f64.
 - [Porting to 0.8.0](guides/porting_to_0_8_0.md): every change a host
   sees since the published 0.7.0: what stops compiling and its fix,
   vector operations at the width of their operands, signatures built

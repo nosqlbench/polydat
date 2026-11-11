@@ -1,0 +1,5 @@
+error: `Uncategorised` lists broken overload registrations; name the category the node belongs to.
+ --> tests/ui/fail/category_uncategorised.rs:1:36
+  |
+1 | #[polydat::polydat_node(category = Uncategorised)]
+  |                                    ^^^^^^^^^^^^^

@@ -1053,7 +1053,7 @@ The complete set of type keywords usable in `input x: T`, `extern x: T`,
 u64 f64  u32 i32  i64 f32  u8 i8  u16 i16  f16  u128 i128
 reg128  reg_i8x16 reg_i16x8 reg_i32x4 reg_i64x2 reg_f16x8 reg_f32x4 reg_f64x2
 bool
-str | Str | String           (three spellings; Display renders "String")
+str | Str | String           (three spellings; Display renders "str")
 bytes
 json | Json
 ext | Ext
@@ -1070,7 +1070,7 @@ vec_f32 vec_i32 vec_f64 vec_i64 vec_f16 vec_i16 vec_i8
 ```polydat
 input cycle: u64
 extern threshold: f64 = 0.5
-extern tag: String
+extern tag: str
 extern embedding: vec_f32
 ```
 
@@ -1537,8 +1537,10 @@ T-Call:        func declared (p_1: T_1, …, p_k: T_k) -> (out: U)
                ⊢  func(args)  :  U
 
 T-Call-OverloadResolve:
-               func an overload of forms S_1 … S_m; S_i the earliest
-               form agreeing with the most argument types by position
+               func an overload of forms S_1 … S_m; R the forms every
+               argument reaches, by its own type or a lossless adapter;
+               S_i the earliest form of R (of all forms, when R is
+               empty) agreeing with the most argument types by position
                ⊢  func(args)  :  U_i
 
 T-BinOp:       a : U64, b : U64   ⊢  a + b  ≡  u64_add(a, b)  :  U64
@@ -1556,9 +1558,11 @@ the catalog to be inserted. A call to an overloaded name resolves the
 same way, against the forms a node module registers for it
 (`dsl::registry::Overload`): `vec_dot` over two `vec_f64` wires builds
 `vec_dot_f64`, `vec_scale(v, 2)` over a `vec_f64` builds `vec_scale_f64`
-and widens the integer, and over operands no form agrees with,
-`vec_dot` builds its first form, `vec_dot_f32`, which the adapters then
-reach. A source's field projections come from the
+and widens the integer, `vec_dot` over a `vec_f64` and a `vec_f32`
+builds `vec_dot_f64` and widens the `vec_f32`, since the f32 form would
+narrow, and over operands that reach every form equally, such as two
+`vec_i32` lists, `vec_dot` builds its first form, `vec_dot_f32`, which
+the adapters then reach. A source's field projections come from the
 source binding's declared type, so the grammar does not enumerate them
 (§[11.2](#sec-cursors)).
 

@@ -149,32 +149,38 @@ pub fn factories() -> impl Iterator<Item = &'static dyn NodeFactory> {
 /// `vec_dot` stands for `vec_dot_f32` and `vec_dot_f64`
 /// (polydat_grammar.md §18.1, `T-Call-OverloadResolve`).
 ///
-/// A call to the name builds the form that agrees with the most of the
-/// call's wire types, position by position, and the earliest such form
-/// when several agree with as many: the form matching every type when
-/// one does. The assembler's adapters then reach the form's other
-/// ports, as they reach any node's. So `vec_scale(v, 2)` over a
-/// `vec_f64` builds the f64 form and widens the integer, rather than
-/// narrowing the vector to reach a form that takes neither operand as
-/// given. The first form is the one the name meant before it had others,
-/// so operands no form agrees with build it, and a program that
-/// compiled against the name still does. A node module submits one at
+/// A call to the name builds, among the forms every operand reaches by
+/// its own type or through a lossless adapter, the one agreeing with
+/// the most of the call's wire types, position by position, and the
+/// earliest such form when several agree with as many
+/// ([`Overload::resolve`]). The assembler's adapters then reach the
+/// form's other ports, as they reach any node's. So `vec_scale(v, 2)`
+/// over a `vec_f64` builds the f64 form and widens the integer, and
+/// `vec_dot(a_f64, b_f32)` builds the f64 form and widens `b`, rather
+/// than narrowing an operand to reach a form. The first form is the one
+/// the name meant before it had others, so operands that reach every
+/// form equally build it, and a program that compiled against the name
+/// still does. A node module submits one at
 /// link time:
 ///
 /// ```ignore
 /// polydat::inventory::submit! {
-///     polydat::dsl::registry::Overload {
-///         name: "vec_dot",
-///         forms: &[
-///             OverloadForm { wires: &[PortType::VecF32, PortType::VecF32], func: "vec_dot_f32" },
-///             OverloadForm { wires: &[PortType::VecF64, PortType::VecF64], func: "vec_dot_f64" },
+///     Overload::new(
+///         "vec_dot",
+///         &[
+///             OverloadForm::new(&[PortType::VecF32, PortType::VecF32], "vec_dot_f32"),
+///             OverloadForm::new(&[PortType::VecF64, PortType::VecF64], "vec_dot_f64"),
 ///         ],
-///     }
+///     )
 /// }
 /// ```
 ///
 /// Every form takes the same parameters in the same order, so the name's
 /// parameters are those of any form; only the wires' types differ.
+///
+/// Built with [`Overload::new`], a `const fn`, so a field added later
+/// does not break the hosts that submit one.
+#[non_exhaustive]
 pub struct Overload {
     /// The name programs call.
     pub name: &'static str,
@@ -183,7 +189,8 @@ pub struct Overload {
 }
 
 /// One form of an [`Overload`]: the registered function a call builds
-/// when its wires have these types.
+/// when its wires have these types. Built with [`OverloadForm::new`].
+#[non_exhaustive]
 pub struct OverloadForm {
     /// The port types of the form's wire inputs, in order.
     pub wires: &'static [crate::ast::PortType],
@@ -191,11 +198,33 @@ pub struct OverloadForm {
     pub func: &'static str,
 }
 
+impl OverloadForm {
+    /// The form that builds `func` for wires of the types `wires`.
+    pub const fn new(wires: &'static [crate::ast::PortType], func: &'static str) -> Self {
+        Self { wires, func }
+    }
+}
+
 inventory::collect!(Overload);
 
 impl Overload {
-    /// The function a call whose wires have `wire_types` builds: the
-    /// form agreeing with the most of them, the earliest among equals.
+    /// The overloaded name `name` of `forms`, the default first. A
+    /// node module submits it with `inventory::submit!`.
+    pub const fn new(name: &'static str, forms: &'static [OverloadForm]) -> Self {
+        Self { name, forms }
+    }
+
+    /// The function a call whose wires have `wire_types` builds.
+    ///
+    /// Among the forms every wire reaches, by its own type or through
+    /// a lossless adapter ([`auto_adapter`]), the one agreeing with the
+    /// most of the wire types, the earliest among equals. So
+    /// `vec_dot(a_f64, b_f32)` builds the f64 form and widens `b`,
+    /// rather than narrowing `a`. When no form is reachable so, the
+    /// form agreeing with the most wire types, the earliest among
+    /// equals, and the assembler names the operand it cannot connect.
+    ///
+    /// [`auto_adapter`]: crate::compile::assembly::auto_adapter
     pub fn resolve(&self, wire_types: &[crate::ast::PortType]) -> &'static str {
         let agreement = |form: &OverloadForm| {
             form.wires
@@ -204,13 +233,24 @@ impl Overload {
                 .filter(|(declared, given)| declared == given)
                 .count()
         };
-        let mut best = &self.forms[0];
-        for form in &self.forms[1..] {
-            if agreement(form) > agreement(best) {
-                best = form;
+        let reachable = |form: &OverloadForm| {
+            form.wires.iter().zip(wire_types).all(|(declared, given)| {
+                declared == given
+                    || crate::compile::assembly::auto_adapter(*given, *declared).is_some()
+            })
+        };
+        let best_of = |forms: &mut dyn Iterator<Item = &'static OverloadForm>| {
+            let mut best: Option<&'static OverloadForm> = None;
+            for form in forms {
+                if best.is_none_or(|b| agreement(form) > agreement(b)) {
+                    best = Some(form);
+                }
             }
-        }
-        best.func
+            best
+        };
+        best_of(&mut self.forms.iter().filter(|f| reachable(f)))
+            .or_else(|| best_of(&mut self.forms.iter()))
+            .map_or(self.forms[0].func, |form| form.func)
     }
 
     /// The signature of the first form, which a call to the name is
@@ -222,9 +262,12 @@ impl Overload {
         lookup_registered(self.forms[0].func)
     }
 
-    /// The category the name is listed under: its first form's.
-    pub fn category(&self) -> Option<FuncCategory> {
-        self.signature().map(|sig| sig.category)
+    /// The category the name is listed under: its first form's, or
+    /// [`FuncCategory::Uncategorised`] when the first form names no
+    /// registered function.
+    pub fn category(&self) -> FuncCategory {
+        self.signature()
+            .map_or(FuncCategory::Uncategorised, |sig| sig.category)
     }
 }
 
@@ -260,16 +303,14 @@ pub fn lookup_call(name: &str) -> Option<&'static FuncSig> {
 /// [`by_category`] leaves out, since it lists registered functions.
 /// A listing of what a program can call shows both.
 ///
-/// An overload whose first form names no registered function has no
-/// category and is left out; nothing can call it either. Those are
-/// registration errors, and [`unlisted_overloads`] names them.
+/// An overload whose first form names no registered function is
+/// listed under [`FuncCategory::Uncategorised`], last; nothing can call
+/// it, and [`unlisted_overloads`] names those registration errors.
 pub fn overloads_by_category() -> Vec<(FuncCategory, Vec<&'static Overload>)> {
     let mut groups: std::collections::HashMap<FuncCategory, Vec<&'static Overload>> =
         std::collections::HashMap::new();
     for o in overloads() {
-        if let Some(category) = o.category() {
-            groups.entry(category).or_default().push(o);
-        }
+        groups.entry(o.category()).or_default().push(o);
     }
     FuncCategory::display_order()
         .iter()
@@ -285,9 +326,10 @@ pub fn overloads_by_category() -> Vec<(FuncCategory, Vec<&'static Overload>)> {
 /// Every overload whose first form names no registered function,
 /// sorted by name: a registration error, such as a misspelled form or
 /// a form whose module is not linked. [`lookup`] answers `None` for
-/// these names and [`overloads_by_category`] leaves them out, so a
-/// host checks that this is empty, in a test or at startup, to find
-/// its own broken registrations.
+/// these names and [`overloads_by_category`] lists them under
+/// [`FuncCategory::Uncategorised`], so a host checks that this is
+/// empty, in a test or at startup, to find its own broken
+/// registrations.
 pub fn unlisted_overloads() -> Vec<&'static Overload> {
     let mut unlisted: Vec<_> = overloads().filter(|o| o.signature().is_none()).collect();
     unlisted.sort_unstable_by_key(|o| o.name);
@@ -338,7 +380,11 @@ macro_rules! register_nodes {
 /// Every native node and stdlib module belongs to exactly one category.
 /// Categories group the registry for listings (`by_category`) and provide
 /// semantic organization for documentation and discovery.
+///
+/// The set grows as the library does, so a `match` over it outside
+/// this crate needs a `_` arm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum FuncCategory {
     /// Core deterministic hashing.
     Hashing,
@@ -390,6 +436,11 @@ pub enum FuncCategory {
     Diagnostic,
     /// File-based data access: CSV, JSONL, text files.
     Data,
+    /// No category: an [`Overload`] whose first form names no
+    /// registered function, listed here by [`overloads_by_category`]
+    /// so a listing shows the broken registration instead of leaving
+    /// it out ([`unlisted_overloads`]). No registered function has it.
+    Uncategorised,
 }
 
 impl FuncCategory {
@@ -420,6 +471,7 @@ impl FuncCategory {
             Self::Context => "Context",
             Self::Diagnostic => "Diagnostic",
             Self::Data => "Data",
+            Self::Uncategorised => "Uncategorised",
         }
     }
 
@@ -452,6 +504,7 @@ impl FuncCategory {
             "context" => Some(Self::Context),
             "diagnostic" | "diagnostics" | "debug" => Some(Self::Diagnostic),
             "data" | "datafile" | "csv" | "jsonl" => Some(Self::Data),
+            "uncategorised" | "uncategorized" => Some(Self::Uncategorised),
             _ => None,
         }
     }
@@ -483,6 +536,7 @@ impl FuncCategory {
             Self::Context,
             Self::Diagnostic,
             Self::Data,
+            Self::Uncategorised,
         ]
     }
 }
@@ -979,33 +1033,42 @@ mod tests {
     }
 
     #[test]
-    fn overloads_by_category_lists_every_overload_but_the_unlisted_once() {
+    fn overloads_by_category_lists_every_overload_once() {
         let listed: usize = overloads_by_category().iter().map(|(_, o)| o.len()).sum();
-        assert_eq!(listed + unlisted_overloads().len(), overloads().count());
+        assert_eq!(listed, overloads().count());
     }
 
     // An overload whose first form is not registered, as a host's
     // misspelled registration would be.
     inventory::submit! {
-        Overload {
-            name: "registry_test_misspelled_overload",
-            forms: &[OverloadForm {
-                wires: &[crate::ast::PortType::U64],
-                func: "registry_test_no_such_function",
-            }],
-        }
+        Overload::new(
+            "registry_test_misspelled_overload",
+            &[OverloadForm::new(
+                &[crate::ast::PortType::U64],
+                "registry_test_no_such_function",
+            )],
+        )
     }
 
     #[test]
-    fn an_overload_of_no_registered_function_is_unlisted_and_uncallable() {
+    fn an_overload_of_no_registered_function_is_uncategorised_and_uncallable() {
         let name = "registry_test_misspelled_overload";
         let unlisted: Vec<_> = unlisted_overloads().iter().map(|o| o.name).collect();
         assert_eq!(unlisted, [name]);
         assert!(lookup(name).is_none());
+        let (category, names) = overloads_by_category()
+            .pop()
+            .expect("the misspelled overload is listed");
+        assert_eq!(category, FuncCategory::Uncategorised);
+        assert_eq!(names.iter().map(|o| o.name).collect::<Vec<_>>(), [name]);
+    }
+
+    #[test]
+    fn no_registered_function_is_uncategorised() {
         assert!(
-            overloads_by_category()
+            registry()
                 .iter()
-                .all(|(_, names)| names.iter().all(|o| o.name != name))
+                .all(|sig| sig.category != FuncCategory::Uncategorised)
         );
     }
 

@@ -48,8 +48,11 @@ crate makes Cargo move the host's lockfile to that version.
 1. **Write the porting guide** (a minor release only). Write
    `crates/polydat/docs/guides/porting_to_X_Y_0.md`, add it to the
    Guides list in `crates/polydat/docs/README.md`, newest first,
-   regenerate the indexes with `ct okf gen-index --recursive`, and
-   commit it.
+   regenerate the indexes with `ct okf gen-index --recursive`, set the
+   READMEs' install lines to `X.Y`, and commit it. From the guide's
+   commit on, the tree is the X.Y.0 release in the making, and the
+   README test requires the install lines to name it, so they are
+   right before the release bumps the version and after.
 2. **Run the engine ladder** after a change to the closure-tier,
    native, or pure-native evaluation loops, against a same-hour
    baseline ([Engine-ladder performance](performance.md)). The release

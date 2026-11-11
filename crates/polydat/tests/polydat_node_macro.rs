@@ -1529,7 +1529,7 @@ fn an_extract_mismatch_names_the_node_and_both_types() {
         .unwrap_or_default();
     for part in [
         "macro_pilot_owned_len",
-        "Wire<String>::extract: expected String, got u64",
+        "Wire<String>::extract: expected str, got u64",
         "internal error",
     ] {
         assert!(message.contains(part), "lacks {part:?}:\n{message}");
@@ -1557,7 +1557,7 @@ fn a_string_into_a_handle_port_without_a_resolver_is_a_type_error() {
         Err(e) => e,
     };
     assert!(
-        err.contains("type mismatch: cannot connect String output to handle input"),
+        err.contains("type mismatch: cannot connect str output to handle input"),
         "the error names both types: {err}"
     );
 }
