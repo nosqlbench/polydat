@@ -1543,7 +1543,7 @@ dependencies = [
 
 [[package]]
 name = "polydat"
-version = "0.8.2"
+version = "0.9.0"
 dependencies = [
  "clap",
  "criterion",
@@ -1563,7 +1563,7 @@ dependencies = [
 
 [[package]]
 name = "polydat-core"
-version = "0.8.2"
+version = "0.9.0"
 dependencies = [
  "base64",
  "cranelift-codegen",
@@ -1591,7 +1591,7 @@ dependencies = [
 
 [[package]]
 name = "polydat-derive"
-version = "0.8.2"
+version = "0.9.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1600,7 +1600,7 @@ dependencies = [
 
 [[package]]
 name = "polydat-grammar"
-version = "0.8.2"
+version = "0.9.0"
 dependencies = [
  "layout-rs",
  "serde",
@@ -1610,7 +1610,7 @@ dependencies = [
 
 [[package]]
 name = "polydat-nodes"
-version = "0.8.2"
+version = "0.9.0"
 dependencies = [
  "base64",
  "data-encoding",
@@ -3199,7 +3199,7 @@ checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 
 [[package]]
 name = "xtask"
-version = "0.8.2"
+version = "0.9.0"
 
 [[package]]
 name = "xxhash-rust"
