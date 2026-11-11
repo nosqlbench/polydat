@@ -176,8 +176,9 @@ impl PolydatRuntime {
     }
 
     /// The overloads whose first form names no registered function,
-    /// which [`Self::overloads_by_category`] leaves out: registration
-    /// errors a host checks for ([`crate::dsl::registry::unlisted_overloads`]).
+    /// which [`Self::overloads_by_category`] lists last, under
+    /// [`FuncCategory::Uncategorised`]: registration errors a host
+    /// checks for ([`crate::dsl::registry::unlisted_overloads`]).
     pub fn unlisted_overloads(&self) -> Vec<&'static crate::dsl::registry::Overload> {
         crate::dsl::registry::unlisted_overloads()
     }
