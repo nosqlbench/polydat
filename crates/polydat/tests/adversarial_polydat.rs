@@ -513,7 +513,7 @@ fn extern_f64_input() {
 fn extern_string_input() {
     let src = r#"
         input cycle: u64
-        extern label: String
+        extern label: str
     "#;
     let kernel = compile_polydat_interpreter(src).unwrap();
     assert!(kernel.program().find_input("label").is_some());

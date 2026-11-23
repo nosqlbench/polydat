@@ -791,7 +791,7 @@ pub struct TypedParam {
     /// The parameter's name.
     pub name: String,
     /// The declared type keyword.
-    pub typ: String, // "u64", "f64", "String", "bytes", etc.
+    pub typ: String, // "u64", "f64", "str", "bytes", etc.
 }
 
 /// A formal module definition with typed interface.

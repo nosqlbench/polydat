@@ -2233,7 +2233,7 @@ mod tests {
             crate::dsl::compile::compile_polydat_interpreter("const k_values := \"1, 10\"\n")
                 .unwrap();
         let child_program =
-            crate::dsl::compile::compile_polydat_interpreter("extern k_values: String\n")
+            crate::dsl::compile::compile_polydat_interpreter("extern k_values: str\n")
                 .unwrap()
                 .program()
                 .clone();

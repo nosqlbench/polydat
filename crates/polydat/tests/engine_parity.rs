@@ -1173,7 +1173,7 @@ fn independent_chains_are_separate_native_segments() {
 fn set_inputs_never_reaches_past_the_coordinates() {
     use polydat::dsl::compile::compile_polydat_with;
     use polydat::{Engine, JitMode, Provenance};
-    let src = "extern n: u64 = 7\nextern s: String = \"text\"\nout := n\nlabel := \"{s}\"\n";
+    let src = "extern n: u64 = 7\nextern s: str = \"text\"\nout := n\nlabel := \"{s}\"\n";
     let mut engines = vec![
         Engine::Interpreter(JitMode::Off),
         Engine::Interpreter(JitMode::Auto),

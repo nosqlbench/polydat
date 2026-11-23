@@ -87,7 +87,7 @@ fn build_weighted_str_cache(spec: &str) -> WeightedStrCache {
 
 /// Weighted string selection from an inline spec.
 ///
-/// Signature: `weighted_strings(input: u64, spec: &str) -> String`
+/// Signature: `weighted_strings(input: u64, spec: &str) -> str`
 ///
 /// Spec format: `"alpha:0.3;beta:0.5;gamma:0.2"`. The input is
 /// expected to be a hashed u64 so the alias-method sampling sees
@@ -416,7 +416,7 @@ fn dynamic_weighted_compiled(
 
 /// Dynamic weighted selection where the weight spec is a wire input.
 ///
-/// Signature: `dynamic_weighted_select(selector: u64, weights_spec: Str) -> Str`
+/// Signature: `dynamic_weighted_select(selector: u64, weights_spec: str) -> str`
 ///
 /// Unlike `WeightedStrings` (which parses weights at init time and
 /// builds the alias table once), this node accepts the weight spec

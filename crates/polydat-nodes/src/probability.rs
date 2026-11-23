@@ -233,7 +233,7 @@ pub use polydat::numeric::n_of_m::n_of_m_eval;
 
 /// Uniform selection from N constant string values.
 ///
-/// Signature: `one_of(input: u64, values...) -> String`
+/// Signature: `one_of(input: u64, values...) -> str`
 ///
 /// Takes one wire input (u64) and N constant string values captured at
 /// construction time. Hashes the input, takes mod N, and returns the
@@ -328,7 +328,7 @@ impl WeightedTable {
 
 /// Weighted selection from a spec string, returning a String.
 ///
-/// Signature: `one_of_weighted(input: u64, spec: &str) -> String`
+/// Signature: `one_of_weighted(input: u64, spec: &str) -> str`
 ///
 /// The `spec` parameter is an init-time constant string with the format
 /// `"value:weight,value:weight,..."`. Weights are positive numbers that

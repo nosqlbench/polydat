@@ -388,7 +388,7 @@ impl<P> SubcontextBuilder<P> {
         // collapses to a `Str` carrier which downstream
         // string predicates (regex_match, etc.) consume.
         let magic_externs: &[(&str, PortType, &str)] = &[
-            ("body", PortType::Json, "Json"),
+            ("body", PortType::Json, "json"),
             ("count", PortType::U64, "u64"),
             ("ok", PortType::Bool, "bool"),
         ];

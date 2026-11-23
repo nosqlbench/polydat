@@ -433,12 +433,12 @@ impl PortType {
 
     /// Parse a polydat type keyword into a `PortType`.
     ///
-    /// Inverse of [`Self::to_keyword`]: accepts every keyword
-    /// that `to_keyword` emits, plus a small set of legacy aliases
-    /// (`"String"`, `"Json"`, `"Ext"`) that survive in older
-    /// hand-written workload source. Returns `None` for any
-    /// unrecognized keyword so callers can surface a loud
-    /// diagnostic rather than silently coercing to a default.
+    /// Inverse of [`Self::to_keyword`]: accepts exactly the keywords
+    /// `to_keyword` emits, one per type. Returns `None` for any other
+    /// name so callers can surface a loud diagnostic rather than
+    /// silently coercing to a default; for a spelling polydat retired,
+    /// such as `String`, [`Self::retired_keyword`] names the keyword
+    /// that replaced it.
     ///
     /// Used by the DSL `extern <name>: <keyword>` parser
     /// (`polydat-core/src/dsl/compile.rs`). Round-trips cleanly with
@@ -467,10 +467,10 @@ impl PortType {
             "reg_f32x4" => Some(Self::RegF32x4),
             "reg_f64x2" => Some(Self::RegF64x2),
             "bool" => Some(Self::Bool),
-            "str" | "Str" | "String" => Some(Self::Str),
+            "str" => Some(Self::Str),
             "bytes" => Some(Self::Bytes),
-            "json" | "Json" => Some(Self::Json),
-            "ext" | "Ext" => Some(Self::Ext),
+            "json" => Some(Self::Json),
+            "ext" => Some(Self::Ext),
             "handle" => Some(Self::Handle),
             "vec_f32" => Some(Self::VecF32),
             "vec_i32" => Some(Self::VecI32),
@@ -482,6 +482,39 @@ impl PortType {
             "dyn" => Some(Self::Dyn),
             _ => None,
         }
+    }
+
+    /// The keyword that replaced `name`, when `name` is a type
+    /// spelling polydat accepted before 0.10.0 and no longer does:
+    /// `String` and `Str` (now `str`), `Json` (now `json`) and `Ext`
+    /// (now `ext`). `None` for any other name, keywords included.
+    ///
+    /// The parser uses it to refuse a retired spelling with the
+    /// keyword to write instead; a host that parses type names
+    /// itself, through [`Self::from_keyword`], can do the same.
+    ///
+    /// ```
+    /// use polydat_grammar::PortType;
+    ///
+    /// assert_eq!(PortType::retired_keyword("String"), Some("str"));
+    /// assert_eq!(PortType::retired_keyword("str"), None);
+    /// assert_eq!(PortType::from_keyword("String"), None);
+    /// ```
+    pub fn retired_keyword(name: &str) -> Option<&'static str> {
+        match name {
+            "String" | "Str" => Some("str"),
+            "Json" => Some("json"),
+            "Ext" => Some("ext"),
+            _ => None,
+        }
+    }
+
+    /// The diagnostic for a retired type spelling: "`String` is no
+    /// longer a type keyword; write `str`", or `None` when `name` is
+    /// not one ([`Self::retired_keyword`]).
+    pub fn retired_keyword_message(name: &str) -> Option<String> {
+        Self::retired_keyword(name)
+            .map(|keyword| format!("`{name}` is no longer a type keyword; write `{keyword}`"))
     }
 
     /// Workload-author-facing parser for the `{name:<keyword>}`

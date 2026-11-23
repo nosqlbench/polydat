@@ -652,7 +652,7 @@ extern base_epoch_ms: u64 = 1700000000000
 const dataset := "iot-readings-toy"
 const schema_stmt := "CREATE TABLE toy.readings (...)"
 
-reading_model(seed: u64) -> (temp_c: f64, humidity: f64, status: String) := {
+reading_model(seed: u64) -> (temp_c: f64, humidity: f64, status: str) := {
     temp_c   := normal_sample(input: seed, mean: 21.5, stddev: 2.0)
     humidity := uniform_sample(input: hash(seed), min: 30.0, max: 70.0)
     status   := weighted_strings(hash(hash(seed)), "ok:0.97;degraded:0.02;error:0.01")

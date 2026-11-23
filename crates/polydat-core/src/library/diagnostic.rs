@@ -17,7 +17,7 @@ use crate::ast::Value;
 
 /// Emit the type name of the input value as a string.
 ///
-/// Signature: `(input: any) -> (String)`
+/// Signature: `(input: any) -> (str)`
 ///
 /// Returns the port type's display name (`u64`, `f64`, `bool`,
 /// `String`, `bytes`, `json`, `vec_f32`, …).

@@ -88,7 +88,7 @@ fn const_u64(value: crate::derive_support::Const<u64>) -> u64 {
 
 /// Emit a fixed string value (no inputs).
 ///
-/// Signature: `const_str(value: String) -> (Arc<str>)`
+/// Signature: `const_str(value: str) -> (Arc<str>)`
 ///
 /// Source node that always produces the same string regardless of cycle.
 /// Use for injecting literal string parameters into a DAG, such as a

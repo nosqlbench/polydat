@@ -3,6 +3,7 @@
 * [Compilation Levels](compilation.md) - The interpreter, the closure tier, the hybrid kernel, and native code: features and trade-offs.
 * [Embedding Polydat](embedding.md) - What a host owns and what polydat owns, the APIs for compiling, driving, sharing, and extending a kernel, and the extension points.
 * [Engine-ladder performance](performance.md) - One typed graph and one tile measured on all four engines, with the measurement contract, correctness gate, and benchmark commands.
+* [Porting to 0.10.0](porting_to_0_10_0.md) - The 0.10.0 release notes as a host reads them, covering every change since 0.9.0: what stops compiling and its fix, the behavior that changes quietly, the new capabilities, and the known issues.
 * [Porting to 0.3.2](porting_to_0_3_2.md) - Every surface change from 0.3.1: the renames a host applies, the type change that fails elsewhere, and the decisions polydat stopped making for a host.
 * [Porting to 0.5.0](porting_to_0_5_0.md) - The 0.5.0 release notes as a host reads them: breaking changes and fixes, deprecated healing writes and their replacements, quiet corrections, and known issues.
 * [Porting to 0.6.0](porting_to_0_6_0.md) - The 0.6.0 release notes as a host reads them, covering every change since the published 0.5.0: what stops compiling and its fix, the behavior that changes quietly, the new capabilities, and the known issues.

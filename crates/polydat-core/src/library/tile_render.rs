@@ -1140,7 +1140,7 @@ pub fn encode_ref<W: std::fmt::Write>(value: ValueRef<'_>, enc: &HoleEncoding, o
                 ("json", ValueRef::Json(j)) => {
                     let _ = write!(out, "{j}");
                 }
-                ("str", _) | ("String", _) | ("string", _) => {
+                ("str", _) | ("string", _) => {
                     out.put_char('"');
                     push_json_escaped(&text, out);
                     out.put_char('"');

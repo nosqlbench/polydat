@@ -1053,10 +1053,10 @@ The complete set of type keywords usable in `input x: T`, `extern x: T`,
 u64 f64  u32 i32  i64 f32  u8 i8  u16 i16  f16  u128 i128
 reg128  reg_i8x16 reg_i16x8 reg_i32x4 reg_i64x2 reg_f16x8 reg_f32x4 reg_f64x2
 bool
-str | Str | String           (three spellings; Display renders "str")
+str
 bytes
-json | Json
-ext | Ext
+json
+ext
 handle
 vec_f32 vec_i32 vec_f64 vec_i64 vec_f16 vec_i16 vec_i8
 ```
@@ -1066,6 +1066,12 @@ vec_f32 vec_i32 vec_f64 vec_i64 vec_f16 vec_i16 vec_i8
 > raw `reg128`. There is **no `f128`** (stable Rust has no such type) and
 > **no `none`** keyword (`None` is a runtime `Value` sentinel, not a
 > type). An unknown keyword is a loud diagnostic, never a silent default.
+> Each type has exactly one keyword, the one `Display` and
+> `PortType::to_keyword` print. The capitalised spellings polydat
+> accepted before 0.10.0 (`String` and `Str`, `Json`, `Ext`) are refused
+> wherever a type is named, with the keyword to write instead:
+> `` `String` is no longer a type keyword; write `str` ``
+> (`PortType::retired_keyword`).
 
 ```polydat
 input cycle: u64

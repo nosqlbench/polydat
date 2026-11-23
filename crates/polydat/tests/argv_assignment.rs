@@ -22,7 +22,7 @@ fn compile(
     compile_ast_interpreter_with_options(&ast, src, &CompileOptions::default(), None)
 }
 
-const SRC: &str = "input cycle: u64\ninput seed: u64\nextern interval_ms: u64 = 1000\nextern label: String = \"x\"\nextern scale: f64 = 1.0\nextern on: bool = false\nts := cycle * interval_ms + seed\nout := \"{label}:{scale}:{on}\"";
+const SRC: &str = "input cycle: u64\ninput seed: u64\nextern interval_ms: u64 = 1000\nextern label: str = \"x\"\nextern scale: f64 = 1.0\nextern on: bool = false\nts := cycle * interval_ms + seed\nout := \"{label}:{scale}:{on}\"";
 
 #[test]
 fn string_text_fuses_to_declared_extern_types() {

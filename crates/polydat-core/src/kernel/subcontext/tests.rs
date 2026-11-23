@@ -944,7 +944,7 @@ fn shared_cell_cascade_survives_for_iteration_through_silent_intermediates() {
         PolydatKernel::for_iteration(&Arc::new(scenario_canon), &Arc::new(root_kernel), &[]);
 
     // for_each scope: iter-var only.
-    let foreach_program = compile_polydat_interpreter("input cycle: u64\nextern profile: String\n")
+    let foreach_program = compile_polydat_interpreter("input cycle: u64\nextern profile: str\n")
         .expect("for_each compile")
         .program()
         .clone();
@@ -1937,12 +1937,12 @@ fn a_computed_const_that_shadows_a_param_is_what_the_scope_below_reads() {
         matter.build_under(parent).expect("subscope")
     };
     let root = compile("const mode := \"default\"\nconst size := \"small\"\n");
-    let phase_src = "input cycle: u64\nextern mode: String\nextern size: String\n";
+    let phase_src = "input cycle: u64\nextern mode: str\nextern size: str\n";
 
     // Computed and shadowing: the case under test.
     let set = under(
         &root,
-        "extern size: String\nconst mode := \"mode_for_{size}\"\n",
+        "extern size: str\nconst mode := \"mode_for_{size}\"\n",
     );
     assert_eq!(
         lookup(set.as_ref(), "mode"),
@@ -1962,10 +1962,10 @@ fn a_computed_const_that_shadows_a_param_is_what_the_scope_below_reads() {
         lookup(under(literal.as_ref(), phase_src).as_ref(), "mode"),
         Some(Value::Str("lit".into()))
     );
-    let fresh = under(&root, "extern size: String\nconst other := \"o_{size}\"\n");
+    let fresh = under(&root, "extern size: str\nconst other := \"o_{size}\"\n");
     assert_eq!(
         lookup(
-            under(fresh.as_ref(), "input cycle: u64\nextern other: String\n").as_ref(),
+            under(fresh.as_ref(), "input cycle: u64\nextern other: str\n").as_ref(),
             "other"
         ),
         Some(Value::Str("o_small".into()))

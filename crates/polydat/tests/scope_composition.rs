@@ -800,7 +800,7 @@ fn extern_default_string_literal() {
     let kernel = compile_polydat_interpreter(
         r#"
         input cycle: u64
-        extern name: String = "guest"
+        extern name: str = "guest"
     "#,
     )
     .unwrap();
@@ -1123,7 +1123,7 @@ fn shared_last_write_wins_under_concurrent_writers() {
     let a_program = compile_polydat_interpreter(
         r#"
         input cycle: u64
-        extern status: String
+        extern status: str
     "#,
     )
     .unwrap()
@@ -1132,7 +1132,7 @@ fn shared_last_write_wins_under_concurrent_writers() {
     let b_program = compile_polydat_interpreter(
         r#"
         input cycle: u64
-        extern status: String
+        extern status: str
     "#,
     )
     .unwrap()

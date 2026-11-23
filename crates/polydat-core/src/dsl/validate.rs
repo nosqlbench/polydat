@@ -251,9 +251,7 @@ pub(crate) fn literal_type(expr: &Expr) -> Option<String> {
 /// Check if a literal type is compatible with a declared parameter type.
 ///
 /// Both sides are type keywords and compare as the port types they
-/// name, so a module may spell a string parameter `str` as inputs and
-/// externs do, or `String` as the library modules have; the two are one
-/// type. A `u64` literal may feed an `f64` parameter (widening).
+/// name. A `u64` literal may feed an `f64` parameter (widening).
 pub(crate) fn types_compatible(lit_type: &str, declared: &str) -> bool {
     use crate::ast::PortType;
     match (

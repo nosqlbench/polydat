@@ -10,7 +10,7 @@
 /// Map a u64 to a formatted string via mixed-radix indexing into
 /// character sets.
 ///
-/// Signature: `combinations(input: u64, pattern: &str) -> (String)`
+/// Signature: `combinations(input: u64, pattern: &str) -> (str)`
 ///
 /// The pattern is a semicolon-delimited list of character set specs.
 /// Each spec is a character range (`A-Z`), literal characters, or
@@ -135,7 +135,7 @@ fn parse_charset(spec: &str) -> Vec<char> {
 
 /// Convert a u64 to its English word representation.
 ///
-/// Signature: `number_to_words(input: u64) -> (String)`
+/// Signature: `number_to_words(input: u64) -> (str)`
 ///
 /// Examples: 0 produces "zero", 42 produces "forty-two", 1000
 /// produces "one thousand". Supports the full u64 range up through
@@ -259,7 +259,7 @@ fn append_chunk_to_words(buf: &mut String, n: u32) {
 /// fills the 128 UUID bits with version (4) and variant
 /// (RFC 4122) bits set per spec.
 ///
-/// Signature: `hashed_uuid(input: u64) -> (String)`
+/// Signature: `hashed_uuid(input: u64) -> (str)`
 #[polydat::polydat_node(category = String)]
 fn hashed_uuid(input: u64) -> String {
     // Two hashes fill 128 bits.
@@ -303,7 +303,7 @@ fn hashed_uuid(input: u64) -> String {
 /// The seed is hashed and used to index into the charset repeatedly.
 /// Same seed + charset + length always produces the same string.
 ///
-/// Signature: `char_buf(seed: u64, charset: &str, length: u64) -> (String)`
+/// Signature: `char_buf(seed: u64, charset: &str, length: u64) -> (str)`
 /// Expand a charset spec like "A-Za-z0-9" into a Vec<char>.
 /// Setup helper for `char_buf`.
 fn expand_charset(charset: &str) -> Vec<char> {
@@ -401,7 +401,7 @@ fn file_line_at(
 /// Used by the DSL desugar of `+` between Str-typed operands; also
 /// callable directly as `str_concat(a, b, c, ...)`.
 ///
-/// Signature: `str_concat(in_0, in_1, ...) -> (String)`
+/// Signature: `str_concat(in_0, in_1, ...) -> (str)`
 /// Concatenate N values, rendering each as its display form.
 /// Variadic over `&[Value]`: the body stringifies
 /// per element so mixed-type inputs (Str + U64 + Bool, etc.)
@@ -433,7 +433,7 @@ fn str_concat(parts: &[polydat::ast::Value]) -> String {
 
 /// Fold a string to lowercase (`str.to_lowercase()` semantics).
 ///
-/// Signature: `str_lower(input: Str) -> (Str)`
+/// Signature: `str_lower(input: str) -> (str)`
 ///
 /// Takes `String`; non-Str upstream wires reach it through
 /// assembler-inserted Str adapters (e.g. polyfill U64ToStr), not
@@ -445,7 +445,7 @@ fn str_lower(input: String) -> String {
 
 /// Fold a string to uppercase (`str.to_uppercase()` semantics).
 ///
-/// Signature: `str_upper(input: Str) -> (Str)`
+/// Signature: `str_upper(input: str) -> (str)`
 #[polydat::polydat_node(category = String)]
 fn str_upper(input: String) -> String {
     input.to_uppercase()

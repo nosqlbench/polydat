@@ -133,6 +133,22 @@ impl Parser {
         }
     }
 
+    /// Expect a type name: an identifier, refused when it is a type
+    /// spelling polydat retired ([`crate::PortType::retired_keyword`]),
+    /// with the keyword to write instead. Any other unknown name is
+    /// left to the stage that resolves it, which names its context.
+    fn expect_type_name(&mut self) -> Result<String, String> {
+        let span = self.span();
+        let name = self.expect_ident()?;
+        match crate::PortType::retired_keyword_message(&name) {
+            Some(message) => Err(format!(
+                "{message} (at line {}, col {})",
+                span.line, span.col
+            )),
+            None => Ok(name),
+        }
+    }
+
     fn at_eof(&self) -> bool {
         matches!(self.peek(), TokenKind::Eof)
     }
@@ -567,7 +583,7 @@ fn parse_module_def(p: &mut Parser) -> Result<Statement, String> {
     while !matches!(p.peek(), TokenKind::RParen) {
         let pname = p.expect_ident()?;
         p.expect(&TokenKind::Colon)?;
-        let ptype = p.expect_ident()?;
+        let ptype = p.expect_type_name()?;
         params.push(TypedParam {
             name: pname,
             typ: ptype,
@@ -585,7 +601,7 @@ fn parse_module_def(p: &mut Parser) -> Result<Statement, String> {
     while !matches!(p.peek(), TokenKind::RParen) {
         let oname = p.expect_ident()?;
         p.expect(&TokenKind::Colon)?;
-        let otype = p.expect_ident()?;
+        let otype = p.expect_type_name()?;
         outputs.push(TypedParam {
             name: oname,
             typ: otype,
@@ -622,7 +638,7 @@ fn parse_extern_port(p: &mut Parser) -> Result<Statement, String> {
 
     let name = p.expect_ident()?;
     p.expect(&TokenKind::Colon)?;
-    let typ = p.expect_ident()?;
+    let typ = p.expect_type_name()?;
 
     // Optional default: = expr
     let default = if matches!(p.peek(), TokenKind::Eq) {
@@ -669,7 +685,7 @@ fn parse_input_decl(p: &mut Parser, out: &mut Vec<Statement>) -> Result<(), Stri
             let name = p.expect_ident()?;
             let ty = if matches!(p.peek(), TokenKind::Colon) {
                 p.advance();
-                Some(p.expect_ident()?)
+                Some(p.expect_type_name()?)
             } else {
                 None
             };
@@ -687,7 +703,7 @@ fn parse_input_decl(p: &mut Parser, out: &mut Vec<Statement>) -> Result<(), Stri
         let name = p.expect_ident()?;
         let ty = if matches!(p.peek(), TokenKind::Colon) {
             p.advance();
-            Some(p.expect_ident()?)
+            Some(p.expect_type_name()?)
         } else {
             None
         };
@@ -786,7 +802,7 @@ fn parse_cycle_binding_with_modifier(
     // so it is rejected elsewhere rather than silently ignored.
     let type_annotation = if matches!(p.peek(), TokenKind::Colon) {
         p.advance(); // consume ':'
-        let typ = p.expect_ident()?;
+        let typ = p.expect_type_name()?;
         if !modifier.is_shared() {
             return Err(format!(
                 "type annotation `{name}: {typ}` is only supported on `shared`                  bindings (it pins the shared cell's type). For a plain typed                  slot use `extern {name}: {typ} = …` at line {}, col {}",
@@ -950,8 +966,10 @@ fn parse_postfix_as(p: &mut Parser, mut expr: Expr) -> Result<Expr, String> {
             other => return Err(format!("expected a type name after `as`, found {other:?}")),
         };
         p.advance(); // consume the type name
-        let port_type = crate::PortType::from_keyword(&ty_name)
-            .ok_or_else(|| format!("unknown type `{ty_name}` in `... as {ty_name}` cast"))?;
+        let port_type = crate::PortType::from_keyword(&ty_name).ok_or_else(|| {
+            crate::PortType::retired_keyword_message(&ty_name)
+                .unwrap_or_else(|| format!("unknown type `{ty_name}` in `... as {ty_name}` cast"))
+        })?;
         expr = Expr::Cast(Box::new(expr), port_type, span);
     }
     Ok(expr)
@@ -1458,6 +1476,47 @@ mod tests {
         match &f.statements[0] {
             Statement::Binding(b) => b.modifier,
             other => panic!("expected cycle binding, got {other:?}"),
+        }
+    }
+
+    /// Every place a type is named refuses the spellings retired in
+    /// 0.10.0 with the keyword to write instead, and accepts that
+    /// keyword.
+    #[test]
+    fn a_retired_type_spelling_is_refused_with_its_keyword_everywhere_a_type_is_named() {
+        let positions = [
+            ("extern x: {T}\n", "extern x: {K}\n"),
+            ("input x: {T}\n", "input x: {K}\n"),
+            ("input (a: u64, x: {T})\n", "input (a: u64, x: {K})\n"),
+            (
+                "m(a: {T}) -> (b: u64) := {\n b := 1\n}\n",
+                "m(a: {K}) -> (b: u64) := {\n b := 1\n}\n",
+            ),
+            (
+                "m(a: u64) -> (b: {T}) := {\n b := 1\n}\n",
+                "m(a: u64) -> (b: {K}) := {\n b := 1\n}\n",
+            ),
+            ("shared x: {T} := 1\n", "shared x: {K} := 1\n"),
+            ("y := x as {T}\n", "y := x as {K}\n"),
+            ("tile t := \"${x:{T}}\"\n", "tile t := \"${x:{K}}\"\n"),
+        ];
+        for (retired, keyword) in [
+            ("String", "str"),
+            ("Str", "str"),
+            ("Json", "json"),
+            ("Ext", "ext"),
+        ] {
+            for (refused, accepted) in positions {
+                let refused = refused.replace("{T}", retired);
+                let err = parse_str_err(&refused);
+                assert!(
+                    err.contains(&format!(
+                        "`{retired}` is no longer a type keyword; write `{keyword}`"
+                    )),
+                    "{refused:?}: {err}"
+                );
+                parse_str(&accepted.replace("{K}", keyword));
+            }
         }
     }
 

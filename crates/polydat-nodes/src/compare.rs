@@ -113,7 +113,7 @@ fn select_u64(cond: u64, a: u64, b: u64) -> u64 {
 
 /// Equality of two String wires. Returns 1 if equal else 0.
 ///
-/// Signature: `str_eq(a: String, b: String) -> (u64)`
+/// Signature: `str_eq(a: str, b: str) -> (u64)`
 #[polydat::polydat_node(category = Comparison)]
 fn str_eq(a: &str, b: &str) -> u64 {
     if a == b { 1 } else { 0 }
@@ -121,7 +121,7 @@ fn str_eq(a: &str, b: &str) -> u64 {
 
 /// Inequality of two String wires.
 ///
-/// Signature: `str_ne(a: String, b: String) -> (u64)`
+/// Signature: `str_ne(a: str, b: str) -> (u64)`
 #[polydat::polydat_node(category = Comparison)]
 fn str_ne(a: &str, b: &str) -> u64 {
     if a != b { 1 } else { 0 }

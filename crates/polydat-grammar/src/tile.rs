@@ -144,6 +144,12 @@ impl TemplateParser<'_> {
         let mut decl_type = None;
         if let Some(idx) = rfind_top_level(&body, ':')
             && let Some(kw) = body.get(idx + 1..).map(str::trim)
+            && let Some(message) = PortType::retired_keyword_message(kw)
+        {
+            return Err(self.err(&format!("hole `{text}`: {message}")));
+        }
+        if let Some(idx) = rfind_top_level(&body, ':')
+            && let Some(kw) = body.get(idx + 1..).map(str::trim)
             && PortType::from_keyword(kw).is_some()
         {
             decl_type = Some(kw.to_string());

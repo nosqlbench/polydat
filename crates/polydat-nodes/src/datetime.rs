@@ -58,7 +58,7 @@ impl EpochOffset {
 
 /// Format an epoch-millis u64 as an ISO-8601-like timestamp string.
 ///
-/// Signature: `(input: u64) -> (String)`
+/// Signature: `(input: u64) -> (str)`
 ///
 /// Produces: `"YYYY-MM-DDThh:mm:ss.mmmZ"`
 /// Uses a simple arithmetic calendar (no timezone, no leap second handling).

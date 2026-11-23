@@ -342,7 +342,7 @@ mod tests {
 
     #[test]
     fn round_trip_extern() {
-        round_trip("extern dataset: String\n");
+        round_trip("extern dataset: str\n");
     }
 
     #[test]

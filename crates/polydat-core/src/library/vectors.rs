@@ -721,7 +721,7 @@ fn neighbor_count(handle: Facet<NeighborIndicesFacet>) -> u64 {
 /// "EUCLIDEAN"). Operates on the dataset group; takes a group or
 /// prebuffered handle.
 ///
-/// Signature: `dataset_distance_function(group) -> (String)`
+/// Signature: `dataset_distance_function(group) -> (str)`
 #[crate::polydat_node(category = RealData)]
 fn dataset_distance_function(group: Group) -> String {
     let group = group.resolve_group();
@@ -829,7 +829,7 @@ fn metadata_results_count(handle: Facet<MetadataResultsFacet>) -> u64 {
 /// a dataset group as a comma-separated list. Expects a group or
 /// prebuffered handle.
 ///
-/// Signature: `dataset_facets(group) -> (String)`
+/// Signature: `dataset_facets(group) -> (str)`
 #[crate::polydat_node(category = RealData)]
 fn dataset_facets(group: Group) -> String {
     let group = group.resolve_group();
@@ -871,7 +871,7 @@ fn dataset_profile_count(group: Group) -> u64 {
 /// Comma-separated list of all profile names in canonical sort
 /// order (by base_count).
 ///
-/// Signature: `dataset_profile_names(group) -> (String)`
+/// Signature: `dataset_profile_names(group) -> (str)`
 #[crate::polydat_node(category = RealData)]
 fn dataset_profile_names(group: Group) -> String {
     group.resolve_group().profile_names().join(", ")
@@ -879,7 +879,7 @@ fn dataset_profile_names(group: Group) -> String {
 
 /// Return profile names matching a prefix, comma-separated.
 ///
-/// Signature: `matching_profiles(group, prefix: str) -> (String)`
+/// Signature: `matching_profiles(group, prefix: str) -> (str)`
 ///
 /// If prefix is empty, returns all profiles. Used by `for_each:`
 /// phase templates to discover profiles dynamically.
@@ -973,7 +973,7 @@ fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
 
 /// Look up a profile name by index from the canonical sorted list.
 ///
-/// Signature: `dataset_profile_name_at(group, index: u64) -> (String)`
+/// Signature: `dataset_profile_name_at(group, index: u64) -> (str)`
 ///
 /// Index wraps modulo the number of profiles.
 #[crate::polydat_node(category = RealData)]
@@ -1013,7 +1013,7 @@ fn profile_base_count(
 
 /// Return the comma-separated facet list for the profile at a given index.
 ///
-/// Signature: `profile_facets(group, index: u64) -> (String)`
+/// Signature: `profile_facets(group, index: u64) -> (str)`
 #[crate::polydat_node(category = RealData)]
 fn profile_facets(
     group: crate::derive_support::Resolved<crate::derive_support::GroupResolver, DatasetHandle>,
@@ -1148,7 +1148,7 @@ pub(crate) fn build_profile_partitions(
 /// wraps modulo the number of matching profiles; empty string if none
 /// match.
 ///
-/// Signature: `matching_profile_name_at(group, pattern: str, index: u64) -> (String)`
+/// Signature: `matching_profile_name_at(group, pattern: str, index: u64) -> (str)`
 #[crate::polydat_node(category = RealData)]
 fn matching_profile_name_at(
     group: crate::derive_support::Resolved<crate::derive_support::GroupResolver, DatasetHandle>,
@@ -1387,7 +1387,7 @@ fn generic_str_typed(h: &DatasetHandle, idx: usize) -> String {
 /// Access a metadata value per base ordinal. Expects a Generic
 /// handle opened against the `metadata_content` facet.
 ///
-/// Signature: `metadata_value_at(handle, index: u64) -> (String)`
+/// Signature: `metadata_value_at(handle, index: u64) -> (str)`
 #[crate::polydat_node(category = RealData)]
 fn metadata_value_at(handle: Facet<MetadataContentFacet>, index: u64) -> String {
     generic_str_typed(
@@ -1399,7 +1399,7 @@ fn metadata_value_at(handle: Facet<MetadataContentFacet>, index: u64) -> String 
 /// Access a predicate value per query ordinal. Expects a Generic
 /// handle opened against the `metadata_predicates` facet.
 ///
-/// Signature: `predicate_value_at(handle, index: u64) -> (String)`
+/// Signature: `predicate_value_at(handle, index: u64) -> (str)`
 #[crate::polydat_node(category = RealData)]
 fn predicate_value_at(handle: Facet<MetadataPredicatesFacet>, index: u64) -> String {
     generic_str_typed(

@@ -24,8 +24,8 @@ at link time, so a program that calls them needs that crate too:
 
 ```toml
 [dependencies]
-polydat-core = "0.9"
-polydat-nodes = "0.9"
+polydat-core = "0.10"
+polydat-nodes = "0.10"
 ```
 
 ```rust

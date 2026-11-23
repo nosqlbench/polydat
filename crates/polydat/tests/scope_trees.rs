@@ -70,11 +70,11 @@ fn assert_refuses_unset(kernel: &mut dyn Kernel, output: &str, unset: &str, pair
 }
 
 const ROOT: &str = "const mode := \"default\"\nconst size := \"small\"\nextern shard: u64 = 3\n";
-const SET: &str = "extern size: String\nconst mode := \"mode_for_{size}\"\n";
-const PHASE: &str = "input cycle: u64\nextern mode: String\nextern size: String\n\
+const SET: &str = "extern size: str\nconst mode := \"mode_for_{size}\"\n";
+const PHASE: &str = "input cycle: u64\nextern mode: str\nextern size: str\n\
                      extern shard: u64\nextern retries: u64 = 2\n\
                      label := \"{mode}/{size}/{shard}\"\ntries := u64_add(retries, cycle)\n";
-const ITER: &str = "extern mode: String\nextern i: u64\nrow := \"{mode}-{i}\"\n";
+const ITER: &str = "extern mode: str\nextern i: u64\nrow := \"{mode}-{i}\"\n";
 
 /// params root → `set:` scope → phase → fork → iteration child, the
 /// shape nmbrs builds, with a const in the `set:` scope that shadows a
@@ -233,7 +233,7 @@ fn a_module_s_program_and_its_kernels_agree_on_positions() {
 #[test]
 fn propagate_inputs_reports_a_refusal() {
     for engine in engines() {
-        let parent = compile("extern shard: String = \"a\"\n", engine);
+        let parent = compile("extern shard: str = \"a\"\n", engine);
         let mut child = compile("extern shard: u64 = 1\nout := shard\n", engine);
         let err = propagate_inputs(parent.as_ref(), child.as_mut())
             .expect_err("a string into a u64 input");
@@ -357,7 +357,7 @@ fn many_threads_bind_and_fork_under_one_shared_parent() {
         let iter = std::sync::Arc::new(module(
             root.as_ref(),
             "iter",
-            "extern mode: String\nextern i: u64\nrow := \"{mode}-{i}\"\n",
+            "extern mode: str\nextern i: u64\nrow := \"{mode}-{i}\"\n",
         ));
         let handles: Vec<_> = (0..8u64)
             .map(|t| {

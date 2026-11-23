@@ -142,7 +142,7 @@ fn json_merge(
 
 /// Serialize a JSON value to a compact string.
 ///
-/// Signature: `json_to_str(input: json) -> (String)`
+/// Signature: `json_to_str(input: json) -> (str)`
 ///
 /// Workload-callable AND the auto-adapter the assembly phase inserts
 /// on Json → Str boundaries; `compile::assembly` constructs the
@@ -167,7 +167,7 @@ fn str_to_json(input: &str) -> std::sync::Arc<serde_json::Value> {
 
 /// Escape a string for safe embedding in a JSON string value.
 ///
-/// Signature: `(input: String) -> (String)`
+/// Signature: `(input: str) -> (str)`
 ///
 /// Escape a string for embedding inside JSON. Escapes `"`,
 /// `\`, control characters, etc. Does NOT add surrounding
@@ -403,7 +403,7 @@ fn json_value_as_i32(v: &serde_json::Value) -> Option<i32> {
 /// unchanged if the input is not bracket-encoded or the norm is
 /// effectively zero.
 ///
-/// Signature: `normalize_vector(vector: Str) -> (output: Str)`
+/// Signature: `normalize_vector(vector: str) -> (output: str)`
 #[crate::polydat_node(category = Json)]
 fn normalize_vector(vector: &str) -> String {
     let trimmed = vector.trim();
@@ -429,7 +429,7 @@ fn normalize_vector(vector: &str) -> String {
 /// dimension. The seed and dimension are provided at cycle time; `min`
 /// and `max` are constants set at construction.
 ///
-/// Signature: `random_vector(seed: u64, dim: u64) -> (output: Str)`
+/// Signature: `random_vector(seed: u64, dim: u64) -> (output: str)`
 /// Consts: `min: f64 = 0.0`, `max: f64 = 1.0`
 #[crate::polydat_node(category = Json)]
 fn random_vector(

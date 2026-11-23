@@ -116,7 +116,7 @@ fn module_string_parameters_spell_str_like_inputs_and_externs() {
     assert_eq!(k.pull_ref("a").as_str(), "hello world #3");
     // The library's older spelling `String` names the same type.
     let src = "input cycle: u64\n\
-        greet(name: String) -> (line: String) := {\n\
+        greet(name: str) -> (line: str) := {\n\
             line := \"hi {name}\"\n\
         }\n\
         a := greet(\"there\")\n";

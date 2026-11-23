@@ -117,7 +117,7 @@ fn read_csv_column(filename: &str, column: &str) -> Vec<String> {
 
 /// Read a specific column from a CSV row at a given ordinal.
 ///
-/// Signature: `csv_field(ordinal: u64) -> (output: Str)`
+/// Signature: `csv_field(ordinal: u64) -> (output: str)`
 /// Const: `filename: Str`, `column: Str` (header name or "0","1",... index)
 ///
 /// The file is read and the named column extracted at construction
@@ -175,7 +175,7 @@ fn read_csv_row_count(filename: &str) -> u64 {
 
 /// Read an entire CSV row at a given ordinal as a comma-separated string.
 ///
-/// Signature: `csv_row(ordinal: u64) -> (output: Str)`
+/// Signature: `csv_row(ordinal: u64) -> (output: str)`
 /// Const: `filename: Str`
 ///
 /// The row is served as written in the file — quotes intact, and a
@@ -236,7 +236,7 @@ fn read_jsonl_field(filename: &str, path: &str) -> Vec<String> {
 
 /// Read a field from a JSONL line at a given ordinal.
 ///
-/// Signature: `jsonl_field(ordinal: u64) -> (output: Str)`
+/// Signature: `jsonl_field(ordinal: u64) -> (output: str)`
 /// Const: `filename: Str`, `path: Str` (JSON field name or dot path)
 ///
 /// Each line of the file is a JSON object. The field is extracted
@@ -281,7 +281,7 @@ fn read_jsonl_row_count(filename: &str) -> u64 {
 
 /// Read an entire JSONL line at a given ordinal as a JSON string.
 ///
-/// Signature: `jsonl_row(ordinal: u64) -> (output: Str)`
+/// Signature: `jsonl_row(ordinal: u64) -> (output: str)`
 /// Const: `filename: Str`
 ///
 /// Lines are captured at setup time.

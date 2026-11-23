@@ -86,6 +86,7 @@ Nothing that compiled under 0.8 stops compiling.
 
 - **`String`, `Json` and `Ext` still parse as type keywords.** `String`
   is how polydat printed `str` before 0.9, so source a host synthesized
-  then uses it; `Json` and `Ext` are older capitalised spellings. A
-  later release retires them; a host that writes them should write
-  `str`, `json` and `ext`.
+  then uses it; `Json` and `Ext` are older capitalised spellings, and
+  `Str` is accepted too. 0.10.0 retires all four
+  ([Porting to 0.10.0](porting_to_0_10_0.md)); a host that writes them
+  should write `str`, `json` and `ext`.

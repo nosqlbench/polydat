@@ -179,7 +179,7 @@ fn build_char_image(charset: &str, image_size: u64, seed: u64) -> CharImage {
 
 /// Extract a text slice from a pre-built character image.
 ///
-/// Signature: `char_image_extract(input: u64) -> (output: Str)`
+/// Signature: `char_image_extract(input: u64) -> (output: str)`
 /// Const: `charset: Str`, `image_size: u64`, `slice_size: u64`,
 ///        `seed: u64` (default 0)
 ///

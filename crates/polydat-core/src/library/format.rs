@@ -62,7 +62,7 @@ impl PolydatSetup for ParsedFormat {}
 
 /// Printf-style N→1 formatting node. Variadic: accepts 0..N wire inputs.
 ///
-/// Signature: `printf(format: String, in_0, in_1, ...) -> (String)`
+/// Signature: `printf(format: str, in_0, in_1, ...) -> (str)`
 ///
 /// Format string uses Rust-style `{}` placeholders with optional specifiers:
 /// `{:05}` (zero-pad), `{:.2}` (precision), `{:x}` (hex), `{:X}` (HEX),

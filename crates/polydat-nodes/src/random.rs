@@ -171,7 +171,7 @@ impl RandomString {
 /// Extract a substring from bundled lorem ipsum text using a hash-based
 /// offset. Deterministic: same input → same extract.
 ///
-/// Signature: `hashed_lorem_extract(input: u64, min_len: u64, max_len: u64) -> String`
+/// Signature: `hashed_lorem_extract(input: u64, min_len: u64, max_len: u64) -> str`
 ///
 /// Equivalent to nosqlbench's `HashedLoremExtractToString`.
 #[polydat::polydat_node(category = String)]
@@ -222,7 +222,7 @@ impl HashedLines {
 /// Select a deterministic line from a bundled text source using
 /// the input hash as an index. Deterministic: same input → same line.
 ///
-/// Signature: `hashed_line_to_string(input: u64, source: &str) -> String`
+/// Signature: `hashed_line_to_string(input: u64, source: &str) -> str`
 ///
 /// Equivalent to nosqlbench's `HashedLineToString`. The text source
 /// is split into lines at node-construction time (setup-derived

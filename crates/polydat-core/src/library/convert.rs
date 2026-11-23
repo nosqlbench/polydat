@@ -11,7 +11,7 @@
 
 /// Convert u64 to its decimal string representation.
 ///
-/// Signature: `__u64_to_string(input: u64) -> (String)`
+/// Signature: `__u64_to_string(input: u64) -> (str)`
 ///
 /// Edge adapter auto-inserted by the assembly phase when a u64 port
 /// feeds a String port. Users rarely reference this directly; prefer
@@ -340,7 +340,7 @@ fn discretize(
 
 /// Format a u64 as a string with a specific radix (2, 8, 10, 16).
 ///
-/// Signature: `format_u64(input: u64, radix: u32) -> (String)`
+/// Signature: `format_u64(input: u64, radix: u32) -> (str)`
 ///
 /// Explicit formatting node for producing human-readable or
 /// protocol-specific numeric strings. Includes standard prefixes:
@@ -392,7 +392,7 @@ impl FormatU64 {
 
 /// Format an f64 with controlled decimal precision.
 ///
-/// Signature: `format_f64(input: f64, precision: u64) -> (String)`
+/// Signature: `format_f64(input: f64, precision: u64) -> (str)`
 #[crate::polydat_node(category = Conversions)]
 fn format_f64(
     input: f64,
@@ -403,7 +403,7 @@ fn format_f64(
 
 /// Zero-pad a u64 to a fixed width string.
 ///
-/// Signature: `zero_pad_u64(input: u64, width: u64) -> (String)`
+/// Signature: `zero_pad_u64(input: u64, width: u64) -> (str)`
 #[crate::polydat_node(category = Conversions)]
 fn zero_pad_u64(
     input: u64,
