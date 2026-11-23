@@ -1065,7 +1065,9 @@ vec_f32 vec_i32 vec_f64 vec_i64 vec_f16 vec_i16 vec_i8
 > not `vecf32`. Register-lane keywords are `reg_i8x16` … `reg_f64x2` plus
 > raw `reg128`. There is **no `f128`** (stable Rust has no such type) and
 > **no `none`** keyword (`None` is a runtime `Value` sentinel, not a
-> type). An unknown keyword is a loud diagnostic, never a silent default.
+> type). An unknown keyword is a loud diagnostic, never a silent default:
+> the parser refuses it where it is written, in every declaration form
+> (`` `strr` is not a type keyword ``).
 > Each type has exactly one keyword, the one `Display` and
 > `PortType::to_keyword` print. The capitalised spellings polydat
 > accepted before 0.10.0 (`String` and `Str`, `Json`, `Ext`) are refused

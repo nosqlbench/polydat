@@ -133,20 +133,24 @@ impl Parser {
         }
     }
 
-    /// Expect a type name: an identifier, refused when it is a type
-    /// spelling polydat retired ([`crate::PortType::retired_keyword`]),
-    /// with the keyword to write instead. Any other unknown name is
-    /// left to the stage that resolves it, which names its context.
+    /// Expect a type name: an identifier that is a type keyword
+    /// ([`crate::PortType::from_keyword`]). Any other name is refused
+    /// where it is written: a spelling polydat retired with the keyword
+    /// to write instead ([`crate::PortType::retired_keyword`]), and any
+    /// other name as not a type keyword, so no declaration compiles
+    /// with a type that does not exist.
     fn expect_type_name(&mut self) -> Result<String, String> {
         let span = self.span();
         let name = self.expect_ident()?;
-        match crate::PortType::retired_keyword_message(&name) {
-            Some(message) => Err(format!(
-                "{message} (at line {}, col {})",
-                span.line, span.col
-            )),
-            None => Ok(name),
+        if crate::PortType::from_keyword(&name).is_some() {
+            return Ok(name);
         }
+        let message = crate::PortType::retired_keyword_message(&name)
+            .unwrap_or_else(|| format!("`{name}` is not a type keyword"));
+        Err(format!(
+            "{message} (at line {}, col {})",
+            span.line, span.col
+        ))
     }
 
     fn at_eof(&self) -> bool {
@@ -1517,6 +1521,28 @@ mod tests {
                 );
                 parse_str(&accepted.replace("{K}", keyword));
             }
+        }
+    }
+
+    /// A declaration that names a type which does not exist is refused
+    /// where it is written, in every declaration form: inputs and
+    /// module outputs included, which once compiled with the unknown
+    /// name ignored.
+    #[test]
+    fn a_declaration_naming_no_type_is_refused() {
+        for src in [
+            "extern x: strr\n",
+            "input x: strr\n",
+            "input (a: u64, x: strr)\n",
+            "m(a: strr) -> (b: u64) := {\n b := 1\n}\n",
+            "m(a: u64) -> (b: strr) := {\n b := 1\n}\n",
+            "shared x: strr := 1\n",
+        ] {
+            let err = parse_str_err(src);
+            assert!(
+                err.contains("`strr` is not a type keyword"),
+                "{src:?}: {err}"
+            );
         }
     }
 

@@ -53,7 +53,8 @@ How the parts work and how to use them from a host program.
   lockfile picks up every crate the release publishes.
 - [Porting to 0.10.0](guides/porting_to_0_10_0.md): every change a host
   sees from 0.9 to 0.10.0: the capitalised type spellings `String`,
-  `Str`, `Json` and `Ext` refused, with the keyword to write instead.
+  `Str`, `Json` and `Ext` refused, with the keyword to write instead,
+  and any type name that is not a keyword refused where it is written.
 - [Porting to 0.9.0](guides/porting_to_0_9_0.md): every change a host
   sees from 0.8 to 0.9.0: the registry types that became
   non-exhaustive, `str` printed for the string type, and mixed-width

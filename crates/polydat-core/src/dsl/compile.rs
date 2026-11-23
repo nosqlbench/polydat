@@ -1265,8 +1265,10 @@ fn positional_int_lit(arg: &crate::dsl::ast::Arg) -> Option<u64> {
 
 /// Collect the declared port type of every `input <name>: <type>`
 /// declaration in the file (bare and tuple forms both lower to one
-/// `InputDecl` per name). An unrecognised or absent type keyword is
-/// omitted, leaving the assembler's `U64` default in force.
+/// `InputDecl` per name). An input declared without a type is omitted,
+/// leaving the assembler's `U64` default in force; the parser refuses a
+/// type name that is not a keyword, so only an AST built by hand can
+/// carry one here, and it is omitted the same way.
 fn declared_input_types(
     file: &PolydatFile,
 ) -> std::collections::HashMap<String, crate::ast::PortType> {
