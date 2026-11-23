@@ -21,7 +21,6 @@ version = "0.9.0"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/nosqlbench/polydat"
-homepage = "https://github.com/nosqlbench/polydat"
 
 # The internal crates, declared once so every dependency edge names
 # the same path and the same published version. The runtime and the

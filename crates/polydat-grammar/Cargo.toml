@@ -15,7 +15,6 @@ description = "The Polydat language: lexer, parser, AST, and pretty-printer, wit
 keywords = ["nosqlbench", "workload", "grammar", "parser"]
 categories = ["parser-implementations"]
 repository.workspace = true
-homepage.workspace = true
 documentation = "https://docs.rs/polydat-grammar"
 readme = "README.md"
 

@@ -18,7 +18,6 @@ description = "Polydat node library: hashing, sampling, strings, encodings, nois
 keywords = ["nosqlbench", "workload", "benchmark", "data-generation"]
 categories = ["simulation"]
 repository.workspace = true
-homepage.workspace = true
 documentation = "https://docs.rs/polydat-nodes"
 readme = "README.md"
 

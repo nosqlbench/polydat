@@ -18,7 +18,6 @@ description = "Polydat runtime: value model, graph compiler, execution engines, 
 keywords = ["nosqlbench", "workload", "benchmark", "data-generation"]
 categories = ["simulation"]
 repository.workspace = true
-homepage.workspace = true
 documentation = "https://docs.rs/polydat-core"
 readme = "README.md"
 

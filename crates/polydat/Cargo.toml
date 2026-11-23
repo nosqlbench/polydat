@@ -15,7 +15,6 @@ description = "Polydat — a variates construction engine"
 keywords = ["nosqlbench", "workload", "benchmark", "data-generation"]
 categories = ["command-line-utilities", "simulation"]
 repository.workspace = true
-homepage.workspace = true
 documentation = "https://docs.rs/polydat"
 # The crate's own README ships in the package; the workspace-root
 # README describes the whole repository.

@@ -709,13 +709,14 @@ impl EngineCore {
                 self.last_seen.insert(ptr, r);
                 dirty_mask.set(slot);
             }
-            for node_idx in 0..program.nodes.len() {
-                if program
-                    .input_provenance
-                    .get(node_idx)
-                    .is_some_and(|prov| prov.intersects(&dirty_mask))
-                {
-                    self.node_clean[node_idx] = false;
+            for (node_clean, prov) in self
+                .node_clean
+                .iter_mut()
+                .zip(&program.input_provenance)
+                .take(program.nodes.len())
+            {
+                if prov.intersects(&dirty_mask) {
+                    *node_clean = false;
                 }
             }
         }

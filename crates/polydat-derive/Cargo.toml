@@ -14,7 +14,6 @@ description = "Proc-macro support for polydat — derive node metadata from type
 keywords = ["nosqlbench", "workload", "proc-macro", "data-generation"]
 categories = ["development-tools::procedural-macro-helpers"]
 repository.workspace = true
-homepage.workspace = true
 documentation = "https://docs.rs/polydat-derive"
 readme = "README.md"
 
